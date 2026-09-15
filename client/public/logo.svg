@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 258" role="img" aria-label="BrownStore">
+  <defs>
+    <mask id="slots">
+      <rect width="260" height="258" fill="white"/>
+      <rect x="94" y="184" width="14" height="36" rx="7" fill="black" transform="rotate(-11 101 202)"/>
+      <rect x="130" y="184" width="14" height="36" rx="7" fill="black" transform="rotate(-11 137 202)"/>
+      <rect x="166" y="184" width="14" height="36" rx="7" fill="black" transform="rotate(-11 173 202)"/>
+    </mask>
+  </defs>
+  <path d="M104 21 L63 91" fill="none" stroke="#C69457" stroke-width="23" stroke-linecap="round"/>
+  <path d="M156 21 L197 91" fill="none" stroke="#C69457" stroke-width="23" stroke-linecap="round"/>
+  <circle cx="63" cy="93" r="9.5" fill="#D2A679"/>
+  <circle cx="197" cy="93" r="9.5" fill="#D2A679"/>
+  <rect x="18" y="82" width="224" height="34" rx="17" fill="#552D1A"/>
+  <g fill="#552D1A" mask="url(#slots)">
+    <rect x="36" y="112" width="38" height="92" rx="18"/>
+    <rect x="102" y="112" width="120" height="44" rx="20"/>
+    <rect x="190" y="148" width="30" height="22" rx="11"/>
+    <path d="M42 168h176c14 0 24 12 22 26l-6 28c-4 18-20 28-40 28H84c-22 0-38-12-42-32l-6-28c-2-14 8-22 22-22z"/>
+  </g>
+</svg>

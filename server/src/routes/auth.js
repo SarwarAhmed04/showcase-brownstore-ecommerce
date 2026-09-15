@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { User } from "../models/User.js";
 import { requireAdmin } from "../middleware/auth.js";
+import { toAdminAccount } from "../utils/adminUser.js";
 
 export const authRouter = Router();
 
@@ -28,7 +29,7 @@ authRouter.post("/login", async (req, res) => {
 
     res.json({
       token,
-      user: { id: user._id, email: user.email, role: user.role },
+      user: toAdminAccount(user),
     });
   } catch (err) {
     console.error(err);
@@ -38,6 +39,6 @@ authRouter.post("/login", async (req, res) => {
 
 authRouter.get("/me", requireAdmin, (req, res) => {
   res.json({
-    user: { id: req.user._id, email: req.user.email, role: req.user.role },
+    user: toAdminAccount(req.user),
   });
 });

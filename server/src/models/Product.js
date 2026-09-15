@@ -29,11 +29,7 @@ const productSchema = new mongoose.Schema(
     cashback: { type: Number, default: 0 },
     createdBy: mongoose.Schema.Types.Mixed,
     sourceUpdatedAt: Date,
-    overrides: {
-      sku: { type: String, default: null },
-      price: { type: Number, default: null },
-      stock: { type: Number, default: null },
-    },
+    overrides: { type: mongoose.Schema.Types.Mixed, default: () => ({ outOfStock: false }) },
     lastSyncedAt: Date,
   },
   { timestamps: true }

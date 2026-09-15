@@ -1,106 +1,223 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { api } from "../api";
-import { useLang } from "../context/LangContext";
-import { tName } from "../i18n";
-import ProductCard from "../components/ProductCard";
-import Spinner from "../components/Spinner";
+import { Link } from 'react-router-dom'
+import { Button } from '@/components/ui/button'
+import { ArrowRight, Clock, Flame, Quote } from 'lucide-react'
+import Hero from '../components/Hero'
+import ProductRail from '../components/ProductRail'
+import CategoryTile from '../components/CategoryTile'
+import { LogoLoop } from '../components/LogoLoop'
+import ProductCard from '../components/ProductCard'
+import { Reveal, SectionHead } from '../components/ui'
+import { useCatalog } from '../lib/catalogStore'
+import { imgUrl } from '../lib/img'
+import { useLang } from '../context/LangContext'
+
+const NOTES = [
+  {
+    quote: 'The only shop in the city where someone can tell you why one kettle costs three times the other.',
+    name: 'Rana K.',
+    role: 'Karrada',
+  },
+  {
+    quote: 'Bought the fridge on a Tuesday, delivered Wednesday morning, installed by the same two people. That never happens.',
+    name: 'Yusuf A.',
+    role: 'Mansour',
+  },
+  {
+    quote: 'I came in for a cable and left with the espresso machine. Entirely their fault, no regrets.',
+    name: 'Dina S.',
+    role: 'Jadriya',
+  },
+]
 
 export default function Home() {
-  const { t, lang } = useLang();
-  const [data, setData] = useState({ products: [], categories: [] });
-  const [loading, setLoading] = useState(true);
+  const { categories, byCategory, brands, deals, featured, live: products } = useCatalog()
+  const { t } = useLang()
+  const topDeals = deals.slice(0, 10)
+  const newest = [...products].sort((a, b) => String(b.id).localeCompare(String(a.id))).slice(0, 10)
 
-  useEffect(() => {
-    Promise.all([api.products({ limit: 8, sort: "newest" }), api.categories()])
-      .then(([products, categories]) => {
-        setData({
-          products: products.products || [],
-          categories: categories.categories || [],
-        });
-      })
-      .catch(() => setData({ products: [], categories: [] }))
-      .finally(() => setLoading(false));
-  }, []);
+  const brandLogos = brands.map((b) => ({ name: b }))
+
+  const renderBrand = (item) => (
+    <Link
+      to={`/shop?brand=${encodeURIComponent(item.name)}`}
+      aria-label={item.name}
+      className="whitespace-nowrap font-display text-xl font-bold text-muted-foreground transition-colors hover:text-primary sm:text-2xl"
+    >
+      {item.name}
+    </Link>
+  )
 
   return (
-    <div>
-      <section className="relative overflow-hidden">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(210,166,121,0.28),_transparent_55%)]" />
-        <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-16 md:grid-cols-2 md:py-24">
-          <div>
-            <p className="mb-3 text-sm font-semibold tracking-[0.2em] text-tan uppercase">
-              BrownStore
-            </p>
-            <h1 className="font-display text-4xl leading-tight text-brown md:text-5xl">
-              {t.heroTitle}
-            </h1>
-            <p className="mt-4 max-w-md text-brown/70">{t.heroBody}</p>
-            <Link
-              to="/shop"
-              className="mt-8 inline-flex rounded-full bg-brown px-6 py-3 text-sm font-semibold text-cream shadow-lg shadow-brown/20 transition hover:bg-brown/90"
-            >
-              {t.shopNow}
-            </Link>
-          </div>
-          <div className="flex justify-center">
-            <div className="relative">
-              <div className="absolute inset-8 rounded-full bg-tan/30 blur-3xl" />
-              <img
-                src="/logo.png"
-                alt="BrownStore"
-                className="relative h-64 w-64 object-contain drop-shadow-xl md:h-80 md:w-80"
-              />
-            </div>
-          </div>
-        </div>
-      </section>
+    <>
+      <Hero />
 
-      <section className="mx-auto max-w-6xl px-4 pb-8">
-        <div className="mb-6 flex items-end justify-between">
-          <h2 className="font-display text-2xl text-brown">{t.shopByCategory}</h2>
-        </div>
-        <div className="flex gap-3 overflow-x-auto pb-2">
-          {data.categories.map((cat) => (
-            <Link
-              key={cat.id}
-              to={`/shop?category=${cat.id}`}
-              className="flex min-w-32 flex-col items-center gap-2 rounded-2xl bg-white p-4 text-center shadow-sm ring-1 ring-brown/5 transition hover:ring-tan"
-            >
-              {cat.image ? (
-                <img
-                  src={cat.image}
-                  alt=""
-                  className="h-14 w-14 rounded-full object-cover"
-                />
-              ) : (
-                <img src="/logo.png" alt="" className="h-10 w-10 opacity-60" />
-              )}
-              <span className="text-xs font-medium text-brown">
-                {tName(cat.name, lang)}
-              </span>
-            </Link>
+      <Reveal>
+        <ProductRail
+          eyebrow={<><Flame size={12} /> {t.endsMidnight}</>}
+          title={t.todaysDeals}
+          items={topDeals}
+          to="/deals"
+        />
+      </Reveal>
+
+      <section className="container-x py-14">
+        <Reveal>
+          <SectionHead
+            eyebrow={t.departmentsEyebrow}
+            title={t.shopByCategory}
+            sub={t.categorySub}
+            action={
+              <Button asChild variant="glass">
+                <Link to="/shop">
+                  {t.allProducts} <ArrowRight />
+                </Link>
+              </Button>
+            }
+          />
+        </Reveal>
+
+        <div className="grid grid-cols-2 gap-3.5 sm:gap-4 lg:grid-cols-4">
+          {categories.slice(0, 2).map((c, i) => (
+            <Reveal key={c.slug} delay={i * 70} className="col-span-2 lg:row-span-2">
+              <CategoryTile category={c} large />
+            </Reveal>
+          ))}
+          {categories.slice(2).map((c, i) => (
+            <Reveal key={c.slug} delay={140 + i * 60}>
+              <CategoryTile category={c} />
+            </Reveal>
           ))}
         </div>
       </section>
 
-      <section className="mx-auto max-w-6xl px-4 py-10">
-        <div className="mb-6 flex items-end justify-between">
-          <h2 className="font-display text-2xl text-brown">{t.featured}</h2>
-          <Link to="/shop" className="text-sm font-semibold text-tan hover:text-brown">
-            {t.viewAll}
-          </Link>
+      <section className="container-x py-14">
+        <Reveal>
+          <SectionHead
+            eyebrow={t.handPickedEyebrow}
+            title={t.featured}
+            sub={t.featuredSub}
+            action={
+              <Button asChild variant="glass">
+                <Link to="/shop">
+                  {t.viewAll} <ArrowRight />
+                </Link>
+              </Button>
+            }
+          />
+        </Reveal>
+
+        <div className="grid grid-cols-2 gap-3.5 sm:gap-5 lg:grid-cols-4">
+          {featured.slice(0, 8).map((p, i) => (
+            <Reveal key={p.id} delay={(i % 4) * 70}>
+              <ProductCard product={p} />
+            </Reveal>
+          ))}
         </div>
-        {loading ? (
-          <Spinner label={t.loading} />
-        ) : (
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            {data.products.map((p) => (
-              <ProductCard key={p.id} product={p} />
-            ))}
-          </div>
-        )}
       </section>
-    </div>
-  );
+
+      <section className="container-x py-14">
+        <Reveal>
+          <div className="glass grid overflow-hidden rounded-panel lg:grid-cols-2">
+            <div className="relative min-h-[280px] lg:min-h-[440px]">
+              <img
+                src={imgUrl('photo-1495474472287-4d71bcdd2085', { w: 1000, h: 900 })}
+                alt=""
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent to-[rgb(var(--bg)/.65)] lg:to-[rgb(var(--bg)/.9)]" />
+            </div>
+
+            <div className="flex flex-col justify-center p-8 sm:p-12 lg:p-14">
+              <div className="eyebrow mb-5">{t.editorialEyebrow}</div>
+              <h2 className="headline text-3xl sm:text-4xl lg:text-4xl">
+                {t.editorialTitle} <span className="gold-text">{t.editorialGold}</span>
+              </h2>
+              <p className="mt-5 text-base leading-relaxed text-foreground/75">
+                {t.editorialBody}
+              </p>
+              <div className="mt-8 flex flex-wrap gap-3">
+                <Button asChild variant="brand" size="lg">
+                  <Link to="/shop">
+                    {t.seeTheMachines} <ArrowRight />
+                  </Link>
+                </Button>
+                <Button asChild variant="glass" size="lg">
+                  <Link to="/about">{t.howWeChoose}</Link>
+                </Button>
+              </div>
+            </div>
+          </div>
+        </Reveal>
+      </section>
+
+      {categories.slice(0, 3).map((cat) => (
+        <Reveal key={cat.slug}>
+          <ProductRail
+            eyebrow={cat.tagline}
+            title={cat.name}
+            items={byCategory(cat.slug)}
+            to={`/category/${cat.slug}`}
+          />
+        </Reveal>
+      ))}
+
+      <section className="py-14">
+        <div className="divider-glow mb-10" />
+        <div className="relative h-16">
+          <LogoLoop
+            logos={brandLogos}
+            renderItem={renderBrand}
+            speed={38}
+            direction="left"
+            logoHeight={40}
+            gap={72}
+            hoverSpeed={0}
+            scaleOnHover
+            fadeOut
+            fadeOutColor="rgb(var(--background))"
+            ariaLabel="Brown Store"
+          />
+        </div>
+        <div className="divider-glow mt-10" />
+      </section>
+
+      <Reveal>
+        <ProductRail
+          eyebrow={<><Clock size={12} /> {t.justLanded}</>}
+          title={t.newInShowroom}
+          items={newest}
+          to="/shop?sort=new"
+        />
+      </Reveal>
+
+      <section className="container-x py-14">
+        <Reveal>
+          <SectionHead eyebrow={t.fromTheFloor} title={t.whatPeopleSay} />
+        </Reveal>
+
+        <div className="grid gap-4 lg:grid-cols-3">
+          {NOTES.map((n, i) => (
+            <Reveal key={n.name} delay={i * 90}>
+              <figure className="glass flex h-full flex-col rounded-card p-7">
+                <Quote size={24} className="mb-4 text-primary opacity-50" />
+                <blockquote className="flex-1 text-base leading-relaxed">“{n.quote}”</blockquote>
+                <figcaption className="mt-6 flex items-center gap-3 border-t border-border/60 pt-5">
+                  <span
+                    className="grid h-10 w-10 place-items-center rounded-full font-display text-sm font-black text-primary-foreground"
+                    style={{ background: 'linear-gradient(135deg, rgb(var(--accent)), rgb(var(--accent-2)))' }}
+                  >
+                    {n.name[0]}
+                  </span>
+                  <span>
+                    <span className="block text-sm font-semibold">{n.name}</span>
+                    <span className="block text-2xs text-muted-foreground">{n.role}</span>
+                  </span>
+                </figcaption>
+              </figure>
+            </Reveal>
+          ))}
+        </div>
+      </section>
+    </>
+  )
 }

@@ -1,20 +1,30 @@
 import { Router } from "express";
 import { Category } from "../models/Category.js";
-import { cdnUrl } from "../utils/productView.js";
+import { Product } from "../models/Product.js";
+import { getSiteSettings } from "../models/SiteSettings.js";
+import { toPublicCategory } from "../utils/categoryView.js";
+import { publicProductFilter } from "../utils/productView.js";
 
 export const categoriesRouter = Router();
 
 categoriesRouter.get("/", async (_req, res) => {
   try {
-    const categories = await Category.find({ isActive: { $ne: false } }).sort({
-      createdAt: 1,
-    });
+    const [categories, settings, counts] = await Promise.all([
+      Category.find({ isActive: { $ne: false } }).sort({ createdAt: 1 }),
+      getSiteSettings(),
+      Product.aggregate([
+        { $match: publicProductFilter() },
+        { $group: { _id: "$category._id", count: { $sum: 1 } } },
+      ]),
+    ]);
+    const countMap = Object.fromEntries(counts.map((row) => [String(row._id), row.count]));
     res.json({
-      categories: categories.map((c) => ({
-        id: c.ibsherId,
-        name: c.name,
-        image: cdnUrl(c.images?.[0]?.url),
-      })),
+      layout: settings.categoryLayout || "pills",
+      categoryLimit: Number(settings.categoryLimit) || 0,
+      categories: categories.map((doc) => {
+        const item = toPublicCategory(doc);
+        return { ...item, count: countMap[String(item.id)] || 0 };
+      }),
     });
   } catch (err) {
     console.error(err);

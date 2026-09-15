@@ -1,30 +1,271 @@
-@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700;9..144,900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-@theme {
-  --color-brown: #3d2317;
-  --color-tan: #d2a679;
-  --color-cream: #faf7f2;
-  --font-sans: "DM Sans", "Noto Sans Arabic", system-ui, sans-serif;
-  --font-display: "Fraunces", "Noto Sans Arabic", serif;
+/* ============================================================
+   BROWN STORE — design tokens
+   Dark "espresso" is the primary skin; light "cream" is the alt.
+   ============================================================ */
+@layer base {
+  :root {
+    --bg: 22 14 11;
+    --bg-2: 38 24 18;
+    --surface: 255 255 255;      /* glass tint colour */
+    --surface-a: 0.055;          /* glass tint alpha */
+    --stroke: 255 236 214;
+    --stroke-a: 0.14;
+    --text: 253 246 238;
+    --text-dim: 214 190 168;
+    --text-mute: 168 141 119;
+    --accent: 245 180 92;
+    --accent-2: 227 154 60;
+    --glow: 255 190 110;
+    --shadow: 0 24px 60px -20px rgb(0 0 0 / 0.65);
+    color-scheme: dark;
+
+    /* ---- shadcn/ui bridge -------------------------------------------
+       These are the names shadcn components reference. Pointing them at
+       the Brown Store palette is what makes an unmodified shadcn Button
+       come out espresso-and-gold rather than default slate.
+       Values are "R G B" triplets so opacity modifiers keep working. */
+    --background: 22 14 11;
+    --foreground: 253 246 238;
+    --card: 40 26 20;
+    --card-foreground: 253 246 238;
+    --popover: 32 20 15;
+    --popover-foreground: 253 246 238;
+    --primary: 245 180 92;              /* caramel — the only CTA hue */
+    --primary-foreground: 42 23 8;
+    --secondary: 56 36 26;
+    --secondary-foreground: 236 224 210;
+    --muted: 56 36 26;
+    --muted-foreground: 168 141 119;
+    --accent-surface: 68 45 32;         /* menu/list hover, NOT the brand gold */
+    --accent-surface-foreground: 253 246 238;
+    --destructive: 189 104 66;          /* clay 500 */
+    --destructive-foreground: 255 245 240;
+    --border: 55 45 39;                 /* solid equivalent of the glass rim */
+    --input: 64 52 44;
+    --ring: 245 180 92;
+    --radius: 0.75rem;
+
+    /* semantic status — never decorative */
+    --success: 138 167 108;             /* moss 400 */
+    --warning: 214 135 100;             /* clay 400 */
+    --info: 116 161 155;                /* patina 400 */
+  }
+
+  [data-theme='cream'] {
+    --bg: 250 244 236;
+    --bg-2: 238 224 208;
+    --surface: 255 255 255;
+    --surface-a: 0.55;
+    --stroke: 90 58 38;
+    --stroke-a: 0.14;
+    --text: 40 25 18;
+    --text-dim: 92 66 48;
+    --text-mute: 138 108 85;
+    --accent: 176 106 32;
+    --accent-2: 140 82 24;
+    --glow: 224 160 78;
+    --shadow: 0 22px 50px -22px rgb(76 46 26 / 0.35);
+    color-scheme: light;
+
+    /* ---- shadcn/ui bridge, cream skin ---- */
+    --background: 250 244 236;
+    --foreground: 40 25 18;
+    --card: 255 255 255;
+    --card-foreground: 40 25 18;
+    --popover: 255 255 255;
+    --popover-foreground: 40 25 18;
+    --primary: 176 106 32;              /* darkened caramel, for contrast on paper */
+    --primary-foreground: 255 250 244;
+    --secondary: 238 224 208;
+    --secondary-foreground: 60 40 28;
+    --muted: 238 224 208;
+    --muted-foreground: 138 108 85;
+    --accent-surface: 240 228 214;
+    --accent-surface-foreground: 40 25 18;
+    --destructive: 154 81 51;           /* clay 600 */
+    --destructive-foreground: 255 250 246;
+    --border: 228 218 208;
+    --input: 220 208 196;
+    --ring: 176 106 32;
+
+    --success: 107 136 79;              /* moss 500 */
+    --warning: 189 104 66;              /* clay 500 */
+    --info: 79 129 123;                 /* patina 500 */
+  }
+
+  * { border-color: rgb(var(--stroke) / var(--stroke-a)); }
+
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+  }
+
+  body {
+    @apply font-sans antialiased;
+    margin: 0;
+    min-height: 100vh;
+    background: rgb(var(--bg));
+    color: rgb(var(--text));
+    overflow-x: hidden;
+  }
+
+  ::selection { background: rgb(var(--accent) / .3); color: rgb(var(--text)); }
+
+  /* Slim, warm scrollbar */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--accent) / .28);
+    border-radius: 99px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--accent) / .5);
+    background-clip: content-box;
+  }
+
+  :focus-visible { outline: 2px solid rgb(var(--accent)); outline-offset: 3px; border-radius: 6px; }
 }
 
-html {
-  scroll-behavior: smooth;
+@layer components {
+  /* ---------- The glass primitive ----------
+     A frosted pane with a specular top edge and a soft inner lift. */
+  .glass {
+    background: linear-gradient(
+      180deg,
+      rgb(var(--surface) / calc(var(--surface-a) * 1.7)),
+      rgb(var(--surface) / calc(var(--surface-a) * 0.55))
+    );
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid rgb(var(--stroke) / var(--stroke-a));
+    box-shadow: var(--shadow), inset 0 1px 0 rgb(var(--stroke) / 0.18);
+    position: relative;
+  }
+  /* specular sheen traced along the rim */
+  .glass::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(160deg, rgb(var(--glow) / .38), transparent 34%, transparent 66%, rgb(var(--glow) / .12));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  .glass-soft {
+    background: rgb(var(--surface) / calc(var(--surface-a) * 0.85));
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    border: 1px solid rgb(var(--stroke) / calc(var(--stroke-a) * 0.8));
+  }
+
+  /* Frosted bar for the sticky header */
+  .glass-bar {
+    background: linear-gradient(180deg, rgb(var(--bg) / .82), rgb(var(--bg) / .62));
+    backdrop-filter: blur(22px) saturate(160%);
+    -webkit-backdrop-filter: blur(22px) saturate(160%);
+    border-bottom: 1px solid rgb(var(--stroke) / var(--stroke-a));
+  }
+
+  /* ---------- Text helpers ----------
+     `.t-dim` / `.t-mute` / `.t-accent` and the `.btn*` classes are gone: every
+     call site now uses the semantic Tailwind tokens (text-muted-foreground,
+     text-primary) or a shadcn Button variant. */
+
+  .headline {
+    @apply font-display font-black tracking-tight;
+    line-height: 1.02;
+  }
+  .gold-text {
+    background: linear-gradient(105deg, rgb(var(--accent-2)), rgb(var(--accent)) 40%, rgb(var(--glow)) 60%, rgb(var(--accent-2)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+
+  /* Section eyebrow chip */
+  .eyebrow {
+    @apply inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-[.16em];
+    background: rgb(var(--accent) / .12);
+    border: 1px solid rgb(var(--accent) / .28);
+    color: rgb(var(--accent));
+  }
+
+  /* ---------- Product image frame ---------- */
+  .shot {
+    position: relative;
+    overflow: hidden;
+    background:
+      radial-gradient(120% 90% at 50% 0%, rgb(var(--glow) / .14), transparent 60%),
+      linear-gradient(160deg, rgb(var(--surface) / .07), rgb(var(--surface) / .02));
+  }
+  .shot img { transition: transform .7s cubic-bezier(.2, .7, .3, 1); }
+  .group:hover .shot img { transform: scale(1.08) rotate(-.6deg); }
+
+  /* ---------- Horizontal rails ---------- */
+  .rail {
+    @apply flex gap-5 overflow-x-auto pb-3;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+  }
+  .rail::-webkit-scrollbar { display: none; }
+  .rail > * { scroll-snap-align: start; flex: 0 0 auto; }
+
+  /* ---------- Skeleton shimmer ---------- */
+  .shimmer { position: relative; overflow: hidden; background: rgb(var(--surface) / .06); }
+  .shimmer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgb(var(--surface) / .12), transparent);
+    animation: shimmer 1.8s infinite;
+  }
+
+  .divider-glow {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgb(var(--accent) / .4), transparent);
+  }
 }
 
-body {
-  margin: 0;
-  min-height: 100svh;
-  background: var(--color-cream);
-  color: var(--color-brown);
-  font-family: var(--font-sans);
-}
+@layer utilities {
+  .container-x { @apply mx-auto w-full max-w-[1400px] px-4 sm:px-6 lg:px-10; }
+  .clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .no-bar, .no-scrollbar { scrollbar-width: none; }
+  .no-bar::-webkit-scrollbar, .no-scrollbar::-webkit-scrollbar { display: none; }
 
-#root {
-  min-height: 100svh;
-}
+  .page-grid {
+    background-image:
+      linear-gradient(rgb(var(--stroke) / 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(var(--stroke) / 0.04) 1px, transparent 1px);
+    background-size: 48px 48px;
+    background-position: center top;
+  }
 
-::selection {
-  background: #d2a679;
-  color: #3d2317;
+  /* scroll-reveal: .in is applied by IntersectionObserver */
+  .reveal {
+    opacity: 0;
+    transform: translateY(26px);
+    transition: opacity .7s cubic-bezier(.2, .7, .3, 1), transform .7s cubic-bezier(.2, .7, .3, 1);
+  }
+  .reveal.in { opacity: 1; transform: none; }
 }

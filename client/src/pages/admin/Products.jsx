@@ -1,125 +1,244 @@
-import { useEffect, useState } from "react";
-import { Navigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../../api";
-import { useAuth } from "../../context/AuthContext";
 import { useLang } from "../../context/LangContext";
 import { tName } from "../../i18n";
 import Spinner from "../../components/Spinner";
+import ProductEditor, { digitsOnly, formatGrouped } from "../../components/admin/ProductEditor";
 
-function Row({ product, onSaved, t, lang }) {
-  const [sku, setSku] = useState(product.sku || "");
-  const [price, setPrice] = useState(product.sellingPrice ?? product.price ?? 0);
-  const [stock, setStock] = useState(product.stock ?? 0);
-  const [status, setStatus] = useState("");
-  const [busy, setBusy] = useState(false);
+const COLS =
+  "grid grid-cols-[minmax(14rem,1.6fr)_9rem_11rem_7rem_10rem_9rem_8rem] items-center gap-x-3";
+
+const FILTER_CONTROL =
+  "rounded-full border border-brown/10 bg-cream px-4 py-2 text-sm font-semibold text-brown";
+
+function ProductFilters({ t, lang, params, setParams, facets }) {
+  const brand = params.get("brand") || "";
+  const category = params.get("category") || "";
+  const availability = params.get("availability") || "";
+  const minPrice = params.get("minPrice") || "";
+  const maxPrice = params.get("maxPrice") || "";
+  const [minDraft, setMinDraft] = useState(minPrice);
+  const [maxDraft, setMaxDraft] = useState(maxPrice);
 
   useEffect(() => {
-    setSku(product.sku || "");
-    setPrice(product.sellingPrice ?? product.price ?? 0);
-    setStock(product.stock ?? 0);
-  }, [product]);
+    setMinDraft(formatGrouped(minPrice));
+    setMaxDraft(formatGrouped(maxPrice));
+  }, [minPrice, maxPrice]);
 
-  async function save() {
-    setBusy(true);
-    setStatus("");
-    try {
-      const data = await api.patchProduct(product.id, {
-        sku,
-        price: Number(price),
-        stock: Number(stock),
-      });
-      onSaved(data.product);
-      setStatus(t.saved);
-    } catch (err) {
-      setStatus(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
+  useEffect(() => {
+    const id = setTimeout(() => {
+      const min = digitsOnly(minDraft);
+      const max = digitsOnly(maxDraft);
+      if (min === digitsOnly(minPrice) && max === digitsOnly(maxPrice)) return;
+      patchParams(setParams, { minPrice: min, maxPrice: max });
+    }, 400);
+    return () => clearTimeout(id);
+  }, [minDraft, maxDraft, minPrice, maxPrice, setParams]);
+
+  const active =
+    Boolean(brand || category || availability || minPrice || maxPrice);
 
   return (
-    <tr className="border-b border-brown/5 align-middle">
-      <td className="p-3">
-        <div className="flex items-center gap-3">
-          <img
-            src={product.image || "/logo.png"}
-            alt=""
-            className="h-12 w-12 rounded-xl object-cover bg-cream"
-          />
-          <div>
-            <p className="max-w-56 truncate font-medium">
-              {tName(product.name, lang)}
-            </p>
-            <p className="text-xs text-brown/40">
-              {t.source}: {product.itemCode || "—"}
-            </p>
-          </div>
-        </div>
-      </td>
-      <td className="p-3">
-        <input
-          value={sku}
-          onChange={(e) => setSku(e.target.value)}
-          className="w-28 rounded-lg border border-brown/10 px-2 py-1 text-sm"
-        />
-      </td>
-      <td className="p-3">
-        <input
-          type="number"
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-          className="w-28 rounded-lg border border-brown/10 px-2 py-1 text-sm"
-        />
-      </td>
-      <td className="p-3">
-        <input
-          type="number"
-          value={stock}
-          onChange={(e) => setStock(e.target.value)}
-          className="w-20 rounded-lg border border-brown/10 px-2 py-1 text-sm"
-        />
-      </td>
-      <td className="p-3">
+    <section className="mb-4 flex flex-wrap items-center gap-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-brown/5">
+      <select
+        value={brand}
+        onChange={(e) => patchParams(setParams, { brand: e.target.value })}
+        className={FILTER_CONTROL}
+      >
+        <option value="">{t.allBrands}</option>
+        {(facets.brands || []).map((item) => (
+          <option key={item.id} value={item.id}>
+            {tName(item.name, lang)}
+          </option>
+        ))}
+      </select>
+      <select
+        value={category}
+        onChange={(e) => patchParams(setParams, { category: e.target.value })}
+        className={FILTER_CONTROL}
+      >
+        <option value="">{t.allCategories}</option>
+        {(facets.categories || []).map((item) => (
+          <option key={item.id} value={item.id}>
+            {tName(item.name, lang)}
+          </option>
+        ))}
+      </select>
+      <input
+        type="text"
+        inputMode="numeric"
+        dir="ltr"
+        value={minDraft}
+        onChange={(e) => setMinDraft(formatGrouped(e.target.value))}
+        placeholder={t.minPrice}
+        className={`${FILTER_CONTROL} w-36 font-medium tabular-nums`}
+      />
+      <input
+        type="text"
+        inputMode="numeric"
+        dir="ltr"
+        value={maxDraft}
+        onChange={(e) => setMaxDraft(formatGrouped(e.target.value))}
+        placeholder={t.maxPrice}
+        className={`${FILTER_CONTROL} w-36 font-medium tabular-nums`}
+      />
+      <select
+        value={availability}
+        onChange={(e) =>
+          patchParams(setParams, { availability: e.target.value })
+        }
+        className={FILTER_CONTROL}
+      >
+        <option value="">{t.allStatuses}</option>
+        <option value="in">{t.inStock}</option>
+        <option value="out">{t.outOfStock}</option>
+      </select>
+      {active ? (
         <button
           type="button"
-          onClick={save}
-          disabled={busy}
-          className="rounded-full bg-brown px-3 py-1.5 text-xs font-semibold text-cream disabled:opacity-50"
+          onClick={() => {
+            const next = new URLSearchParams();
+            const q = params.get("q");
+            if (q) next.set("q", q);
+            setParams(next);
+          }}
+          className="rounded-full px-4 py-2 text-sm font-semibold text-tan hover:text-brown"
         >
-          {t.save}
+          {t.clearFilters}
         </button>
-        {status ? <p className="mt-1 text-xs text-tan">{status}</p> : null}
-      </td>
-    </tr>
+      ) : null}
+    </section>
+  );
+}
+
+function patchParams(setParams, patch) {
+  setParams((prev) => {
+    const next = new URLSearchParams(prev);
+    Object.entries(patch).forEach(([key, value]) => {
+      if (value) next.set(key, String(value));
+      else next.delete(key);
+    });
+    next.delete("page");
+    return next;
+  });
+}
+
+function Row({ product, onEdit, t, lang }) {
+  return (
+    <div
+      className={`${COLS} border-b border-brown/5 px-4 py-3 ${
+        product.outOfStock ? "bg-brown/[0.03]" : ""
+      }`}
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <img
+          src={product.image || "/logo.png"}
+          alt=""
+          className="h-12 w-12 shrink-0 rounded-xl bg-cream object-cover"
+        />
+        <div className="min-w-0">
+          <p className="truncate font-medium">{tName(product.name, lang)}</p>
+          <p className="truncate text-xs text-brown/40">
+            {t.source}: {product.itemCode || "—"}
+          </p>
+        </div>
+      </div>
+      <p className="truncate text-center text-sm">{product.sku || "—"}</p>
+      <p className="text-center text-sm tabular-nums">
+        {formatGrouped(product.sellingPrice ?? product.price ?? 0)}
+      </p>
+      <p className="text-center text-sm">{product.stock ?? 0}</p>
+      <p
+        className={`text-center text-xs font-semibold ${
+          product.outOfStock ? "text-red-800" : "text-emerald-800"
+        }`}
+      >
+        {product.outOfStock ? t.outOfStock : t.inStock}
+      </p>
+      <p className="truncate px-1 text-center text-sm font-medium text-brown" title={tName(product.brand?.name, lang)}>
+        {tName(product.brand?.name, lang) || "—"}
+      </p>
+      <div className="text-center">
+        <button
+          type="button"
+          onClick={() => onEdit(product)}
+          className="rounded-full bg-brown px-3 py-1.5 text-xs font-semibold text-cream"
+        >
+          {t.editProduct}
+        </button>
+      </div>
+    </div>
   );
 }
 
 export default function AdminProducts() {
   const { t, lang } = useLang();
-  const { user, ready, logout } = useAuth();
-  const [q, setQ] = useState("");
-  const [page, setPage] = useState(1);
+  const [params, setParams] = useSearchParams();
+  const q = params.get("q") || "";
+  const brand = params.get("brand") || "";
+  const category = params.get("category") || "";
+  const minPrice = params.get("minPrice") || "";
+  const maxPrice = params.get("maxPrice") || "";
+  const availability = params.get("availability") || "";
+  const page = Math.max(1, Number(params.get("page") || 1));
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState("");
-  const [data, setData] = useState({ products: [], pagination: { pages: 1, total: 0 } });
+  const [data, setData] = useState({
+    products: [],
+    pagination: { pages: 1, total: 0 },
+    facets: { brands: [], categories: [] },
+  });
   const [loading, setLoading] = useState(true);
+  const [searching, setSearching] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editMessage, setEditMessage] = useState("");
+  const firstLoad = useRef(true);
 
-  function load(nextPage = page, query = q) {
-    setLoading(true);
-    api
-      .adminProducts({ page: nextPage, q: query, limit: 20 })
-      .then(setData)
-      .catch((err) => setMessage(err.message))
-      .finally(() => setLoading(false));
-  }
+  const query = {
+    page,
+    q,
+    brand,
+    category,
+    minPrice: digitsOnly(minPrice),
+    maxPrice: digitsOnly(maxPrice),
+    availability,
+    limit: 20,
+  };
 
   useEffect(() => {
-    if (user) load(1, "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+    let cancelled = false;
+    if (firstLoad.current) setLoading(true);
+    else setSearching(true);
 
-  if (!ready) return <Spinner label={t.loading} />;
-  if (!user) return <Navigate to="/admin/login" replace />;
+    api
+      .adminProducts(query)
+      .then((result) => {
+        if (!cancelled) setData(result);
+      })
+      .catch((err) => {
+        if (!cancelled) setMessage(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+          setSearching(false);
+          firstLoad.current = false;
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [page, q, brand, category, minPrice, maxPrice, availability]);
+
+  function goPage(nextPage) {
+    const next = new URLSearchParams(params);
+    if (nextPage > 1) next.set("page", String(nextPage));
+    else next.delete("page");
+    setParams(next);
+  }
 
   async function sync() {
     setSyncing(true);
@@ -127,7 +246,8 @@ export default function AdminProducts() {
     try {
       const result = await api.sync();
       setMessage(`${result.products} ${t.products}`);
-      load(page, q);
+      const refreshed = await api.adminProducts(query);
+      setData(refreshed);
     } catch (err) {
       setMessage(err.message);
     } finally {
@@ -136,85 +256,74 @@ export default function AdminProducts() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8">
+    <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="font-display text-3xl">{t.admin}</h1>
-          <p className="text-sm text-brown/50">{user.email}</p>
+          <h2 className="font-display text-3xl">{t.products}</h2>
+          <p className="text-sm text-brown/50">
+            {searching
+              ? t.loading
+              : `${Number(data.pagination.total || 0).toLocaleString("en-US")} ${t.results}`}
+          </p>
         </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={sync}
-            disabled={syncing}
-            className="rounded-full bg-tan px-4 py-2 text-sm font-semibold text-brown disabled:opacity-60"
-          >
-            {syncing ? t.syncing : t.sync}
-          </button>
-          <button
-            type="button"
-            onClick={logout}
-            className="rounded-full bg-white px-4 py-2 text-sm ring-1 ring-brown/10"
-          >
-            {t.logout}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={sync}
+          disabled={syncing}
+          className="rounded-full bg-tan px-4 py-2 text-sm font-semibold text-brown disabled:opacity-60"
+        >
+          {syncing ? t.syncing : t.sync}
+        </button>
       </div>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          setPage(1);
-          load(1, q);
-        }}
-        className="mb-4 flex gap-2"
-      >
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder={t.search}
-          className="w-full max-w-sm rounded-full border border-brown/10 bg-white px-4 py-2 text-sm"
-        />
-        <button className="rounded-full bg-brown px-4 py-2 text-sm text-cream" type="submit">
-          {t.search.split(" ")[0]}
-        </button>
-      </form>
-
       {message ? <p className="mb-3 text-sm text-brown/70">{message}</p> : null}
+
+      <ProductFilters
+        t={t}
+        lang={lang}
+        params={params}
+        setParams={setParams}
+        facets={data.facets || { brands: [], categories: [] }}
+      />
 
       <div className="overflow-x-auto rounded-3xl bg-white shadow-sm ring-1 ring-brown/5">
         {loading ? (
           <Spinner label={t.loading} />
         ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-cream text-left text-xs uppercase tracking-wide text-brown/60">
-              <tr>
-                <th className="p-3">{t.products}</th>
-                <th className="p-3">{t.sku}</th>
-                <th className="p-3">{t.price}</th>
-                <th className="p-3">{t.stock}</th>
-                <th className="p-3">{t.save}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.products.map((p) => (
+          <div className="min-w-[70rem] text-sm">
+            <div
+              className={`${COLS} bg-cream px-4 py-3 text-center text-xs font-semibold text-brown/60`}
+            >
+              <span>{t.products}</span>
+              <span>{t.sku}</span>
+              <span>{t.price}</span>
+              <span>{t.stock}</span>
+              <span>{t.availability}</span>
+              <span>{t.productBrand}</span>
+              <span>{t.editProduct}</span>
+            </div>
+            {data.products.length ? (
+              data.products.map((p) => (
                 <Row
                   key={p.id}
                   product={p}
                   t={t}
                   lang={lang}
-                  onSaved={(updated) =>
-                    setData((prev) => ({
-                      ...prev,
-                      products: prev.products.map((item) =>
-                        item.id === updated.id ? updated : item
-                      ),
-                    }))
-                  }
+                  onEdit={async (item) => {
+                    setEditMessage("");
+                    try {
+                      const data = await api.adminProduct(item.id);
+                      setEditing(data.product || item);
+                    } catch {
+                      setEditing(item);
+                    }
+                  }}
                 />
-              ))}
-            </tbody>
-          </table>
+              ))
+            ) : (
+              <p className="px-4 py-10 text-center text-sm text-brown/50">{t.noProducts}</p>
+            )}
+          </div>
         )}
       </div>
 
@@ -226,10 +335,7 @@ export default function AdminProducts() {
               <button
                 key={n}
                 type="button"
-                onClick={() => {
-                  setPage(n);
-                  load(n, q);
-                }}
+                onClick={() => goPage(n)}
                 className={`h-9 min-w-9 rounded-full ${
                   n === page ? "bg-brown text-cream" : "bg-white"
                 }`}
@@ -239,6 +345,78 @@ export default function AdminProducts() {
             ))}
         </div>
       )}
+      {editing ? (
+        <ProductEditor
+          product={editing}
+          t={t}
+          lang={lang}
+          mode="store"
+          busy={editBusy}
+          message={editMessage}
+          onClose={() => setEditing(null)}
+          onReset={async () => {
+            setEditBusy(true);
+            setEditMessage("");
+            try {
+              const data = await api.patchProduct(editing.id, {
+                reset: [
+                  "sku",
+                  "price",
+                  "discountPrice",
+                  "stock",
+                  "outOfStock",
+                  "isActive",
+                  "name",
+                  "description",
+                  "brand",
+                  "category",
+                  "subCategory",
+                  "collectionName",
+                  "variants",
+                  "warranty",
+                  "keyword",
+                  "badge",
+                  "is_featured",
+                  "is_new_arrival",
+                  "is_hot",
+                  "is_best_seller",
+                ],
+              });
+              setEditing(data.product);
+              setData((prev) => ({
+                ...prev,
+                products: prev.products.map((item) =>
+                  item.id === data.product.id ? data.product : item
+                ),
+              }));
+              setEditMessage(t.saved);
+            } catch (err) {
+              setEditMessage(err.message);
+            } finally {
+              setEditBusy(false);
+            }
+          }}
+          onSave={async (patch) => {
+            setEditBusy(true);
+            setEditMessage("");
+            try {
+              const data = await api.patchProduct(editing.id, patch);
+              setEditing(data.product);
+              setData((prev) => ({
+                ...prev,
+                products: prev.products.map((item) =>
+                  item.id === data.product.id ? data.product : item
+                ),
+              }));
+              setEditMessage(t.saved);
+            } catch (err) {
+              setEditMessage(err.message);
+            } finally {
+              setEditBusy(false);
+            }
+          }}
+        />
+      ) : null}
     </div>
   );
 }

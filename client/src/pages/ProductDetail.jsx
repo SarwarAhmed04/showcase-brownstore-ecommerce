@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api";
 import { useLang } from "../context/LangContext";
-import { formatPrice, tName } from "../i18n";
+import { tName } from "../i18n";
+import { adaptProduct } from "../lib/catalog";
 import ProductCard from "../components/ProductCard";
 import Spinner from "../components/Spinner";
 
@@ -32,17 +33,14 @@ export default function ProductDetail() {
 
   if (loading) return <Spinner label={t.loading} />;
   if (!product) {
-    return <p className="py-20 text-center text-brown/50">{t.noProducts}</p>;
+    return <p className="py-20 text-center text-fg-mute">{t.noProducts}</p>;
   }
 
-  const hasDiscount =
-    product.discountPrice > 0 && product.discountPrice < product.price;
-
   return (
-    <div className="mx-auto max-w-6xl px-4 py-10">
+    <div className="container-x py-10">
       <div className="grid gap-10 lg:grid-cols-2">
         <div>
-          <div className="overflow-hidden rounded-3xl bg-white ring-1 ring-brown/5">
+          <div className="glass overflow-hidden rounded-panel">
             {activeImage ? (
               <img
                 src={activeImage}
@@ -51,7 +49,7 @@ export default function ProductDetail() {
               />
             ) : (
               <div className="flex aspect-square items-center justify-center">
-                <img src="/logo-4k.png" alt="" className="h-40 opacity-40" />
+                <img src="/logo-4k.png" alt="" className="h-40 w-56 object-contain opacity-40" />
               </div>
             )}
           </div>
@@ -63,7 +61,7 @@ export default function ProductDetail() {
                   type="button"
                   onClick={() => setImageIndex(i)}
                   className={`h-16 w-16 shrink-0 overflow-hidden rounded-xl ring-2 ${
-                    i === imageIndex ? "ring-tan" : "ring-transparent"
+                    i === imageIndex ? "ring-primary" : "ring-transparent"
                   }`}
                 >
                   <img src={img.url} alt="" className="h-full w-full object-cover" />
@@ -74,46 +72,37 @@ export default function ProductDetail() {
         </div>
 
         <div>
-          <p className="text-sm font-semibold text-tan">
-            {t.sku}: {product.sku}
-          </p>
-          <h1 className="mt-2 font-display text-3xl text-brown">
+          {tName(product.brand?.name, lang) ? (
+            <p className="text-sm font-semibold tracking-wide text-primary">
+              {t.productBrand}: {tName(product.brand.name, lang)}
+            </p>
+          ) : null}
+          <h1 className="headline mt-2 text-3xl text-fg sm:text-4xl">
             {tName(product.name, lang)}
           </h1>
-          <p className="mt-2 text-sm text-brown/50">
-            {tName(product.brand?.name, lang)}
+          <p className="mt-2 text-sm text-fg-mute">
+            {t.sku}: {product.sku}
             {product.category ? ` · ${tName(product.category.name, lang)}` : ""}
           </p>
-
-          <div className="mt-6 flex items-end gap-4">
-            <p className="font-display text-4xl text-brown">
-              {formatPrice(product.sellingPrice, lang)}
-            </p>
-            {hasDiscount && (
-              <p className="pb-1 text-brown/40 line-through">
-                {formatPrice(product.price, lang)}
-              </p>
-            )}
-          </div>
 
           <div className="mt-4 flex items-center gap-3">
             <span
               className={`rounded-full px-3 py-1 text-xs font-semibold ${
                 product.inStock
-                  ? "bg-emerald-50 text-emerald-800"
-                  : "bg-red-50 text-red-700"
+                  ? "bg-primary/15 text-primary"
+                  : "bg-red-500/15 text-red-300"
               }`}
             >
               {product.inStock ? t.inStock : t.outOfStock}
             </span>
-            <span className="text-sm text-brown/60">
+            <span className="text-sm text-fg-mute">
               {t.stock}: {product.stock}
             </span>
           </div>
 
           {product.variants?.length > 1 && (
             <div className="mt-6">
-              <p className="mb-2 text-sm font-semibold">{t.colors}</p>
+              <p className="mb-2 text-sm font-semibold text-fg">{t.colors}</p>
               <div className="flex flex-wrap gap-2">
                 {product.variants.map((v, i) => (
                   <button
@@ -125,8 +114,8 @@ export default function ProductDetail() {
                     }}
                     className={`rounded-full px-3 py-1.5 text-sm ${
                       i === variantIndex
-                        ? "bg-brown text-cream"
-                        : "bg-white ring-1 ring-brown/10"
+                        ? "bg-primary text-primary-fg"
+                        : "glass-soft text-fg"
                     }`}
                   >
                     {tName(v.color, lang) || `#${i + 1}`}
@@ -137,8 +126,8 @@ export default function ProductDetail() {
           )}
 
           <div className="mt-8">
-            <h2 className="mb-2 font-semibold">{t.description}</h2>
-            <p className="whitespace-pre-wrap leading-7 text-brown/75">
+            <h2 className="mb-2 font-semibold text-fg">{t.description}</h2>
+            <p className="whitespace-pre-wrap leading-7 text-fg/75">
               {tName(product.description, lang)}
             </p>
           </div>
@@ -147,10 +136,10 @@ export default function ProductDetail() {
 
       {payload.related?.length > 0 && (
         <section className="mt-16">
-          <h2 className="mb-6 font-display text-2xl">{t.related}</h2>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          <h2 className="headline mb-6 text-2xl text-fg">{t.related}</h2>
+          <div className="grid grid-cols-2 gap-3.5 md:grid-cols-4">
             {payload.related.map((p) => (
-              <ProductCard key={p.id} product={p} />
+              <ProductCard key={p.id} product={adaptProduct(p, lang)} />
             ))}
           </div>
         </section>

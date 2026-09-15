@@ -1,84 +1,157 @@
-import { Link, NavLink } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useLang } from "../context/LangContext";
+import { useTheme } from "../context/ThemeContext";
+import Logo from "./Logo";
+import LanguageSwitcher from "./LanguageSwitcher";
 
-const langs = [
-  { id: "ku", label: "کوردی" },
-  { id: "en", label: "EN" },
-  { id: "ar", label: "عربي" },
+const links = [
+  { to: "/", end: true, key: "home" },
+  { to: "/shop", key: "shop" },
+  { to: "/about", key: "about" },
+  { to: "/contact", key: "contact" },
 ];
 
+function IconSun() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+    </svg>
+  );
+}
+
+function IconMoon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5Z" />
+    </svg>
+  );
+}
+
+function IconSearch() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </svg>
+  );
+}
+
 export default function Header() {
-  const { t, lang, setLang } = useLang();
-  const linkClass = ({ isActive }) =>
-    `rounded-full px-3 py-1.5 text-sm font-medium transition ${
-      isActive
-        ? "bg-brown text-cream"
-        : "text-brown/80 hover:bg-tan/20 hover:text-brown"
-    }`;
+  const { t } = useLang();
+  const { theme, toggleTheme } = useTheme();
+  const navigate = useNavigate();
+  const [scrolled, setScrolled] = useState(false);
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    function onScroll() {
+      setScrolled(window.scrollY > 8);
+    }
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  function onSearch(e) {
+    e.preventDefault();
+    const query = q.trim();
+    navigate(query ? `/shop?q=${encodeURIComponent(query)}` : "/shop");
+  }
 
   return (
-    <header className="sticky top-0 z-40 border-b border-brown/10 bg-cream/90 backdrop-blur-md">
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
-        <Link to="/" className="flex items-center gap-3">
-          <img
-            src="/logo.png"
-            alt="BrownStore"
-            className="h-11 w-11 object-contain"
-          />
-          <div className="leading-tight">
-            <p className="font-display text-lg font-semibold text-brown">
-              BrownStore
-            </p>
-            <p className="hidden text-xs text-brown/60 sm:block">{t.tagline}</p>
-          </div>
+    <header
+      className={`sticky top-0 z-50 transition-shadow duration-500 ${
+        scrolled ? "glass-bar shadow-2xl" : "bg-bg/70 backdrop-blur-md"
+      }`}
+    >
+      <div className="container-x flex h-[70px] items-center gap-3 md:gap-4">
+        <Link to="/" className="flex shrink-0 items-center gap-3" aria-label="Brown Store — home">
+          <span className="grid size-10 place-items-center rounded-xl bg-primary/15 text-primary">
+            <Logo className="h-6 w-9" />
+          </span>
+          <span className="leading-tight">
+            <span className="font-display block text-lg font-bold tracking-tight text-fg">
+              Brown Store
+            </span>
+            <span className="hidden text-[10px] font-semibold tracking-[0.18em] text-fg-mute uppercase sm:block">
+              {t.tagline}
+            </span>
+          </span>
         </Link>
 
-        <nav className="hidden items-center gap-1 md:flex">
-          <NavLink to="/" end className={linkClass}>
-            {t.home}
-          </NavLink>
-          <NavLink to="/shop" className={linkClass}>
-            {t.shop}
-          </NavLink>
-          <NavLink to="/about" className={linkClass}>
-            {t.about}
-          </NavLink>
-          <NavLink to="/contact" className={linkClass}>
-            {t.contact}
-          </NavLink>
+        <nav className="ms-2 hidden items-center gap-1 lg:flex">
+          {links.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                `rounded-full px-3.5 py-2 text-sm font-semibold transition-all ${
+                  isActive
+                    ? "bg-primary/15 text-primary"
+                    : "text-fg-mute hover:bg-muted hover:text-fg"
+                }`
+              }
+            >
+              {t[item.key]}
+            </NavLink>
+          ))}
         </nav>
 
-        <div className="flex items-center gap-1 rounded-full bg-white p-1 shadow-sm ring-1 ring-brown/10">
-          {langs.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setLang(item.id)}
-              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                lang === item.id
-                  ? "bg-brown text-cream"
-                  : "text-brown/70 hover:text-brown"
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
+        <form
+          onSubmit={onSearch}
+          className="glass-soft ms-auto hidden max-w-sm flex-1 items-center gap-2.5 rounded-full px-4 py-2.5 md:flex"
+        >
+          <IconSearch />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={t.search}
+            className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-fg-mute"
+          />
+        </form>
+
+        <div className="ms-auto flex items-center gap-1.5 md:ms-0">
+          <button
+            type="button"
+            onClick={() => navigate("/shop")}
+            aria-label={t.searchShortcut}
+            className="grid size-10 place-items-center rounded-full text-fg-mute transition hover:bg-muted hover:text-fg md:hidden"
+          >
+            <IconSearch />
+          </button>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={theme === "espresso" ? t.switchToCream : t.switchToEspresso}
+            className="grid size-10 place-items-center rounded-full text-fg-mute transition hover:bg-muted hover:text-fg"
+          >
+            {theme === "espresso" ? <IconSun /> : <IconMoon />}
+          </button>
+          <LanguageSwitcher />
         </div>
       </div>
-      <nav className="flex items-center justify-center gap-1 border-t border-brown/5 px-3 py-2 md:hidden">
-        <NavLink to="/" end className={linkClass}>
-          {t.home}
-        </NavLink>
-        <NavLink to="/shop" className={linkClass}>
-          {t.shop}
-        </NavLink>
-        <NavLink to="/about" className={linkClass}>
-          {t.about}
-        </NavLink>
-        <NavLink to="/contact" className={linkClass}>
-          {t.contact}
-        </NavLink>
-      </nav>
+
+      <div className="border-t border-border/30 px-3 py-2 lg:hidden">
+        <nav className="flex justify-center gap-1 overflow-x-auto no-scrollbar">
+          {links.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                `shrink-0 rounded-full px-3 py-1.5 text-sm font-semibold ${
+                  isActive ? "bg-primary/15 text-primary" : "text-fg-mute"
+                }`
+              }
+            >
+              {t[item.key]}
+            </NavLink>
+          ))}
+        </nav>
+      </div>
     </header>
   );
 }

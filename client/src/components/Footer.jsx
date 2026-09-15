@@ -1,43 +1,144 @@
-import { Link } from "react-router-dom";
-import { useLang } from "../context/LangContext";
+import { Link } from 'react-router-dom'
+import { Button } from '@/components/ui/button'
+import { Mail, MapPin, Phone, Send } from 'lucide-react'
+import { useCatalog } from '../lib/catalogStore'
+import { useLang } from '../context/LangContext'
+import { Social } from './ui'
+import { Wordmark } from './Navbar'
+
+const socials = [
+  { Icon: Social.Instagram, label: 'Instagram' },
+  { Icon: Social.Facebook, label: 'Facebook' },
+  { Icon: Social.X, label: 'X' },
+  { Icon: Social.Youtube, label: 'YouTube' },
+]
 
 export default function Footer() {
-  const { t } = useLang();
+  const { categories } = useCatalog()
+  const { t } = useLang()
+  const shop = [
+    { to: '/shop', label: t.allProducts },
+    { to: '/deals', label: t.dailyDeals },
+    { to: '/shop?sort=new', label: t.newArrivals },
+    { to: '/saved', label: t.savedItems },
+  ]
+  const company = [
+    { to: '/about', label: t.ourStory },
+    { to: '/about#showroom', label: t.visitShowroom },
+    { to: '/contact', label: t.contactUs },
+    { to: '/about#promise', label: t.brownPromise },
+  ]
+
   return (
-    <footer className="mt-auto border-t border-brown/10 bg-brown text-cream">
-      <div className="mx-auto grid max-w-6xl gap-8 px-4 py-12 sm:grid-cols-3">
-        <div>
-          <div className="flex items-center gap-3">
-            <img src="/logo.png" alt="" className="h-10 w-10 brightness-0 invert" />
-            <p className="font-display text-xl">BrownStore</p>
+    <footer className="relative mt-28">
+      <div className="divider-glow" />
+
+      <div className="container-x pb-28 pt-16 lg:pb-16">
+        <div className="glass mb-14 overflow-hidden rounded-panel p-8 sm:p-12">
+          <div className="grid items-center gap-8 lg:grid-cols-[1.2fr_1fr]">
+            <div>
+              <div className="eyebrow mb-4">{t.dispatchEyebrow}</div>
+              <h3 className="headline text-3xl sm:text-4xl">
+                {t.dispatchTitle} <span className="gold-text">{t.dispatchTitleGold}</span>
+              </h3>
+              <p className="mt-3 max-w-md text-sm leading-relaxed text-foreground/75">
+                {t.dispatchBody}
+              </p>
+            </div>
+
+            <form
+              onSubmit={(e) => e.preventDefault()}
+              className="glass-soft flex items-center gap-2 rounded-full p-1.5 pl-5"
+            >
+              <input
+                type="email"
+                required
+                placeholder="you@example.com"
+                aria-label={t.email}
+                className="w-full bg-transparent text-sm outline-none placeholder:text-[rgb(var(--text-mute))]"
+              />
+              <Button type="submit" variant="brand" className="shrink-0">
+                {t.join} <Send />
+              </Button>
+            </form>
           </div>
-          <p className="mt-3 max-w-xs text-sm text-cream/70">{t.tagline}</p>
         </div>
-        <div>
-          <p className="mb-3 text-sm font-semibold text-tan">{t.home}</p>
-          <div className="flex flex-col gap-2 text-sm text-cream/80">
-            <Link to="/shop">{t.shop}</Link>
-            <Link to="/about">{t.about}</Link>
-            <Link to="/contact">{t.contact}</Link>
+
+        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1.2fr]">
+          <div>
+            <Wordmark />
+            <div className="mt-5 flex gap-2">
+              {socials.map(({ Icon, label }) => (
+                <a
+                  key={label}
+                  href="#"
+                  aria-label={label}
+                  onClick={(e) => e.preventDefault()}
+                  className="glass-soft grid h-10 w-10 place-items-center rounded-full transition-all hover:-translate-y-1 hover:text-primary"
+                >
+                  <Icon width={17} height={17} />
+                </a>
+              ))}
+            </div>
+          </div>
+
+          <FooterCol title={t.footerShop} links={shop} />
+          <FooterCol title={t.footerCompany} links={company} />
+
+          <div>
+            <h4 className="mb-4 text-2xs font-bold uppercase tracking-[.18em] text-muted-foreground">
+              {t.findUs}
+            </h4>
+            <ul className="space-y-3.5 text-sm text-foreground/75">
+              <li className="flex gap-3">
+                <MapPin size={16} className="mt-0.5 shrink-0 text-primary" />
+                <span>Karrada, Baghdad</span>
+              </li>
+              <li className="flex gap-3">
+                <Phone size={16} className="mt-0.5 shrink-0 text-primary" />
+                <span dir="ltr">+964 773 802 9000</span>
+              </li>
+              <li className="flex gap-3">
+                <Mail size={16} className="mt-0.5 shrink-0 text-primary" />
+                <span>info@ibsher.com</span>
+              </li>
+            </ul>
           </div>
         </div>
-        <div>
-          <p className="mb-3 text-sm font-semibold text-tan">{t.contact}</p>
-          <p className="text-sm text-cream/80" dir="ltr">
-            +964 773 802 9000
-          </p>
-          <p className="text-sm text-cream/80">info@ibsher.com</p>
-          <Link
-            to="/admin/login"
-            className="mt-4 inline-block text-xs text-tan/80 hover:text-tan"
-          >
-            {t.admin}
-          </Link>
+
+        <div className="mt-12 flex flex-wrap gap-1.5 border-t border-border/50 pt-8">
+          {categories.map((c) => (
+            <Link
+              key={c.slug}
+              to={`/category/${c.slug}`}
+              className="rounded-full px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-primary"
+            >
+              {c.name}
+            </Link>
+          ))}
         </div>
-      </div>
-      <div className="border-t border-white/10 py-4 text-center text-xs text-cream/50">
-        © {new Date().getFullYear()} BrownStore · {t.footerRights}
+
+        <div className="mt-8 border-t border-border/50 pt-7 text-xs text-muted-foreground">
+          <p>© {new Date().getFullYear()} Brown Store.</p>
+        </div>
       </div>
     </footer>
-  );
+  )
+}
+
+function FooterCol({ title, links }) {
+  return (
+    <div>
+      <h4 className="mb-4 text-2xs font-bold uppercase tracking-[.18em] text-muted-foreground">{title}</h4>
+      <ul className="space-y-2.5">
+        {links.map((l) => (
+          <li key={l.to + l.label}>
+            <Link to={l.to} className="text-sm text-foreground/75 transition-colors hover:text-primary">
+              {l.label}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
 }

@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: brownstore
+    runtime: node
+    plan: free
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: API_KEY_PIN
+        sync: false
+      - key: IBSHER_API
+        value: https://api.ibsher.com/api/v1/client
+      - key: IBSHER_CDN
+        value: https://cdn.ibsher.com

@@ -8,3 +8,5 @@ Thumbs.db
 .vite
 coverage/
 server/data/
+_design-ref/
+

@@ -9,20 +9,38 @@ import { productsRouter } from "./routes/products.js";
 import { categoriesRouter } from "./routes/categories.js";
 import { authRouter } from "./routes/auth.js";
 import { adminRouter, syncFromIbsher } from "./routes/admin.js";
+import { partnersRouter } from "./routes/partners.js";
+import { enquiriesRouter } from "./routes/enquiries.js";
+import { mediaRouter } from "./routes/media.js";
 import { seedAdmin } from "./seedAdmin.js";
+import { seedPartners } from "./seedPartners.js";
 import { Product } from "./models/Product.js";
 import { Category } from "./models/Category.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const port = Number(process.env.PORT) || 5000;
+const isProd = process.env.NODE_ENV === "production";
 
-app.use(
-  cors({
-    origin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
-  })
-);
-app.use(express.json({ limit: "1mb" }));
+function allowedOrigins() {
+  const listed = String(process.env.CLIENT_ORIGIN || "http://localhost:5173")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (process.env.RENDER_EXTERNAL_URL) listed.push(process.env.RENDER_EXTERNAL_URL);
+  return [...new Set(listed)];
+}
+
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/partners")) {
+    return cors({
+      origin: true,
+      allowedHeaders: ["Content-Type", "X-API-Key", "Authorization"],
+    })(req, res, next);
+  }
+  return cors({ origin: allowedOrigins() })(req, res, next);
+});
+app.use(express.json({ limit: "8mb" }));
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "brownstore" });
@@ -32,6 +50,17 @@ app.use("/api/products", productsRouter);
 app.use("/api/categories", categoriesRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/partners", partnersRouter);
+app.use("/api/enquiries", enquiriesRouter);
+app.use("/media", mediaRouter);
+
+const clientDist = path.resolve(__dirname, "../../client/dist");
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  app.get(/^(?!\/api(?:\/|$)|\/media(?:\/|$)).*/, (_req, res) => {
+    res.sendFile(path.join(clientDist, "index.html"));
+  });
+}
 
 app.use((err, _req, res, _next) => {
   console.error(err);
@@ -41,10 +70,14 @@ app.use((err, _req, res, _next) => {
 async function connectDatabase() {
   const uri = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/brownstore";
   try {
-    await mongoose.connect(uri, { serverSelectionTimeoutMS: 2500 });
-    console.log("MongoDB connected:", uri);
+    await mongoose.connect(uri, { serverSelectionTimeoutMS: isProd ? 8000 : 2500 });
+    console.log("MongoDB connected");
     return;
   } catch (err) {
+    if (isProd) {
+      console.error("MongoDB connection failed:", err.message);
+      throw err;
+    }
     console.warn("Local MongoDB unavailable:", err.message);
   }
 
@@ -76,11 +109,16 @@ async function importFileCache() {
 }
 
 async function start() {
+  if (isProd && (!process.env.JWT_SECRET || process.env.JWT_SECRET === "change-this-to-a-long-random-secret")) {
+    throw new Error("Set a strong JWT_SECRET before running in production");
+  }
+
   await connectDatabase();
   await seedAdmin();
+  await seedPartners();
 
-  app.listen(port, () => {
-    console.log(`BrownStore API listening on http://localhost:${port}`);
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`BrownStore listening on port ${port}`);
   });
 
   const count = await Product.countDocuments();
