@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import mongoose from "mongoose";
 import { productsRouter } from "./routes/products.js";
 import { categoriesRouter } from "./routes/categories.js";
@@ -11,6 +12,7 @@ import { authRouter } from "./routes/auth.js";
 import { adminRouter, syncFromIbsher } from "./routes/admin.js";
 import { partnersRouter } from "./routes/partners.js";
 import { enquiriesRouter } from "./routes/enquiries.js";
+import { bannersRouter } from "./routes/banners.js";
 import { mediaRouter } from "./routes/media.js";
 import { seedAdmin } from "./seedAdmin.js";
 import { seedPartners } from "./seedPartners.js";
@@ -35,11 +37,13 @@ app.use((req, res, next) => {
   if (req.path.startsWith("/api/partners")) {
     return cors({
       origin: true,
+      credentials: true,
       allowedHeaders: ["Content-Type", "X-API-Key", "Authorization"],
     })(req, res, next);
   }
-  return cors({ origin: allowedOrigins() })(req, res, next);
+  return cors({ origin: allowedOrigins(), credentials: true })(req, res, next);
 });
+app.use(cookieParser());
 app.use(express.json({ limit: "8mb" }));
 
 app.get("/api/health", (_req, res) => {
@@ -52,6 +56,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/partners", partnersRouter);
 app.use("/api/enquiries", enquiriesRouter);
+app.use("/api/banners", bannersRouter);
 app.use("/media", mediaRouter);
 
 const clientDist = path.resolve(__dirname, "../../client/dist");
@@ -68,7 +73,10 @@ app.use((err, _req, res, _next) => {
 });
 
 async function connectDatabase() {
-  const uri = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/brownstore";
+  const uri =
+    process.env.MONGO_URL ||
+    process.env.MONGODB_URI ||
+    "mongodb://127.0.0.1:27017/brownstore";
   try {
     await mongoose.connect(uri, { serverSelectionTimeoutMS: isProd ? 8000 : 2500 });
     console.log("MongoDB connected");

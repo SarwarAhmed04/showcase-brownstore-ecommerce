@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { User } from "../models/User.js";
 import { requireAdmin } from "../middleware/auth.js";
 import { toAdminAccount } from "../utils/adminUser.js";
+import { AUTH_COOKIE, authCookieOptions } from "../utils/authCookie.js";
 
 export const authRouter = Router();
 
@@ -27,14 +28,20 @@ authRouter.post("/login", async (req, res) => {
       { expiresIn: "7d" }
     );
 
+    res.cookie(AUTH_COOKIE, token, authCookieOptions());
     res.json({
-      token,
       user: toAdminAccount(user),
     });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Login failed" });
   }
+});
+
+authRouter.post("/logout", (_req, res) => {
+  const { maxAge, ...cookie } = authCookieOptions();
+  res.clearCookie(AUTH_COOKIE, cookie);
+  res.json({ ok: true });
 });
 
 authRouter.get("/me", requireAdmin, (req, res) => {

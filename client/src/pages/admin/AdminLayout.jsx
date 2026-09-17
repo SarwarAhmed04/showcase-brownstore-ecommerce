@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Activity,
+  Image,
   LayoutGrid,
   LogOut,
   Menu,
@@ -107,6 +108,7 @@ export default function AdminLayout() {
     { to: "/admin/categories", label: t.categoriesPage, icon: Tags },
     { to: "/admin/platforms", label: t.platforms, icon: Percent },
     { to: "/admin/activity", label: t.activity, icon: Activity },
+    { to: "/admin/banners", label: t.banners, icon: Image },
     { to: "/admin/accounts", label: t.accounts, icon: Users },
   ];
 

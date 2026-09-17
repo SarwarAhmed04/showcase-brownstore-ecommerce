@@ -1,12 +1,7 @@
-const TOKEN_KEY = "brownstore_token";
+const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
-export function getToken() {
-  return localStorage.getItem(TOKEN_KEY) || "";
-}
-
-export function setToken(token) {
-  if (token) localStorage.setItem(TOKEN_KEY, token);
-  else localStorage.removeItem(TOKEN_KEY);
+function apiUrl(path) {
+  return `${API_URL}${path}`;
 }
 
 async function request(path, options = {}) {
@@ -14,10 +9,8 @@ async function request(path, options = {}) {
   if (options.body && !(options.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(path, { ...options, headers });
+  const res = await fetch(apiUrl(path), { ...options, headers, credentials: "include" });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(json.message || `Request failed (${res.status})`);
@@ -47,6 +40,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
+  logout: () => request("/api/auth/logout", { method: "POST" }),
   me: () => request("/api/auth/me"),
   adminProducts: (params = {}) => {
     const qs = new URLSearchParams(
@@ -174,4 +168,25 @@ export const api = {
     const suffix = qs.toString();
     return request(`/api/admin/activity${suffix ? `?${suffix}` : ""}`);
   },
+  banners: () => request("/api/banners"),
+  adminBanners: () => request("/api/admin/banners"),
+  uploadBannerImage: (slot, image) =>
+    request(`/api/admin/banners/${encodeURIComponent(slot)}/image`, {
+      method: "POST",
+      body: JSON.stringify({ image }),
+    }),
+  removeBannerImage: (slot) =>
+    request(`/api/admin/banners/${encodeURIComponent(slot)}/image`, {
+      method: "DELETE",
+    }),
+  moveBanner: (slot, nextSlot) =>
+    request(`/api/admin/banners/${encodeURIComponent(slot)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ slot: nextSlot }),
+    }),
+  patchBanner: (slot, body) =>
+    request(`/api/admin/banners/${encodeURIComponent(slot)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 };

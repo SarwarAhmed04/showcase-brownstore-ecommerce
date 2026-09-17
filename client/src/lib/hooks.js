@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { getCookie, setCookie } from './cookies'
 
-/* ---------------------------------------------------------------- localStorage
-   Wrapped in try/catch: private windows and blocked site-data both throw on
+/* -------------------------------------------------------------------- cookies
+   Wrapped in try/catch: private windows and blocked cookies both throw on
    access, and a saved-items list is never worth taking the page down for. */
-export function useLocalState(key, initial) {
+export function useCookieState(key, initial) {
   const [value, setValue] = useState(() => {
     try {
-      const raw = localStorage.getItem(key)
+      const raw = getCookie(key)
       return raw ? JSON.parse(raw) : initial
     } catch {
       return initial
@@ -15,9 +16,9 @@ export function useLocalState(key, initial) {
 
   useEffect(() => {
     try {
-      localStorage.setItem(key, JSON.stringify(value))
+      setCookie(key, JSON.stringify(value))
     } catch {
-      /* storage unavailable — keep the in-memory value */
+      /* cookies unavailable — keep the in-memory value */
     }
   }, [key, value])
 
@@ -26,7 +27,7 @@ export function useLocalState(key, initial) {
 
 /* ------------------------------------------------------- saved / wishlist */
 export function useSaved() {
-  const [ids, setIds] = useLocalState('bs:saved', [])
+  const [ids, setIds] = useCookieState('bs:saved', [])
   const has = useCallback((id) => ids.map(String).includes(String(id)), [ids])
   const toggle = useCallback(
     (id) =>

@@ -10,7 +10,7 @@ Showcase catalog for BrownStore. Products are synced from [ibsher.com](https://i
 
 ## Setup
 
-1. Install [MongoDB](https://www.mongodb.com/docs/manual/installation/) and start it locally (or set `MONGODB_URI` to Atlas).
+1. Install [MongoDB](https://www.mongodb.com/docs/manual/installation/) and start it locally (or set `MONGO_URL` to Atlas).
 2. Copy env file:
 
 ```bash

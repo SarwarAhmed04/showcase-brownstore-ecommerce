@@ -20,9 +20,10 @@ import AdminLayout from "./pages/admin/AdminLayout";
 import AdminDashboard from "./pages/admin/Dashboard";
 import AdminProducts from "./pages/admin/Products";
 import AdminCategories from "./pages/admin/Categories";
-import AdminAccounts from "./pages/admin/Accounts";
 import AdminCommissions from "./pages/admin/Commissions";
 import AdminActivity from "./pages/admin/Activity";
+import AdminBanners from "./pages/admin/Banners";
+import AdminAccounts from "./pages/admin/Accounts";
 
 export default function App() {
   return (
@@ -55,6 +56,7 @@ export default function App() {
                   <Route path="commissions" element={<AdminCommissions />} />
                   <Route path="commissions/:partner" element={<AdminCommissions />} />
                     <Route path="activity" element={<AdminActivity />} />
+                    <Route path="banners" element={<AdminBanners />} />
                     <Route path="accounts" element={<AdminAccounts />} />
                   </Route>
                 </Routes>

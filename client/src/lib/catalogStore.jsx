@@ -2,12 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { api } from "../api";
 import { useLang } from "../context/LangContext";
 import { adaptCategory, adaptProduct } from "./catalog";
+import { getCookie } from "./cookies";
 
 const CatalogContext = createContext(null);
 
 function savedIds() {
   try {
-    const raw = JSON.parse(localStorage.getItem("bs:saved") || "[]");
+    const raw = JSON.parse(getCookie("bs:saved") || "[]");
     return Array.isArray(raw) ? raw.map(String) : [];
   } catch {
     return [];

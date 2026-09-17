@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import { getCookie, setCookie } from "../lib/cookies";
 
 const ThemeContext = createContext({
   theme: "espresso",
@@ -11,7 +12,7 @@ const STORAGE_KEY = "brownstore-theme";
 export function ThemeProvider({ children }) {
   const [theme, setThemeState] = useState(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = getCookie(STORAGE_KEY);
       if (saved === "cream" || saved === "espresso") return saved;
     } catch {
       /* ignore */
@@ -22,7 +23,7 @@ export function ThemeProvider({ children }) {
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     try {
-      localStorage.setItem(STORAGE_KEY, theme);
+      setCookie(STORAGE_KEY, theme);
     } catch {
       /* ignore */
     }

@@ -15,7 +15,8 @@
     <title>BrownStore</title>
     <script>
       try {
-        var t = localStorage.getItem("brownstore-theme");
+        var m = document.cookie.match(/(?:^|; )brownstore-theme=([^;]*)/);
+        var t = m ? decodeURIComponent(m[1]) : "";
         document.documentElement.setAttribute(
           "data-theme",
           t === "cream" ? "cream" : "espresso"

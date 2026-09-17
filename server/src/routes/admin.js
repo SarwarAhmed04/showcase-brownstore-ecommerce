@@ -21,6 +21,8 @@ import {
   savePartnerImageFile,
   toAdminCategory,
 } from "../utils/categoryView.js";
+import { removeLocalBannerImage, saveBannerImageFile } from "../utils/bannerFiles.js";
+import { Banner, applyCopy, copyFields, ensureBanners, isBannerAlign, isBannerSlot, pickLoc, toAdminBanner } from "../models/Banner.js";
 import {
   fetchIbsherCategories,
   fetchIbsherProducts,
@@ -432,6 +434,82 @@ adminRouter.post("/categories/:id/image", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(err.status || 500).json({ message: err.message || "Failed to upload image" });
+  }
+});
+
+adminRouter.get("/banners", async (_req, res) => {
+  try {
+    const docs = await ensureBanners();
+    res.json({ banners: docs.map(toAdminBanner) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to load banners" });
+  }
+});
+
+adminRouter.post("/banners/:slot/image", async (req, res) => {
+  try {
+    const slot = isBannerSlot(req.params.slot);
+    if (!slot) return res.status(400).json({ message: "Slot must be 1 to 5" });
+    const docs = await ensureBanners();
+    const banner = docs.find((doc) => doc.slot === slot);
+    const stored = saveBannerImageFile(slot, req.body.image);
+    removeLocalBannerImage(banner.image);
+    banner.image = stored;
+    await banner.save();
+    await logActivity(req, "banner.image", { slot });
+    res.json({ banner: toAdminBanner(banner), banners: (await Banner.find().sort({ slot: 1 })).map(toAdminBanner) });
+  } catch (err) {
+    console.error(err);
+    res.status(err.status || 500).json({ message: err.message || "Failed to upload banner" });
+  }
+});
+
+adminRouter.delete("/banners/:slot/image", async (req, res) => {
+  try {
+    const slot = isBannerSlot(req.params.slot);
+    if (!slot) return res.status(400).json({ message: "Slot must be 1 to 5" });
+    const docs = await ensureBanners();
+    const banner = docs.find((doc) => doc.slot === slot);
+    removeLocalBannerImage(banner.image);
+    banner.image = "";
+    await banner.save();
+    await logActivity(req, "banner.image", { slot, cleared: true });
+    res.json({ banner: toAdminBanner(banner), banners: (await Banner.find().sort({ slot: 1 })).map(toAdminBanner) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to remove banner" });
+  }
+});
+
+adminRouter.patch("/banners/:slot", async (req, res) => {
+  try {
+    const from = isBannerSlot(req.params.slot);
+    if (!from) return res.status(400).json({ message: "Slot must be 1 to 5" });
+    const docs = await ensureBanners();
+    const source = docs.find((doc) => doc.slot === from);
+    if (req.body.title) source.title = pickLoc(req.body.title, source.title);
+    if (req.body.subtitle) source.subtitle = pickLoc(req.body.subtitle, source.subtitle);
+    if (isBannerAlign(req.body.textAlign)) source.textAlign = req.body.textAlign;
+
+    const to = isBannerSlot(req.body.slot);
+    if (to && to !== from) {
+      const target = docs.find((doc) => doc.slot === to);
+      const sourceCopy = copyFields(source);
+      applyCopy(source, copyFields(target));
+      applyCopy(target, sourceCopy);
+      await target.save();
+    }
+
+    await source.save();
+    await logActivity(req, "banner.image", {
+      slot: to && to !== from ? to : from,
+      from: to && to !== from ? from : undefined,
+    });
+    res.json({ banners: (await Banner.find().sort({ slot: 1 })).map(toAdminBanner) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to update banner" });
   }
 });
 

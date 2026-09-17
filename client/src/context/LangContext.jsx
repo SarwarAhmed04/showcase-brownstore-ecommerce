@@ -1,15 +1,16 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { translations } from "../i18n";
+import { getCookie, setCookie } from "../lib/cookies";
 
 const LangContext = createContext(null);
 
 export function LangProvider({ children }) {
   const [lang, setLang] = useState(
-    () => localStorage.getItem("brownstore_lang") || "ku"
+    () => getCookie("brownstore_lang") || "ku"
   );
 
   useEffect(() => {
-    localStorage.setItem("brownstore_lang", lang);
+    setCookie("brownstore_lang", lang);
     document.documentElement.lang = lang;
     document.documentElement.dir = lang === "en" ? "ltr" : "rtl";
   }, [lang]);

@@ -17,6 +17,7 @@ export const ACTIVITY_ACTIONS = [
   "category.image",
   "settings.update",
   "enquiry.create",
+  "banner.image",
 ];
 
 export const ACTIVITY_GROUPS = {
@@ -35,6 +36,7 @@ export const ACTIVITY_GROUPS = {
   sync: ["catalog.sync"],
   category: ["category.update", "category.image", "settings.update"],
   enquiry: ["enquiry.create"],
+  banner: ["banner.image"],
 };
 
 const activitySchema = new mongoose.Schema(

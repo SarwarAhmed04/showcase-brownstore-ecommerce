@@ -6,10 +6,13 @@ import ProductRail from '../components/ProductRail'
 import CategoryTile from '../components/CategoryTile'
 import { LogoLoop } from '../components/LogoLoop'
 import ProductCard from '../components/ProductCard'
+import { BannerSlider, BannerStrip } from '../components/HomeBanners'
 import { Reveal, SectionHead } from '../components/ui'
 import { useCatalog } from '../lib/catalogStore'
 import { imgUrl } from '../lib/img'
 import { useLang } from '../context/LangContext'
+import { api } from '../api'
+import { useEffect, useState } from 'react'
 
 const NOTES = [
   {
@@ -32,8 +35,20 @@ const NOTES = [
 export default function Home() {
   const { categories, byCategory, brands, deals, featured, live: products } = useCatalog()
   const { t } = useLang()
+  const [banners, setBanners] = useState([])
   const topDeals = deals.slice(0, 10)
   const newest = [...products].sort((a, b) => String(b.id).localeCompare(String(a.id))).slice(0, 10)
+
+  useEffect(() => {
+    api
+      .banners()
+      .then((data) => setBanners(data.banners || []))
+      .catch(() => setBanners([]))
+  }, [])
+
+  const sliderBanners = banners.filter((item) => item.slot <= 3)
+  const bannerFour = banners.find((item) => item.slot === 4)
+  const bannerFive = banners.find((item) => item.slot === 5)
 
   const brandLogos = brands.map((b) => ({ name: b }))
 
@@ -49,6 +64,7 @@ export default function Home() {
 
   return (
     <>
+      <BannerSlider banners={sliderBanners} />
       <Hero />
 
       <Reveal>
@@ -115,6 +131,8 @@ export default function Home() {
         </div>
       </section>
 
+      <BannerStrip banner={bannerFour} />
+
       <section className="container-x py-14">
         <Reveal>
           <div className="glass grid overflow-hidden rounded-panel lg:grid-cols-2">
@@ -160,6 +178,8 @@ export default function Home() {
           />
         </Reveal>
       ))}
+
+      <BannerStrip banner={bannerFive} />
 
       <section className="py-14">
         <div className="divider-glow mb-10" />

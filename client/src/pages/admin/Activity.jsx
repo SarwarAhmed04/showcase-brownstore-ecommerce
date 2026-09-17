@@ -63,6 +63,8 @@ function actionTitle(item, t) {
       return t.activityActionSettings;
     case "enquiry.create":
       return t.activityActionEnquiry;
+    case "banner.image":
+      return t.activityActionBanner;
     default:
       return item.action;
   }
@@ -122,6 +124,8 @@ function activityDetail(item, t, lang) {
       return `${t.categoryLayout} · ${meta.categoryLayout || "—"}`;
     case "enquiry.create":
       return [meta.productName, meta.email, meta.subject].filter(Boolean).join(" · ");
+    case "banner.image":
+      return `${t.bannerSlot} ${meta.slot || ""}${meta.from ? ` ← ${meta.from}` : ""}${meta.cleared ? ` · ${t.bannerRemove}` : ""}`.trim();
     default:
       return "";
   }
