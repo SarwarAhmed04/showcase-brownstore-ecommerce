@@ -7,7 +7,7 @@ import { tName } from "../../i18n";
 import Spinner from "../../components/Spinner";
 import ProductEditor, { formatGrouped } from "../../components/admin/ProductEditor";
 
-const SCOPES = ["all", "category", "subcategory", "collection"];
+const SCOPES = ["all", "category", "subcategory", "collection", "vendor"];
 const SELECT =
   "w-full rounded-full border border-brown/10 bg-cream px-4 py-2.5 text-sm font-semibold text-brown outline-none ring-tan/40 focus:ring-2";
 
@@ -21,6 +21,7 @@ function scopeLabel(t, scope) {
   if (scope === "all") return t.allCommission;
   if (scope === "subcategory") return t.subCategory;
   if (scope === "collection") return t.collection;
+  if (scope === "vendor") return t.vendor;
   return t.category;
 }
 
@@ -213,12 +214,15 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     categories: [],
     subcategories: [],
     collections: [],
+    vendors: [],
   });
   const [commissions, setCommissions] = useState([]);
   const [scope, setScope] = useState("all");
   const [categoryId, setCategoryId] = useState("");
   const [subCategoryId, setSubCategoryId] = useState("");
   const [collectionId, setCollectionId] = useState("");
+  const [vendorId, setVendorId] = useState("");
+  const [vendorQ, setVendorQ] = useState("");
   const [percentage, setPercentage] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -253,13 +257,31 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     [targets.collections, categoryId, subCategoryId]
   );
 
+  const vendorOptions = useMemo(() => {
+    const list = targets.vendors || [];
+    const q = vendorQ.trim().toLowerCase();
+    const filtered = !q
+      ? list
+      : list.filter((item) => {
+          const name = item.name || {};
+          return [name.ku, name.en, name.ar, item.id].some((value) =>
+            String(value || "").toLowerCase().includes(q)
+          );
+        });
+    if (vendorId && !filtered.some((item) => item.id === vendorId)) {
+      const selected = list.find((item) => item.id === vendorId);
+      if (selected) return [selected, ...filtered];
+    }
+    return filtered;
+  }, [targets.vendors, vendorQ, vendorId]);
+
   function loadDetail() {
     return api.adminPlatform(partnerSlug).then((detail) => {
       const next = detail.platform || detail.partner || null;
       setPartner(next);
       setPlatformName(next?.name || "");
       setCommissions(detail.commissions || []);
-      setTargets(detail.targets || { categories: [], subcategories: [], collections: [] });
+      setTargets(detail.targets || { categories: [], subcategories: [], collections: [], vendors: [] });
     });
   }
 
@@ -292,6 +314,8 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     setCategoryId("");
     setSubCategoryId("");
     setCollectionId("");
+    setVendorId("");
+    setVendorQ("");
     setPercentage("");
   }
 
@@ -306,6 +330,8 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           : ""
     );
     setCollectionId(rule.scope === "collection" ? rule.targetId : "");
+    setVendorId(rule.scope === "vendor" ? rule.targetId : "");
+    setVendorQ("");
     setPercentage(String(rule.percentage));
   }
 
@@ -313,6 +339,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     if (scope === "all") return "*";
     if (scope === "category") return categoryId;
     if (scope === "subcategory") return subCategoryId;
+    if (scope === "vendor") return vendorId;
     return collectionId;
   }
 
@@ -326,7 +353,9 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           ? t.selectCollection
           : scope === "subcategory"
             ? t.selectSubCategory
-            : t.selectCategory
+            : scope === "vendor"
+              ? t.selectVendor
+              : t.selectCategory
       );
       return;
     }
@@ -634,7 +663,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
             {t.addCommission}
           </p>
           <form onSubmit={onSave} className="mt-5 space-y-4">
-            <div className="grid grid-cols-2 gap-1 rounded-3xl bg-cream p-1 sm:grid-cols-4 sm:rounded-full">
+            <div className="flex flex-wrap gap-1 rounded-3xl bg-cream p-1">
               {SCOPES.map((item) => (
                 <button
                   key={item}
@@ -643,12 +672,13 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                     setScope(item);
                     setSubCategoryId("");
                     setCollectionId("");
-                    if (item === "all" || item === "category") {
-                      setSubCategoryId("");
-                      setCollectionId("");
+                    setVendorId("");
+                    setVendorQ("");
+                    if (item === "all" || item === "vendor") {
+                      setCategoryId("");
                     }
                   }}
-                  className={`rounded-full px-1 py-2 text-[11px] font-semibold sm:text-xs ${
+                  className={`rounded-full px-3 py-2 text-[11px] font-semibold sm:text-xs ${
                     scope === item ? "bg-brown text-cream" : "text-brown/60"
                   }`}
                 >
@@ -657,7 +687,34 @@ function PartnerCommission({ partnerSlug, t, lang }) {
               ))}
             </div>
 
-            {scope !== "all" ? (
+            {scope === "vendor" ? (
+              <div className="space-y-2">
+                <label className="mb-1 block text-xs font-semibold text-brown/50">
+                  {t.vendor}
+                </label>
+                <input
+                  type="search"
+                  value={vendorQ}
+                  onChange={(e) => setVendorQ(e.target.value)}
+                  placeholder={t.vendorSearch}
+                  className={SELECT}
+                />
+                <select
+                  value={vendorId}
+                  onChange={(e) => setVendorId(e.target.value)}
+                  className={SELECT}
+                >
+                  <option value="">{t.selectVendor}</option>
+                  {vendorOptions.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {optionLabel(item, lang)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+
+            {scope !== "all" && scope !== "vendor" ? (
               <div>
                 <label className="mb-1 block text-xs font-semibold text-brown/50">
                   {t.category}

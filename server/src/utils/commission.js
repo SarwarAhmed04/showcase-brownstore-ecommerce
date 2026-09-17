@@ -13,13 +13,17 @@ export const ALL_TARGET_NAME = {
 };
 
 const SCOPE_RANK = {
-  collection: 3,
-  subcategory: 2,
+  collection: 4,
+  subcategory: 3,
+  vendor: 2,
   category: 1,
   all: 0,
 };
 
 function localizedName(name) {
+  if (typeof name === "string") {
+    return { ku: name, en: name, ar: name };
+  }
   return {
     ku: String(name?.ku || ""),
     en: String(name?.en || ""),
@@ -58,7 +62,7 @@ function mapRows(rows) {
 }
 
 export async function commissionTargets() {
-  const [categories, subcategories, collections] = await Promise.all([
+  const [categories, subcategories, collections, vendors] = await Promise.all([
     Product.aggregate([
       { $match: { "category._id": { $exists: true, $ne: null } } },
       {
@@ -105,12 +109,51 @@ export async function commissionTargets() {
       },
       { $sort: { "name.en": 1, "name.ku": 1 } },
     ]),
+    Product.aggregate([
+      {
+        $addFields: {
+          vendorKey: {
+            $let: {
+              vars: {
+                id: { $toString: { $ifNull: ["$brand._id", ""] } },
+                en: { $ifNull: ["$brand.name.en", ""] },
+                ku: { $ifNull: ["$brand.name.ku", ""] },
+                ar: { $ifNull: ["$brand.name.ar", ""] },
+              },
+              in: {
+                $cond: [
+                  { $and: [{ $ne: ["$$id", ""] }, { $ne: ["$$id", "null"] }] },
+                  "$$id",
+                  {
+                    $cond: [
+                      { $ne: ["$$en", ""] },
+                      "$$en",
+                      { $cond: [{ $ne: ["$$ku", ""] }, "$$ku", "$$ar"] },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+      { $match: { vendorKey: { $nin: [null, ""] } } },
+      {
+        $group: {
+          _id: "$vendorKey",
+          name: { $first: "$brand.name" },
+          products: { $sum: 1 },
+        },
+      },
+      { $sort: { "name.ku": 1, "name.en": 1, "name.ar": 1 } },
+    ]),
   ]);
 
   return {
     categories: mapRows(categories),
     subcategories: mapRows(subcategories),
     collections: mapRows(collections),
+    vendors: mapRows(vendors),
   };
 }
 
@@ -123,7 +166,9 @@ export function findTarget(targets, scope, targetId) {
       ? targets.categories
       : scope === "subcategory"
         ? targets.subcategories
-        : targets.collections;
+        : scope === "vendor"
+          ? targets.vendors
+          : targets.collections;
   return list.find((item) => item.id === String(targetId)) || null;
 }
 
@@ -140,11 +185,26 @@ function entityId(value) {
   return String(value);
 }
 
+function vendorKeys(product) {
+  const brand = product?.brand;
+  const id = entityId(brand);
+  const name = brand && typeof brand === "object" ? brand.name : null;
+  const names = [name?.en, name?.ku, name?.ar]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  return [...new Set([id, ...names].filter(Boolean))];
+}
+
+function matchesVendor(rule, keys) {
+  return rule.scope === "vendor" && keys.includes(String(rule.targetId || ""));
+}
+
 export function resolveCommissionRate(product, rules) {
   const raw = typeof product?.toObject === "function" ? product.toObject() : product;
   const collectionId = entityId(raw.collectionName);
   const subCategoryId = entityId(raw.subCategory);
   const categoryId = entityId(raw.category);
+  const vendorIds = vendorKeys(raw);
 
   const active = (rules || []).filter((rule) => rule.isActive !== false);
   const ranked = active
@@ -157,6 +217,9 @@ export function resolveCommissionRate(product, rules) {
       return Number.isFinite(Number(rule.percentage)) ? Number(rule.percentage) : 0;
     }
     if (rule.scope === "subcategory" && subCategoryId && rule.targetId === subCategoryId) {
+      return Number.isFinite(Number(rule.percentage)) ? Number(rule.percentage) : 0;
+    }
+    if (matchesVendor(rule, vendorIds)) {
       return Number.isFinite(Number(rule.percentage)) ? Number(rule.percentage) : 0;
     }
     if (rule.scope === "category" && categoryId && rule.targetId === categoryId) {

@@ -956,7 +956,7 @@ adminRouter.post("/commissions", async (req, res) => {
     }
 
     const categoryId =
-      scope === "all" ? "" : scope === "category" ? target.id : target.categoryId || "";
+      scope === "all" || scope === "vendor" ? "" : scope === "category" ? target.id : target.categoryId || "";
     const subCategoryId =
       scope === "collection"
         ? target.subCategoryId || ""
