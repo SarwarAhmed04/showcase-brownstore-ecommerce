@@ -49,7 +49,7 @@ export default function ProductDetail() {
               />
             ) : (
               <div className="flex aspect-square items-center justify-center">
-                <img src="/logo-4k.png" alt="" className="h-40 w-56 object-contain opacity-40" />
+                <img src="/logo-4k.png" alt="" className="h-40 w-40 object-contain opacity-40" />
               </div>
             )}
           </div>

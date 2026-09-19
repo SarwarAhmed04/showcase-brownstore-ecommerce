@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { Pencil, Plus } from "lucide-react";
 import { api } from "../../api";
 import { useAuth } from "../../context/AuthContext";
 import { useLang } from "../../context/LangContext";
 import { tName } from "../../i18n";
 import Spinner from "../../components/Spinner";
+import AdminModal from "../../components/admin/AdminModal";
 import ProductEditor, { formatGrouped } from "../../components/admin/ProductEditor";
 
-const SCOPES = ["all", "category", "subcategory", "collection", "vendor"];
+const EDIT_MODES = ["one", "vendor", "category", "subcategory", "collection", "all"];
 const SELECT =
   "w-full rounded-full border border-brown/10 bg-cream px-4 py-2.5 text-sm font-semibold text-brown outline-none ring-tan/40 focus:ring-2";
 
@@ -15,6 +17,15 @@ function optionLabel(item, lang) {
   const name = tName(item.name, lang) || item.id;
   const count = Number(item.products) || 0;
   return count ? `${name} (${count.toLocaleString("en-US")})` : name;
+}
+
+function editModeLabel(t, mode) {
+  if (mode === "one") return t.editByOne;
+  if (mode === "vendor") return t.vendor;
+  if (mode === "subcategory") return t.subCategory;
+  if (mode === "collection") return t.collection;
+  if (mode === "all") return t.allCommission;
+  return t.category;
 }
 
 function scopeLabel(t, scope) {
@@ -74,6 +85,7 @@ function PartnerCards({ t }) {
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
   function load() {
     return api.adminPlatforms().then((data) => setPartners(data.platforms || data.partners || []));
@@ -85,6 +97,13 @@ function PartnerCards({ t }) {
       .finally(() => setLoading(false));
   }, []);
 
+  function closeCreate() {
+    if (busy) return;
+    setCreateOpen(false);
+    setName("");
+    setImage("");
+  }
+
   async function onCreate(event) {
     event.preventDefault();
     if (!name.trim()) return;
@@ -94,6 +113,7 @@ function PartnerCards({ t }) {
       await api.createPlatform({ name: name.trim(), image });
       setName("");
       setImage("");
+      setCreateOpen(false);
       await load();
     } catch (err) {
       setError(err.message);
@@ -106,50 +126,85 @@ function PartnerCards({ t }) {
 
   return (
     <div>
-      <div className="mb-6">
-        <h2 className="font-display text-3xl">{t.platforms}</h2>
-        <p className="mt-1 text-sm text-brown/50">{t.platformsHint}</p>
-      </div>
-      {error ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
-
-      <form
-        onSubmit={onCreate}
-        className="mb-6 grid gap-3 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-brown/5 sm:grid-cols-[1fr_auto_auto] sm:items-end"
-      >
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-brown/50">{t.platformName}</label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className={SELECT}
-            placeholder="ibazzar"
-          />
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="font-display text-3xl">{t.platforms}</h2>
+          <p className="mt-1 text-sm text-brown/50">{t.platformsHint}</p>
         </div>
-        <label className="cursor-pointer rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown">
-          {image ? t.platformImageReady : t.platformImage}
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              try {
-                setImage(await readFile(file));
-              } catch (err) {
-                setError(err.message);
-              }
-            }}
-          />
-        </label>
         <button
-          type="submit"
-          disabled={busy || !name.trim()}
-          className="rounded-full bg-brown px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
+          type="button"
+          onClick={() => {
+            setError("");
+            setCreateOpen(true);
+          }}
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-brown text-cream shadow-sm transition hover:bg-brown/90"
+          aria-label={t.addPlatform}
         >
-          {t.addPlatform}
+          <Plus className="h-5 w-5" strokeWidth={2.2} />
         </button>
-      </form>
+      </div>
+      {error && !createOpen ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
+
+      {createOpen ? (
+        <AdminModal onClose={closeCreate}>
+          <form
+            className="mx-auto w-full max-w-md rounded-3xl bg-white p-6 shadow-xl ring-1 ring-brown/10"
+            onSubmit={onCreate}
+          >
+            <h3 className="font-display text-2xl">{t.addPlatform}</h3>
+            {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
+            <label className="mt-5 mb-1 block text-xs font-semibold text-brown/50">
+              {t.platformName}
+            </label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className={SELECT}
+              placeholder="ibazzar"
+              autoFocus
+              required
+            />
+            <div className="mt-4 flex items-center gap-3">
+              <PartnerLogo image={image} name={name} className="h-14 w-14" />
+              <label className="cursor-pointer rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown">
+                {image ? t.platformImageReady : t.platformImage}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!file) return;
+                    try {
+                      setImage(await readFile(file));
+                    } catch (err) {
+                      setError(err.message);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+            <div className="mt-6 flex gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={closeCreate}
+                className="flex-1 rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown"
+              >
+                {t.cancel}
+              </button>
+              <button
+                type="submit"
+                disabled={busy || !name.trim()}
+                className="flex-1 rounded-full bg-brown px-4 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
+              >
+                {t.addPlatform}
+              </button>
+            </div>
+          </form>
+        </AdminModal>
+      ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {partners.map((partner) => (
@@ -217,7 +272,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     vendors: [],
   });
   const [commissions, setCommissions] = useState([]);
-  const [scope, setScope] = useState("all");
+  const [scope, setScope] = useState("one");
   const [categoryId, setCategoryId] = useState("");
   const [subCategoryId, setSubCategoryId] = useState("");
   const [collectionId, setCollectionId] = useState("");
@@ -234,10 +289,15 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   const [pinError, setPinError] = useState("");
   const [products, setProducts] = useState({ products: [], pagination: { pages: 1, total: 0 } });
   const [productQ, setProductQ] = useState("");
+  const [productPage, setProductPage] = useState(1);
   const [editing, setEditing] = useState(null);
   const [editBusy, setEditBusy] = useState(false);
   const [editMessage, setEditMessage] = useState("");
   const [platformName, setPlatformName] = useState("");
+  const [savedReady, setSavedReady] = useState(false);
+  const [metaOpen, setMetaOpen] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const [draftImage, setDraftImage] = useState("");
 
   const subcategories = useMemo(
     () =>
@@ -286,7 +346,16 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   }
 
   function loadProducts() {
-    return api.adminPlatformProducts(partnerSlug, { q: productQ, limit: 20 }).then(setProducts);
+    const params = { q: productQ, limit: 30, page: productPage };
+    if (scope === "vendor" && vendorId) params.brand = vendorId;
+    if ((scope === "category" || scope === "subcategory" || scope === "collection") && categoryId) {
+      params.category = categoryId;
+    }
+    if ((scope === "subcategory" || scope === "collection") && subCategoryId) {
+      params.subcategory = subCategoryId;
+    }
+    if (scope === "collection" && collectionId) params.collection = collectionId;
+    return api.adminPlatformProducts(partnerSlug, params).then(setProducts);
   }
 
   function load() {
@@ -308,7 +377,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
       loadProducts().catch(() => {});
     }, 220);
     return () => clearTimeout(id);
-  }, [partnerSlug, productQ]);
+  }, [partnerSlug, productQ, productPage, scope, vendorId, categoryId, subCategoryId, collectionId]);
 
   function resetForm() {
     setCategoryId("");
@@ -345,6 +414,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
 
   async function onSave(event) {
     event.preventDefault();
+    if (scope === "one") return;
     const targetId = targetIdForSave();
     const rate = Number(percentage);
     if (scope !== "all" && !targetId) {
@@ -371,6 +441,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         isActive: true,
       });
       setMessage(t.commissionSaved);
+      setSavedReady(true);
       resetForm();
       await load();
     } catch (err) {
@@ -463,6 +534,9 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   }
 
   const example = `GET ${partner.catalogUrl}?page=1&limit=100\nX-API-Key: ${plainKey || partner.apiKeyPrefix || "bs_****"}`;
+  const canMakeKey =
+    savedReady || partner.hasApiKey || commissions.length > 0 || Number(partner.customizedCount) > 0;
+  const pages = Math.max(1, Number(products.pagination?.pages) || 1);
 
   return (
     <div>
@@ -472,144 +546,141 @@ function PartnerCommission({ partnerSlug, t, lang }) {
       >
         ← {t.backToPlatforms}
       </Link>
+
       <div className="mt-3 mb-6 flex items-center gap-4">
         <PartnerLogo image={partner.image} name={partner.name} className="h-16 w-16" />
         <div className="min-w-0 flex-1">
-          <h2 className="font-display text-3xl">{partner.name}</h2>
-          <p className="mt-1 text-sm text-brown/50">{t.commissionSignHint}</p>
+          <div className="flex items-center gap-2">
+            <h2 className="min-w-0 truncate font-display text-3xl">{partner.name}</h2>
+            <button
+              type="button"
+              onClick={() => {
+                setDraftName(partner.name || "");
+                setDraftImage("");
+                setPlatformName(partner.name || "");
+                setMetaOpen(true);
+              }}
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-brown ring-1 ring-brown/10 hover:bg-cream"
+              aria-label={t.editPlatform}
+            >
+              <Pencil className="h-4 w-4" strokeWidth={1.8} />
+            </button>
+          </div>
+          <p className="mt-1 text-sm text-brown/45">{t.platformHeading}</p>
         </div>
       </div>
 
-      <form
-        className="mb-6 flex flex-wrap items-end gap-3 rounded-3xl bg-white p-4 ring-1 ring-brown/5"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          setBusy(true);
-          setError("");
-          try {
-            const data = await api.patchPlatform(partnerSlug, { name: platformName });
-            setPartner(data.platform);
-            setMessage(t.platformSaved);
-          } catch (err) {
-            setError(err.message);
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        <div className="min-w-[12rem] flex-1">
-          <label className="mb-1 block text-xs font-semibold text-brown/50">{t.platformName}</label>
-          <input
-            value={platformName}
-            onChange={(e) => setPlatformName(e.target.value)}
-            className={SELECT}
-          />
-        </div>
-        <label className="cursor-pointer rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown">
-          {t.platformImage}
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
+      <div className="mb-6 flex gap-1 rounded-full bg-white p-1 ring-1 ring-brown/10">
+        <span className="rounded-full bg-brown px-4 py-2 text-sm font-semibold text-cream">
+          {t.tabEditProducts}
+        </span>
+      </div>
+
+      {error ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
+      {message ? <p className="mb-4 text-sm text-brown/70">{message}</p> : null}
+
+      {metaOpen ? (
+        <AdminModal onClose={() => !busy && setMetaOpen(false)}>
+          <form
+            className="mx-auto w-full max-w-md rounded-3xl bg-white p-6 shadow-xl ring-1 ring-brown/10"
+            onSubmit={async (event) => {
+              event.preventDefault();
               setBusy(true);
+              setError("");
               try {
-                const data = await api.patchPlatform(partnerSlug, { image: await readFile(file) });
+                const body = { name: draftName.trim() };
+                if (draftImage) body.image = draftImage;
+                const data = await api.patchPlatform(partnerSlug, body);
                 setPartner(data.platform);
+                setPlatformName(data.platform?.name || draftName);
+                setMessage(t.platformSaved);
+                setMetaOpen(false);
+                setDraftImage("");
               } catch (err) {
                 setError(err.message);
               } finally {
                 setBusy(false);
               }
             }}
-          />
-        </label>
-        <button type="submit" disabled={busy} className="rounded-full bg-brown px-4 py-2.5 text-sm font-semibold text-cream">
-          {t.save}
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={async () => {
-            if (!window.confirm(t.deletePlatformConfirm)) return;
-            setBusy(true);
-            try {
-              await api.deletePlatform(partnerSlug);
-              window.location.assign("/admin/platforms");
-            } catch (err) {
-              setError(err.message);
-              setBusy(false);
-            }
-          }}
-          className="rounded-full bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-800"
-        >
-          {t.deletePlatform}
-        </button>
-      </form>
-
-      {error ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
-      {message ? <p className="mb-4 text-sm text-brown/70">{message}</p> : null}
-
-      <section className="mb-6 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
-        <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
-          {t.partnerApi}
-        </p>
-        <p className="mt-2 text-sm text-brown/50">{t.apiKeyHint}</p>
-        <div className="mt-5 grid gap-4">
-          <CopyField label={t.catalogUrl} value={partner.catalogUrl} t={t} />
-          <CopyField label={t.categoriesUrl} value={partner.categoriesUrl} t={t} />
-          {plainKey ? (
-            <div>
-              <CopyField label={t.apiKey} value={plainKey} t={t} />
-              <p className="mt-2 text-xs font-semibold text-amber-800">{t.apiKeyOnce}</p>
-            </div>
-          ) : (
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-brown/50">
-                {t.apiKey}
+          >
+            <h3 className="font-display text-2xl">{t.editPlatform}</h3>
+            <label className="mt-5 mb-1 block text-xs font-semibold text-brown/50">
+              {t.platformName}
+            </label>
+            <input
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              className={SELECT}
+              required
+            />
+            <div className="mt-4 flex items-center gap-3">
+              <PartnerLogo
+                image={draftImage || partner.image}
+                name={draftName || partner.name}
+                className="h-14 w-14"
+              />
+              <label className="cursor-pointer rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown">
+                {draftImage ? t.platformImageReady : t.platformImage}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    try {
+                      setDraftImage(await readFile(file));
+                    } catch (err) {
+                      setError(err.message);
+                    }
+                  }}
+                />
               </label>
-              <p className="rounded-full bg-cream px-4 py-2.5 font-mono text-sm text-brown/70" dir="ltr">
-                {partner.apiKeyPrefix || t.noApiKey}
-              </p>
             </div>
-          )}
-          <div>
-            <p className="mb-1 text-xs font-semibold text-brown/50">{t.exampleRequest}</p>
-            <pre
-              dir="ltr"
-              className="overflow-x-auto rounded-2xl bg-cream p-4 text-xs leading-relaxed text-brown/80"
-            >
-              {example}
-            </pre>
-          </div>
-          {isPrimary ? (
+            <div className="mt-6 flex gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setMetaOpen(false)}
+                className="flex-1 rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown"
+              >
+                {t.cancel}
+              </button>
+              <button
+                type="submit"
+                disabled={busy || !draftName.trim()}
+                className="flex-1 rounded-full bg-brown px-4 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
+              >
+                {t.save}
+              </button>
+            </div>
             <button
               type="button"
               disabled={busy}
-              onClick={onRegenerateKey}
-              className="w-fit rounded-full bg-brown px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
+              onClick={async () => {
+                if (!window.confirm(t.deletePlatformConfirm)) return;
+                setBusy(true);
+                try {
+                  await api.deletePlatform(partnerSlug);
+                  window.location.assign("/admin/platforms");
+                } catch (err) {
+                  setError(err.message);
+                  setBusy(false);
+                }
+              }}
+              className="mt-3 w-full rounded-full bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-800"
             >
-              {partner.hasApiKey ? t.regenerateApiKey : t.generateApiKey}
+              {t.deletePlatform}
             </button>
-          ) : (
-            <p className="text-xs font-semibold text-brown/45">{t.apiKeyPinOnlyPrimary}</p>
-          )}
-        </div>
-      </section>
+          </form>
+        </AdminModal>
+      ) : null}
 
       {pinOpen ? (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-          <button
-            type="button"
-            className="absolute inset-0 bg-brown/40"
-            aria-label={t.cancel}
-            onClick={closePinModal}
-          />
+        <AdminModal onClose={closePinModal}>
           <form
             onSubmit={onConfirmPin}
-            className="relative z-10 w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl ring-1 ring-brown/10"
+            className="mx-auto w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl ring-1 ring-brown/10"
           >
             <h3 className="font-display text-2xl">{t.apiKeyPinTitle}</h3>
             <p className="mt-2 text-sm text-brown/50">{t.apiKeyPinHint}</p>
@@ -654,7 +725,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
               </button>
             </div>
           </form>
-        </div>
+        </AdminModal>
       ) : null}
 
       <div className="grid items-start gap-6 xl:grid-cols-[22rem_minmax(0,1fr)]">
@@ -664,17 +735,18 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           </p>
           <form onSubmit={onSave} className="mt-5 space-y-4">
             <div className="flex flex-wrap gap-1 rounded-3xl bg-cream p-1">
-              {SCOPES.map((item) => (
+              {EDIT_MODES.map((item) => (
                 <button
                   key={item}
                   type="button"
                   onClick={() => {
                     setScope(item);
+                    setProductPage(1);
                     setSubCategoryId("");
                     setCollectionId("");
                     setVendorId("");
                     setVendorQ("");
-                    if (item === "all" || item === "vendor") {
+                    if (item === "all" || item === "vendor" || item === "one") {
                       setCategoryId("");
                     }
                   }}
@@ -682,7 +754,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                     scope === item ? "bg-brown text-cream" : "text-brown/60"
                   }`}
                 >
-                  {scopeLabel(t, item)}
+                  {editModeLabel(t, item)}
                 </button>
               ))}
             </div>
@@ -714,7 +786,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
               </div>
             ) : null}
 
-            {scope !== "all" && scope !== "vendor" ? (
+            {scope !== "all" && scope !== "vendor" && scope !== "one" ? (
               <div>
                 <label className="mb-1 block text-xs font-semibold text-brown/50">
                   {t.category}
@@ -781,6 +853,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
               </div>
             ) : null}
 
+            {scope !== "one" ? (
             <div>
               <label className="mb-1 block text-xs font-semibold text-brown/50">
                 {t.commissionPercentage}
@@ -798,14 +871,19 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                 className={`${SELECT} font-medium tabular-nums`}
               />
             </div>
+            ) : null}
 
+            {scope !== "one" ? (
             <button
               type="submit"
               disabled={busy}
               className="w-full rounded-full bg-brown px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
             >
-              {t.save}
+              {t.groupRateSave}
             </button>
+            ) : (
+              <p className="text-sm text-brown/50">{t.platformProductsHint}</p>
+            )}
           </form>
         </section>
 
@@ -883,7 +961,10 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           </div>
           <input
             value={productQ}
-            onChange={(e) => setProductQ(e.target.value)}
+            onChange={(e) => {
+              setProductQ(e.target.value);
+              setProductPage(1);
+            }}
             placeholder={t.search}
             className="rounded-full border border-brown/10 bg-cream px-4 py-2 text-sm"
           />
@@ -921,6 +1002,73 @@ function PartnerCommission({ partnerSlug, t, lang }) {
             </div>
           ))}
         </div>
+        {pages > 1 ? (
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            {Array.from({ length: pages }, (_, i) => i + 1).map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setProductPage(n)}
+                className={`h-9 min-w-9 rounded-full px-3 text-sm font-semibold ${
+                  n === productPage ? "bg-brown text-cream" : "bg-cream text-brown"
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="mt-6 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
+        <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
+          {t.generateApiKey}
+        </p>
+        <p className="mt-2 text-sm text-brown/50">
+          {canMakeKey ? t.apiKeyHint : t.saveThenApiKey}
+        </p>
+        {canMakeKey ? (
+          <div className="mt-5 grid gap-4">
+            <CopyField label={t.catalogUrl} value={partner.catalogUrl} t={t} />
+            <CopyField label={t.categoriesUrl} value={partner.categoriesUrl} t={t} />
+            {plainKey ? (
+              <div>
+                <CopyField label={t.apiKey} value={plainKey} t={t} />
+                <p className="mt-2 text-xs font-semibold text-amber-800">{t.apiKeyOnce}</p>
+              </div>
+            ) : (
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-brown/50">
+                  {t.apiKey}
+                </label>
+                <p className="rounded-full bg-cream px-4 py-2.5 font-mono text-sm text-brown/70" dir="ltr">
+                  {partner.apiKeyPrefix || t.noApiKey}
+                </p>
+              </div>
+            )}
+            <div>
+              <p className="mb-1 text-xs font-semibold text-brown/50">{t.exampleRequest}</p>
+              <pre
+                dir="ltr"
+                className="overflow-x-auto rounded-2xl bg-cream p-4 text-xs leading-relaxed text-brown/80"
+              >
+                {example}
+              </pre>
+            </div>
+            {isPrimary ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onRegenerateKey}
+                className="w-fit rounded-full bg-brown px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
+              >
+                {partner.hasApiKey ? t.regenerateApiKey : t.generateApiKey}
+              </button>
+            ) : (
+              <p className="text-xs font-semibold text-brown/45">{t.apiKeyPinOnlyPrimary}</p>
+            )}
+          </div>
+        ) : null}
       </section>
 
       {editing ? (
@@ -953,6 +1101,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
               const data = await api.patchPlatformProduct(partnerSlug, editing.id, patch);
               setEditing(data.product);
               setEditMessage(t.saved);
+              setSavedReady(true);
               await load();
             } catch (err) {
               setEditMessage(err.message);

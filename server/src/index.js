@@ -133,7 +133,7 @@ async function start() {
   if (count === 0) {
     const imported = await importFileCache();
     if (!imported) {
-      console.log("No products yet — syncing from ibsher.com…");
+      console.log("No products yet — syncing catalog…");
       try {
         const result = await syncFromIbsher();
         console.log(

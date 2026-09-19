@@ -1,10 +1,10 @@
-import { ShoppingBag } from "lucide-react";
+import Logo from "./Logo";
 
 export default function AdminBrand({ className = "" }) {
   return (
     <div className={`flex items-center gap-3 ${className}`}>
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-brown text-cream shadow-[0_1px_2px_rgb(61_35_23/0.18)]">
-        <ShoppingBag className="h-[18px] w-[18px]" strokeWidth={1.7} />
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-[10px] bg-[#faf4ec] shadow-[0_1px_2px_rgb(61_35_23/0.18)] ring-1 ring-brown/10">
+        <Logo className="h-7 w-7" />
       </span>
       <div className="min-w-0 leading-none text-start">
         <p className="font-display text-[17px] font-semibold tracking-[-0.02em] text-brown">

@@ -3,15 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Mail, MapPin, Phone, Send } from 'lucide-react'
 import { useCatalog } from '../lib/catalogStore'
 import { useLang } from '../context/LangContext'
-import { Social } from './ui'
 import { Wordmark } from './Navbar'
-
-const socials = [
-  { Icon: Social.Instagram, label: 'Instagram' },
-  { Icon: Social.Facebook, label: 'Facebook' },
-  { Icon: Social.X, label: 'X' },
-  { Icon: Social.Youtube, label: 'YouTube' },
-]
 
 export default function Footer() {
   const { categories } = useCatalog()
@@ -67,19 +59,6 @@ export default function Footer() {
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1.2fr]">
           <div>
             <Wordmark />
-            <div className="mt-5 flex gap-2">
-              {socials.map(({ Icon, label }) => (
-                <a
-                  key={label}
-                  href="#"
-                  aria-label={label}
-                  onClick={(e) => e.preventDefault()}
-                  className="glass-soft grid h-10 w-10 place-items-center rounded-full transition-all hover:-translate-y-1 hover:text-primary"
-                >
-                  <Icon width={17} height={17} />
-                </a>
-              ))}
-            </div>
           </div>
 
           <FooterCol title={t.footerShop} links={shop} />
@@ -100,7 +79,7 @@ export default function Footer() {
               </li>
               <li className="flex gap-3">
                 <Mail size={16} className="mt-0.5 shrink-0 text-primary" />
-                <span>info@ibsher.com</span>
+                <span>info@brownstore.com</span>
               </li>
             </ul>
           </div>

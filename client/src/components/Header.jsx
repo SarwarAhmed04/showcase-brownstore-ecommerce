@@ -69,7 +69,7 @@ export default function Header() {
       <div className="container-x flex h-[70px] items-center gap-3 md:gap-4">
         <Link to="/" className="flex shrink-0 items-center gap-3" aria-label="Brown Store — home">
           <span className="grid size-10 place-items-center rounded-xl bg-primary/15 text-primary">
-            <Logo className="h-6 w-9" />
+            <Logo className="h-8 w-8" />
           </span>
           <span className="leading-tight">
             <span className="font-display block text-lg font-bold tracking-tight text-fg">

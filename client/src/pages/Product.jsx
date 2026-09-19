@@ -228,7 +228,7 @@ export default function Product() {
                         <dd className="text-xs">{v}</dd>
                       </div>
                     ))}
-                    {p.sku && !specs.SKU && (
+                    {p.sku && !specs[t.sku] && (
                       <div className="flex gap-4 px-5 py-3.5">
                         <dt className="w-2/5 shrink-0 text-xs font-semibold text-muted-foreground">{t.sku}</dt>
                         <dd className="text-xs tabular-nums">{p.sku}</dd>

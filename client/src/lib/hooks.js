@@ -115,10 +115,15 @@ export function useScrolled(threshold = 12) {
 export function useScrollLock(active) {
   useEffect(() => {
     if (!active) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const html = document.documentElement
+    const body = document.body
+    const prevHtml = html.style.overflow
+    const prevBody = body.style.overflow
+    html.style.overflow = 'hidden'
+    body.style.overflow = 'hidden'
     return () => {
-      document.body.style.overflow = prev
+      html.style.overflow = prevHtml
+      body.style.overflow = prevBody
     }
   }, [active])
 }

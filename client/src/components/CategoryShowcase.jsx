@@ -10,7 +10,7 @@ function CatImage({ src, className }) {
   }
   return (
     <div className={`flex items-center justify-center bg-muted ${className}`}>
-      <Logo className="h-10 w-14 opacity-50" />
+      <Logo className="h-10 w-10 opacity-50" />
     </div>
   );
 }

@@ -80,11 +80,11 @@ export function isPubliclyVisible(doc, extraOverrides) {
 }
 
 function firstImage(variants) {
-  return (
-    variants[0]?.images?.find((i) => i.isMain)?.url ||
-    variants[0]?.images?.[0]?.url ||
-    ""
-  );
+  for (const variant of variants || []) {
+    const main = variant.images?.find((i) => i.isMain)?.url;
+    if (main) return main;
+  }
+  return variants?.[0]?.images?.[0]?.url || "";
 }
 
 export function toResolvedProduct(doc, extraOverrides) {

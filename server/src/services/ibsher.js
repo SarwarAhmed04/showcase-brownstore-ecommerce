@@ -3,7 +3,7 @@ const API = process.env.IBSHER_API || "https://api.ibsher.com/api/v1/client";
 async function fetchJson(url) {
   const res = await fetch(url);
   if (!res.ok) {
-    throw new Error(`Ibsher ${res.status} ${url}`);
+    throw new Error(`Catalog request failed (${res.status})`);
   }
   return res.json();
 }

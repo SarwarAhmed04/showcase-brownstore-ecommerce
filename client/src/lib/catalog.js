@@ -1,4 +1,5 @@
-import { tName } from "../i18n";
+import { tName, translations } from "../i18n";
+import { formatWarranty } from "./warranty";
 
 const TONES = [
   "166 124 82",
@@ -17,18 +18,23 @@ export function adaptProduct(p, lang = "en") {
   const images = [];
   for (const variant of p.variants || []) {
     for (const img of variant.images || []) {
-      if (img?.url) images.push(img.url);
+      if (img?.url && !images.includes(img.url)) images.push(img.url);
     }
   }
-  if (p.image && !images.includes(p.image)) images.unshift(p.image);
+  if (p.image) {
+    const rest = images.filter((url) => url !== p.image);
+    images.splice(0, images.length, p.image, ...rest);
+  }
 
+  const t = translations[lang] || translations.ku;
   const specs = {};
-  if (p.sku) specs.SKU = p.sku;
-  if (tName(p.brand?.name, lang)) specs.Brand = tName(p.brand.name, lang);
-  if (tName(p.category?.name, lang)) specs.Category = tName(p.category.name, lang);
-  if (p.warranty) specs.Warranty = String(p.warranty);
-  if (p.stock != null) specs.Stock = String(p.stock);
-  if (p.itemCode && p.itemCode !== p.sku) specs.Code = String(p.itemCode);
+  if (p.sku) specs[t.sku] = p.sku;
+  if (tName(p.brand?.name, lang)) specs[t.productBrand] = tName(p.brand.name, lang);
+  if (tName(p.category?.name, lang)) specs[t.category] = tName(p.category.name, lang);
+  const warranty = formatWarranty(p.warranty, t);
+  if (warranty) specs[t.warranty] = warranty;
+  if (p.stock != null) specs[t.stock] = String(p.stock);
+  if (p.itemCode && p.itemCode !== p.sku) specs[t.source] = String(p.itemCode);
 
   return {
     id: String(p.id),

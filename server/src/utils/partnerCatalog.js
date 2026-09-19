@@ -57,6 +57,11 @@ function collectImages(variants, fallback, origin) {
     }
   }
   push(fallback);
+  if (fallback) {
+    const main = absolutize(origin, fallback);
+    const rest = urls.filter((url) => url !== main);
+    return main ? [main, ...rest] : rest;
+  }
   return urls;
 }
 
