@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from 'sonner'
 import PageHead from '../components/PageHead'
-import { Reveal, Social } from '../components/ui'
+import { Reveal } from '../components/ui'
 import { api } from '../api'
 
 const LINES = [
@@ -19,13 +19,6 @@ const LINES = [
 ]
 
 const SUBJECTS = ['A product question', 'Stock & availability', 'Warranty or repair', 'Something else']
-
-const SOCIALS = [
-  [Social.Instagram, 'Instagram'],
-  [Social.Facebook, 'Facebook'],
-  [Social.X, 'X'],
-  [Social.Youtube, 'YouTube'],
-]
 
 export default function Contact() {
   const [sent, setSent] = useState(false)
@@ -83,27 +76,6 @@ export default function Contact() {
               </Card>
             </Reveal>
           ))}
-
-          <Reveal delay={300}>
-            <Card className="glass rounded-card border-0 p-6">
-              <div className="mb-3.5 text-2xs font-bold uppercase tracking-[.18em] text-muted-foreground">
-                Find us elsewhere
-              </div>
-              <div className="flex gap-2">
-                {SOCIALS.map(([Icon, label]) => (
-                  <a
-                    key={label}
-                    href="#"
-                    aria-label={label}
-                    onClick={(e) => e.preventDefault()}
-                    className="glass-soft grid size-11 place-items-center rounded-md transition-all hover:-translate-y-1 hover:text-primary"
-                  >
-                    <Icon width={18} height={18} />
-                  </a>
-                ))}
-              </div>
-            </Card>
-          </Reveal>
         </div>
 
         {/* ---------------- form ---------------- */}

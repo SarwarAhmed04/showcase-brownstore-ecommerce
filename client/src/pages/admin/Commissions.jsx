@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { Plus } from "lucide-react";
 import { api } from "../../api";
 import { useAuth } from "../../context/AuthContext";
 import { useLang } from "../../context/LangContext";
 import { tName } from "../../i18n";
 import Spinner from "../../components/Spinner";
+import AdminModal from "../../components/admin/AdminModal";
 import ProductEditor, { formatGrouped } from "../../components/admin/ProductEditor";
 
 const SCOPES = ["all", "category", "subcategory", "collection"];
@@ -73,6 +75,7 @@ function PartnerCards({ t }) {
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
   function load() {
     return api.adminPlatforms().then((data) => setPartners(data.platforms || data.partners || []));
@@ -84,6 +87,13 @@ function PartnerCards({ t }) {
       .finally(() => setLoading(false));
   }, []);
 
+  function closeCreate() {
+    if (busy) return;
+    setCreateOpen(false);
+    setName("");
+    setImage("");
+  }
+
   async function onCreate(event) {
     event.preventDefault();
     if (!name.trim()) return;
@@ -93,6 +103,7 @@ function PartnerCards({ t }) {
       await api.createPlatform({ name: name.trim(), image });
       setName("");
       setImage("");
+      setCreateOpen(false);
       await load();
     } catch (err) {
       setError(err.message);
@@ -105,50 +116,85 @@ function PartnerCards({ t }) {
 
   return (
     <div>
-      <div className="mb-6">
-        <h2 className="font-display text-3xl">{t.platforms}</h2>
-        <p className="mt-1 text-sm text-brown/50">{t.platformsHint}</p>
-      </div>
-      {error ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
-
-      <form
-        onSubmit={onCreate}
-        className="mb-6 grid gap-3 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-brown/5 sm:grid-cols-[1fr_auto_auto] sm:items-end"
-      >
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-brown/50">{t.platformName}</label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className={SELECT}
-            placeholder="ibazzar"
-          />
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="font-display text-3xl">{t.platforms}</h2>
+          <p className="mt-1 text-sm text-brown/50">{t.platformsHint}</p>
         </div>
-        <label className="cursor-pointer rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown">
-          {image ? t.platformImageReady : t.platformImage}
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              try {
-                setImage(await readFile(file));
-              } catch (err) {
-                setError(err.message);
-              }
-            }}
-          />
-        </label>
         <button
-          type="submit"
-          disabled={busy || !name.trim()}
-          className="rounded-full bg-brown px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
+          type="button"
+          onClick={() => {
+            setError("");
+            setCreateOpen(true);
+          }}
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-brown text-cream shadow-sm transition hover:bg-brown/90"
+          aria-label={t.addPlatform}
         >
-          {t.addPlatform}
+          <Plus className="h-5 w-5" strokeWidth={2.2} />
         </button>
-      </form>
+      </div>
+      {error && !createOpen ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
+
+      {createOpen ? (
+        <AdminModal onClose={closeCreate}>
+          <form
+            className="mx-auto w-full max-w-md rounded-3xl bg-white p-6 shadow-xl ring-1 ring-brown/10"
+            onSubmit={onCreate}
+          >
+            <h3 className="font-display text-2xl">{t.addPlatform}</h3>
+            {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
+            <label className="mt-5 mb-1 block text-xs font-semibold text-brown/50">
+              {t.platformName}
+            </label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className={SELECT}
+              placeholder="ibazzar"
+              autoFocus
+              required
+            />
+            <div className="mt-4 flex items-center gap-3">
+              <PartnerLogo image={image} name={name} className="h-14 w-14" />
+              <label className="cursor-pointer rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown">
+                {image ? t.platformImageReady : t.platformImage}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!file) return;
+                    try {
+                      setImage(await readFile(file));
+                    } catch (err) {
+                      setError(err.message);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+            <div className="mt-6 flex gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={closeCreate}
+                className="flex-1 rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown"
+              >
+                {t.cancel}
+              </button>
+              <button
+                type="submit"
+                disabled={busy || !name.trim()}
+                className="flex-1 rounded-full bg-brown px-4 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
+              >
+                {t.addPlatform}
+              </button>
+            </div>
+          </form>
+        </AdminModal>
+      ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {partners.map((partner) => (

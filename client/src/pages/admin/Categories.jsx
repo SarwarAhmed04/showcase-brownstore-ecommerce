@@ -4,70 +4,6 @@ import { useLang } from "../../context/LangContext";
 import { tName } from "../../i18n";
 import Spinner from "../../components/Spinner";
 
-const LAYOUTS = [
-  { id: "pills", key: "layoutPills" },
-  { id: "circles", key: "layoutCircles" },
-  { id: "cards", key: "layoutCards" },
-  { id: "posters", key: "layoutPosters" },
-  { id: "rail", key: "layoutRail" },
-];
-
-function LayoutPreview({ id, active }) {
-  const base = `h-20 w-full rounded-2xl p-2 ring-2 transition ${
-    active ? "bg-white ring-brown" : "bg-cream ring-transparent hover:ring-tan/50"
-  }`;
-  if (id === "circles") {
-    return (
-      <div className={`${base} flex items-end justify-center gap-1`}>
-        {[1, 2, 3].map((n) => (
-          <span key={n} className="h-8 w-8 rounded-full bg-brown/20" />
-        ))}
-      </div>
-    );
-  }
-  if (id === "cards") {
-    return (
-      <div className={`${base} grid grid-cols-3 gap-1`}>
-        {[1, 2, 3].map((n) => (
-          <span key={n} className="rounded-md bg-brown/15">
-            <span className="mt-4 block h-2 rounded-b-md bg-brown/25" />
-          </span>
-        ))}
-      </div>
-    );
-  }
-  if (id === "posters") {
-    return (
-      <div className={`${base} grid grid-cols-3 gap-1`}>
-        {[1, 2, 3].map((n) => (
-          <span key={n} className="rounded-md bg-brown/70" />
-        ))}
-      </div>
-    );
-  }
-  if (id === "rail") {
-    return (
-      <div className={`${base} flex flex-col justify-center gap-1`}>
-        {[1, 2].map((n) => (
-          <span key={n} className="flex h-4 items-center gap-1 rounded bg-white px-1">
-            <span className="h-3 w-3 rounded bg-tan" />
-            <span className="h-1 flex-1 rounded bg-brown/15" />
-          </span>
-        ))}
-      </div>
-    );
-  }
-  return (
-    <div className={`${base} flex items-center gap-1`}>
-      {[1, 2, 3, 4].map((n) => (
-        <span key={n} className="flex h-full flex-1 flex-col items-center justify-center rounded-lg bg-white">
-          <span className="h-5 w-5 rounded-full bg-tan/50" />
-        </span>
-      ))}
-    </div>
-  );
-}
-
 function readFile(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -224,7 +160,6 @@ function CategoryCard({ item, t, lang, onUpdated }) {
 
 export default function AdminCategories() {
   const { t, lang } = useLang();
-  const [layout, setLayout] = useState("pills");
   const [limit, setLimit] = useState(0);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -234,24 +169,12 @@ export default function AdminCategories() {
     api
       .adminCategories()
       .then((data) => {
-        setLayout(data.layout || "pills");
         setLimit(Number(data.categoryLimit) || 0);
         setItems(data.categories || []);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
-
-  async function chooseLayout(next) {
-    const prev = layout;
-    setLayout(next);
-    try {
-      await api.patchSettings({ categoryLayout: next });
-    } catch (err) {
-      setLayout(prev);
-      setError(err.message);
-    }
-  }
 
   async function chooseLimit(next) {
     const prev = limit;
@@ -278,27 +201,6 @@ export default function AdminCategories() {
       </div>
 
       {error ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
-
-      <section className="mb-8">
-        <p className="mb-3 text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
-          {t.categoryLayout}
-        </p>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-          {LAYOUTS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => chooseLayout(item.id)}
-              className="text-start"
-            >
-              <LayoutPreview id={item.id} active={layout === item.id} />
-              <p className={`mt-2 text-xs font-semibold ${layout === item.id ? "text-brown" : "text-brown/50"}`}>
-                {t[item.key]}
-              </p>
-            </button>
-          ))}
-        </div>
-      </section>
 
       <section className="mb-8 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-brown/5">
         <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">

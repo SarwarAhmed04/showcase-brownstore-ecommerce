@@ -84,32 +84,6 @@ export function EmptyState({ icon: Icon, title, sub, action }) {
   )
 }
 
-/* Social glyphs — lucide dropped brand icons, so these are hand-drawn. */
-export const Social = {
-  Instagram: (p) => (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" {...p}>
-      <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" />
-      <circle cx="12" cy="12" r="4.2" />
-      <circle cx="17.6" cy="6.4" r="1.1" fill="currentColor" stroke="none" />
-    </svg>
-  ),
-  Facebook: (p) => (
-    <svg viewBox="0 0 24 24" fill="currentColor" {...p}>
-      <path d="M14 8.5V6.9c0-.8.2-1.2 1.3-1.2H17V2.6h-2.6c-3 0-4 1.5-4 4v1.9H8V12h2.4v9.4H14V12h2.5l.4-3.5H14Z" />
-    </svg>
-  ),
-  X: (p) => (
-    <svg viewBox="0 0 24 24" fill="currentColor" {...p}>
-      <path d="M17.5 3h3l-6.6 7.5L21.8 21h-6l-4.7-6.1L5.7 21h-3l7-8-6.8-10h6.1l4.3 5.6L17.5 3Zm-1 16h1.6L7.6 4.6H5.8L16.5 19Z" />
-    </svg>
-  ),
-  Youtube: (p) => (
-    <svg viewBox="0 0 24 24" fill="currentColor" {...p}>
-      <path d="M22.5 7.6a2.8 2.8 0 0 0-1.9-2C18.9 5.1 12 5.1 12 5.1s-6.9 0-8.6.5a2.8 2.8 0 0 0-1.9 2A29 29 0 0 0 1 12a29 29 0 0 0 .5 4.4 2.8 2.8 0 0 0 1.9 2c1.7.4 8.6.4 8.6.4s6.9 0 8.6-.4a2.8 2.8 0 0 0 1.9-2A29 29 0 0 0 23 12a29 29 0 0 0-.5-4.4ZM9.8 15.3V8.7l5.7 3.3-5.7 3.3Z" />
-    </svg>
-  ),
-}
-
 /* Page-level placeholder while the catalogue loads. Shown instead of a 404,
    so a valid address never flashes an error mid-fetch. */
 export function PageSkeleton() {
