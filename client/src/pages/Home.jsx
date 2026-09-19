@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
-import { ArrowRight, Clock, Flame, Quote } from 'lucide-react'
+import { ArrowRight, Clock, Flame } from 'lucide-react'
 import Hero from '../components/Hero'
 import ProductRail from '../components/ProductRail'
 import CategoryTile from '../components/CategoryTile'
@@ -14,28 +14,11 @@ import { useLang } from '../context/LangContext'
 import { api } from '../api'
 import { useEffect, useState } from 'react'
 
-const NOTES = [
-  {
-    quote: 'The only shop in the city where someone can tell you why one kettle costs three times the other.',
-    name: 'Rana K.',
-    role: 'Karrada',
-  },
-  {
-    quote: 'Bought the fridge on a Tuesday, delivered Wednesday morning, installed by the same two people. That never happens.',
-    name: 'Yusuf A.',
-    role: 'Mansour',
-  },
-  {
-    quote: 'I came in for a cable and left with the espresso machine. Entirely their fault, no regrets.',
-    name: 'Dina S.',
-    role: 'Jadriya',
-  },
-]
-
 export default function Home() {
   const { categories, byCategory, brands, deals, featured, live: products } = useCatalog()
   const { t } = useLang()
   const [banners, setBanners] = useState([])
+  const [bannersReady, setBannersReady] = useState(false)
   const topDeals = deals.slice(0, 10)
   const newest = [...products].sort((a, b) => String(b.id).localeCompare(String(a.id))).slice(0, 10)
 
@@ -44,6 +27,7 @@ export default function Home() {
       .banners()
       .then((data) => setBanners(data.banners || []))
       .catch(() => setBanners([]))
+      .finally(() => setBannersReady(true))
   }, [])
 
   const sliderBanners = banners.filter((item) => item.slot <= 3)
@@ -64,8 +48,8 @@ export default function Home() {
 
   return (
     <>
-      <BannerSlider banners={sliderBanners} />
-      <Hero />
+      {sliderBanners.length > 0 ? <BannerSlider banners={sliderBanners} /> : null}
+      {bannersReady && sliderBanners.length === 0 ? <Hero /> : null}
 
       <Reveal>
         <ProductRail
@@ -140,6 +124,8 @@ export default function Home() {
               <img
                 src={imgUrl('photo-1495474472287-4d71bcdd2085', { w: 1000, h: 900 })}
                 alt=""
+                loading="lazy"
+                decoding="async"
                 className="absolute inset-0 h-full w-full object-cover"
               />
               <div className="absolute inset-0 bg-gradient-to-r from-transparent to-[rgb(var(--bg)/.65)] lg:to-[rgb(var(--bg)/.9)]" />
@@ -209,35 +195,6 @@ export default function Home() {
           to="/shop?sort=new"
         />
       </Reveal>
-
-      <section className="container-x py-14">
-        <Reveal>
-          <SectionHead eyebrow={t.fromTheFloor} title={t.whatPeopleSay} />
-        </Reveal>
-
-        <div className="grid gap-4 lg:grid-cols-3">
-          {NOTES.map((n, i) => (
-            <Reveal key={n.name} delay={i * 90}>
-              <figure className="glass flex h-full flex-col rounded-card p-7">
-                <Quote size={24} className="mb-4 text-primary opacity-50" />
-                <blockquote className="flex-1 text-base leading-relaxed">“{n.quote}”</blockquote>
-                <figcaption className="mt-6 flex items-center gap-3 border-t border-border/60 pt-5">
-                  <span
-                    className="grid h-10 w-10 place-items-center rounded-full font-display text-sm font-black text-primary-foreground"
-                    style={{ background: 'linear-gradient(135deg, rgb(var(--accent)), rgb(var(--accent-2)))' }}
-                  >
-                    {n.name[0]}
-                  </span>
-                  <span>
-                    <span className="block text-sm font-semibold">{n.name}</span>
-                    <span className="block text-2xs text-muted-foreground">{n.role}</span>
-                  </span>
-                </figcaption>
-              </figure>
-            </Reveal>
-          ))}
-        </div>
-      </section>
     </>
   )
 }

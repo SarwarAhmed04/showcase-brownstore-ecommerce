@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../../api";
 import { useLang } from "../../context/LangContext";
 import { tName } from "../../i18n";
+import { imgUrl } from "../../lib/img";
 import Spinner from "../../components/Spinner";
 import ProductEditor, { digitsOnly, formatGrouped } from "../../components/admin/ProductEditor";
 
@@ -133,7 +134,7 @@ function Row({ product, onEdit, t, lang }) {
     >
       <div className="flex min-w-0 items-center gap-3">
         <img
-          src={product.image || "/logo.png"}
+          src={imgUrl(product.image) || "/logo.png"}
           alt=""
           className="h-12 w-12 shrink-0 rounded-xl bg-cream object-cover"
         />

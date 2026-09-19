@@ -26,6 +26,7 @@ import { adaptProduct } from "../lib/catalog";
 import { useStore } from "../store";
 import { api } from "../api";
 import { useLang } from "../context/LangContext";
+import { imgUrl } from "../lib/img";
 
 export default function Product() {
   const { slug } = useParams();
@@ -125,7 +126,7 @@ export default function Product() {
               <AspectRatio ratio={1}>
                 <img
                   key={shot}
-                  src={gallery[shot] || "/logo-hero.png"}
+                  src={imgUrl(gallery[shot]) || "/logo.png"}
                   alt={p.name}
                   className="h-full w-full animate-fadeIn object-cover"
                 />
@@ -150,7 +151,7 @@ export default function Product() {
                     )}
                   >
                     <AspectRatio ratio={1}>
-                      <img src={src} alt="" className="h-full w-full object-cover" />
+                      <img src={imgUrl(src)} alt="" className="h-full w-full object-cover" />
                     </AspectRatio>
                   </button>
                 ))}

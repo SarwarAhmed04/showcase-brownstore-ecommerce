@@ -1,6 +1,6 @@
 # BrownStore
 
-Showcase catalog for BrownStore. Products are synced from [ibsher.com](https://ibsher.com) (`api.ibsher.com`), stored in MongoDB, and shown with a modern brown/tan theme. There is no cart and no customer login. Admins can override SKU, price, and stock.
+Showcase catalog for BrownStore. Products are stored in MongoDB and shown with a modern brown/tan theme. There is no cart and no customer login. Admins can override SKU, price, and stock.
 
 ## Stack
 
@@ -34,9 +34,9 @@ Default admin (change in `server/.env`):
 - Email: `admin@brownstore.com`
 - Password: `BrownStore!2026`
 
-On first boot the server pulls products from ibsher if the database is empty. You can also press **Sync from ibsher** in the admin panel. If local MongoDB is not running, the API starts an in-memory MongoDB for that session.
+On first boot the server pulls products if the database is empty. You can also press **Refresh Products** in the admin panel. If local MongoDB is not running, the API starts an in-memory MongoDB for that session.
 
-Admin edits stay in BrownStore. They are not written back to ibsher, and they survive later syncs.
+Admin edits stay in BrownStore and they survive later syncs.
 
 ## Logo
 

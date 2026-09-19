@@ -5,12 +5,21 @@
 
 const isUnsplashId = (v) => typeof v === 'string' && v.startsWith('photo-')
 
-export function imgUrl(img, { w = 800, h, crop = 'entropy' } = {}) {
-  if (!img) return ''
-  if (!isUnsplashId(img)) return img
-  const p = new URLSearchParams({ w: String(w), q: '80', auto: 'format', fit: 'crop', crop })
-  if (h) p.set('h', String(h))
-  return `https://images.unsplash.com/${img}?${p}`
+const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+
+function mediaSrc(img) {
+  if (typeof img !== "string" || !img.startsWith("/media")) return img;
+  const path = img.startsWith("/api/media") ? img : `/api${img}`;
+  if (!API_URL || /localhost|127\.0\.0\.1/i.test(API_URL)) return path;
+  return `${API_URL}${path}`;
+}
+
+export function imgUrl(img, { w = 800, h, crop = "entropy" } = {}) {
+  if (!img) return "";
+  if (!isUnsplashId(img)) return mediaSrc(img);
+  const p = new URLSearchParams({ w: String(w), q: "80", auto: "format", fit: "crop", crop });
+  if (h) p.set("h", String(h));
+  return `https://images.unsplash.com/${img}?${p}`;
 }
 
 // A product "gallery" built from focal-point crops of the same photograph, so

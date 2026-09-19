@@ -16,7 +16,7 @@ function pickName(over = {}, source = {}) {
 
 export function categoryImage(doc) {
   const over = doc.overrides?.image;
-  if (over) return over;
+  if (over) return cdnUrl(over);
   return cdnUrl(doc.images?.[0]?.url);
 }
 
@@ -77,7 +77,7 @@ export function saveCategoryImageFile(ibsherId, dataUrl) {
 }
 
 export function removeLocalCategoryImage(imagePath) {
-  if (!imagePath || !String(imagePath).startsWith("/media/local/categories/")) return;
+  if (!String(imagePath || "").includes("/media/local/categories/")) return;
   const name = path.basename(imagePath);
   const dir = path.resolve(UPLOAD_ROOT, "categories");
   const file = path.resolve(dir, name);
@@ -111,7 +111,7 @@ export function savePartnerImageFile(slug, dataUrl) {
 }
 
 export function removeLocalPartnerImage(imagePath) {
-  if (!imagePath || !String(imagePath).startsWith("/media/local/partners/")) return;
+  if (!String(imagePath || "").includes("/media/local/partners/")) return;
   const name = path.basename(imagePath);
   const dir = path.resolve(UPLOAD_ROOT, "partners");
   const file = path.resolve(dir, name);

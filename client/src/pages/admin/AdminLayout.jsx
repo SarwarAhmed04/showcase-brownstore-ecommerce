@@ -19,6 +19,17 @@ import { useLang } from "../../context/LangContext";
 import AdminBrand from "../../components/AdminBrand";
 import LanguageSwitcher from "../../components/LanguageSwitcher";
 import Spinner from "../../components/Spinner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 function productsSearch(params, q) {
   const next = new URLSearchParams(params);
@@ -163,14 +174,38 @@ export default function AdminLayout() {
             <SquareArrowOutUpRight className="h-[18px] w-[18px] shrink-0" strokeWidth={1.75} />
             {t.viewStore}
           </Link>
-          <button
-            type="button"
-            onClick={onLogout}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-brown/50 transition hover:bg-brown/[0.04] hover:text-brown"
-          >
-            <LogOut className="h-[18px] w-[18px] shrink-0" strokeWidth={1.75} />
-            {t.logout}
-          </button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <button
+                type="button"
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-brown/50 transition hover:bg-brown/[0.04] hover:text-brown"
+              >
+                <LogOut className="h-[18px] w-[18px] shrink-0" strokeWidth={1.75} />
+                {t.logout}
+              </button>
+            </AlertDialogTrigger>
+            <AlertDialogContent className="max-w-sm rounded-2xl border-brown/10 bg-[#faf4ec] text-brown">
+              <AlertDialogHeader className="text-start">
+                <AlertDialogTitle className="font-display text-brown">
+                  {t.logoutConfirmTitle}
+                </AlertDialogTitle>
+                <AlertDialogDescription className="text-brown/60">
+                  {t.logoutConfirmBody}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className="gap-2 sm:space-x-0">
+                <AlertDialogCancel className="rounded-xl border-brown/15 bg-white text-brown hover:bg-brown/[0.04]">
+                  {t.cancel}
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  className="rounded-xl bg-brown text-white hover:bg-brown/90"
+                  onClick={onLogout}
+                >
+                  {t.logout}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
           <div className="mt-3 rounded-2xl bg-white/70 px-3.5 py-3 ring-1 ring-brown/[0.04]">
             <p className="truncate text-sm font-semibold text-brown">
               {String(user.email || "admin").split("@")[0]}

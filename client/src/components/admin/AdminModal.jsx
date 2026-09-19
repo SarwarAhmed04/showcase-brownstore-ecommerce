@@ -30,7 +30,10 @@ export default function AdminModal({ onClose, children }) {
       aria-modal="true"
     >
       <div className="absolute inset-0 bg-brown/55" aria-hidden="true" />
-      <div className="relative z-10 flex max-h-[92vh] w-full justify-center overflow-y-auto overscroll-contain">
+      <div
+        className="relative z-10 flex max-h-[92vh] w-full justify-center overflow-y-auto overscroll-contain"
+        data-scroll-lock-ignore
+      >
         {children}
       </div>
     </div>,

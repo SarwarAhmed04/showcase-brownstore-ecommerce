@@ -22,8 +22,8 @@ export function BannerCopy({ banner, compact = false }) {
   const align = ALIGN_CLASS[banner.textAlign] || ALIGN_CLASS["bottom-start"];
 
   return (
-    <div className={`pointer-events-none absolute inset-0 flex p-5 sm:p-8 lg:p-12 ${align}`}>
-      <div className={`max-w-xl rounded-2xl bg-black/35 px-4 py-3 backdrop-blur-[2px] sm:px-5 sm:py-4 ${compact ? "max-w-md" : ""}`}>
+    <div className={`pointer-events-none absolute inset-0 flex p-4 sm:p-6 lg:p-8 ${align}`}>
+      <div className={`max-w-xl rounded-2xl bg-black/40 px-4 py-3 sm:px-5 sm:py-4 ${compact ? "max-w-md" : ""}`}>
         {title ? (
           <h2 className={`font-display leading-tight text-white ${compact ? "text-xl sm:text-2xl" : "text-2xl sm:text-4xl"}`}>
             {title}
@@ -61,7 +61,7 @@ export function BannerSlider({ banners }) {
   return (
     <section className="container-x pt-6">
       <div className="relative overflow-hidden rounded-panel bg-secondary">
-        <div className="aspect-[16/9] sm:aspect-[21/9] lg:aspect-[8/3]">
+        <div className="aspect-[2/1] sm:aspect-[5/2] lg:aspect-[3/1]">
           {slides.map((item) => (
             <div
               key={item.slot}
@@ -69,7 +69,14 @@ export function BannerSlider({ banners }) {
                 item.slot === current.slot ? "opacity-100" : "opacity-0"
               }`}
             >
-              <img src={item.image} alt="" className="h-full w-full object-cover" />
+              <img
+                src={item.image}
+                alt=""
+                loading={item.slot === slides[0]?.slot ? "eager" : "lazy"}
+                decoding="async"
+                fetchPriority={item.slot === current.slot ? "high" : "low"}
+                className="h-full w-full object-cover"
+              />
               <BannerCopy banner={item} />
             </div>
           ))}
@@ -99,8 +106,8 @@ export function BannerStrip({ banner }) {
   return (
     <section className="container-x py-6">
       <div className="relative overflow-hidden rounded-panel bg-secondary">
-        <div className="aspect-[16/7] sm:aspect-[10/3]">
-          <img src={banner.image} alt="" className="h-full w-full object-cover" />
+        <div className="aspect-[8/3] sm:aspect-[4/1]">
+          <img src={banner.image} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
           <BannerCopy banner={banner} compact />
         </div>
       </div>

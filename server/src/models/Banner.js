@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { cdnUrl } from "../utils/productView.js";
 
 const SLOTS = [1, 2, 3, 4, 5];
 export const BANNER_ALIGNS = [
@@ -97,7 +98,7 @@ export function toPublicBanner(doc) {
   if (!image) return null;
   return {
     ...bannerSpec(raw.slot),
-    image,
+    image: cdnUrl(image),
     title: pickLoc(raw.title),
     subtitle: pickLoc(raw.subtitle),
     textAlign: isBannerAlign(raw.textAlign) || "bottom-start",
@@ -108,7 +109,7 @@ export function toAdminBanner(doc) {
   const raw = typeof doc?.toObject === "function" ? doc.toObject() : doc;
   return {
     ...bannerSpec(raw.slot),
-    image: String(raw.image || ""),
+    image: cdnUrl(raw.image || ""),
     title: pickLoc(raw.title),
     subtitle: pickLoc(raw.subtitle),
     textAlign: isBannerAlign(raw.textAlign) || "bottom-start",

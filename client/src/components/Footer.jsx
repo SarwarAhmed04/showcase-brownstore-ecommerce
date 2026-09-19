@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Button } from '@/components/ui/button'
-import { Mail, MapPin, Phone, Send } from 'lucide-react'
+import { Mail, MapPin, Phone } from 'lucide-react'
 import { useCatalog } from '../lib/catalogStore'
 import { useLang } from '../context/LangContext'
 import { Wordmark } from './Navbar'
@@ -26,36 +25,6 @@ export default function Footer() {
       <div className="divider-glow" />
 
       <div className="container-x pb-28 pt-16 lg:pb-16">
-        <div className="glass mb-14 overflow-hidden rounded-panel p-8 sm:p-12">
-          <div className="grid items-center gap-8 lg:grid-cols-[1.2fr_1fr]">
-            <div>
-              <div className="eyebrow mb-4">{t.dispatchEyebrow}</div>
-              <h3 className="headline text-3xl sm:text-4xl">
-                {t.dispatchTitle} <span className="gold-text">{t.dispatchTitleGold}</span>
-              </h3>
-              <p className="mt-3 max-w-md text-sm leading-relaxed text-foreground/75">
-                {t.dispatchBody}
-              </p>
-            </div>
-
-            <form
-              onSubmit={(e) => e.preventDefault()}
-              className="glass-soft flex items-center gap-2 rounded-full p-1.5 pl-5"
-            >
-              <input
-                type="email"
-                required
-                placeholder="you@example.com"
-                aria-label={t.email}
-                className="w-full bg-transparent text-sm outline-none placeholder:text-[rgb(var(--text-mute))]"
-              />
-              <Button type="submit" variant="brand" className="shrink-0">
-                {t.join} <Send />
-              </Button>
-            </form>
-          </div>
-        </div>
-
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1.2fr]">
           <div>
             <Wordmark />
@@ -71,7 +40,7 @@ export default function Footer() {
             <ul className="space-y-3.5 text-sm text-foreground/75">
               <li className="flex gap-3">
                 <MapPin size={16} className="mt-0.5 shrink-0 text-primary" />
-                <span>Karrada, Baghdad</span>
+                <span>{t.addressKarrada}</span>
               </li>
               <li className="flex gap-3">
                 <Phone size={16} className="mt-0.5 shrink-0 text-primary" />
@@ -79,7 +48,7 @@ export default function Footer() {
               </li>
               <li className="flex gap-3">
                 <Mail size={16} className="mt-0.5 shrink-0 text-primary" />
-                <span>info@ibsher.com</span>
+                <span>info@brownstore.com</span>
               </li>
             </ul>
           </div>
@@ -98,7 +67,9 @@ export default function Footer() {
         </div>
 
         <div className="mt-8 border-t border-border/50 pt-7 text-xs text-muted-foreground">
-          <p>© {new Date().getFullYear()} Brown Store.</p>
+          <p>
+            © {new Date().getFullYear()} Brown Store. {t.footerRights}
+          </p>
         </div>
       </div>
     </footer>

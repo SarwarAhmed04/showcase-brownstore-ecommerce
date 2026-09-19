@@ -56,7 +56,9 @@ export default function QuickView() {
                 <DialogTitle className="headline mt-2 text-xl leading-tight sm:text-2xl">
                   {p.name}
                 </DialogTitle>
-                <DialogDescription className="mt-1 text-xs">by {p.brand}</DialogDescription>
+                <DialogDescription className="mt-1 text-xs">
+                  {t.byBrand.replace('{brand}', p.brand)}
+                </DialogDescription>
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
@@ -81,7 +83,7 @@ export default function QuickView() {
                 <div className="flex gap-2">
                   <Button asChild variant="brand" className="flex-1">
                     <Link to={`/product/${p.slug}`} onClick={closeQuickView}>
-                      Full details <ArrowRight />
+                      {t.fullDetails} <ArrowRight />
                     </Link>
                   </Button>
                   <Button
@@ -90,7 +92,7 @@ export default function QuickView() {
                     size="icon"
                     onClick={() => saved.toggle(p.id)}
                     aria-pressed={isSaved}
-                    aria-label={isSaved ? 'Remove from saved' : 'Save this item'}
+                    aria-label={isSaved ? t.removeFromSaved : t.saveThisItem}
                   >
                     <Heart
                       className={cn(isSaved && 'text-clay-400')}
@@ -98,7 +100,7 @@ export default function QuickView() {
                     />
                   </Button>
                 </div>
-                <EnquiryDialog product={p} trigger={<Button variant="glass" className="w-full">Reserve or ask about this</Button>} />
+                <EnquiryDialog product={p} trigger={<Button variant="glass" className="w-full">{t.reserveOrAskThis}</Button>} />
               </div>
             </div>
           </div>

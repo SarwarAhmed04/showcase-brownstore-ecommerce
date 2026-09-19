@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, RotateCcw, ShieldCheck, Sparkles, Truck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,8 +8,6 @@ import { useStore } from "../store";
 import { Reveal } from "./ui";
 import { useLang } from "../context/LangContext";
 import { useCatalog } from "../lib/catalogStore";
-
-const Grainient = lazy(() => import("./Grainient"));
 
 const PROMISES = [
   { Icon: Truck, key: "featureSameDay", sub: "featureSameDaySub" },
@@ -39,7 +37,7 @@ export default function Hero() {
   const [i, setI] = useState(0);
   const { theme } = useStore();
   const reducedMotion = useMedia("(prefers-reduced-motion: reduce)");
-  const { t, lang } = useLang();
+  const { t } = useLang();
   const { live, categories } = useCatalog();
 
   const slides = [
@@ -56,12 +54,7 @@ export default function Hero() {
     },
     {
       eyebrow: t.departmentsEyebrow,
-      title:
-        lang === "en"
-          ? ["Built for", "the daily", "repetition"]
-          : lang === "ar"
-            ? ["مصممة لـ", "التكرار", "اليومي"]
-            : ["دروستکراو بۆ", "ڕۆژانە", "و دووبارەبوونەوە"],
+      title: t.heroSlide2Lines,
       body: t.categorySub,
       cta: { to: "/shop", label: t.shop },
       alt: { to: "/deals", label: t.deals },
@@ -69,12 +62,7 @@ export default function Hero() {
     },
     {
       eyebrow: t.handPickedEyebrow,
-      title:
-        lang === "en"
-          ? ["Pieces that", "get better", "with use"]
-          : lang === "ar"
-            ? ["قطع تتحسن", "مع", "الاستخدام"]
-            : ["پارچەکان باشتر دەبن", "لەگەڵ", "بەکارهێنان"],
+      title: t.heroSlide3Lines,
       body: t.featuredSub,
       cta: { to: "/shop", label: t.viewAll },
       alt: { to: "/about", label: t.about },
@@ -92,42 +80,23 @@ export default function Hero() {
   const shader = SHADER[theme] ?? SHADER.espresso;
 
   return (
-    <section className="container-x pt-8 lg:pt-14">
+    <section className="container-x pt-6 lg:pt-8">
       <div className="glass relative overflow-hidden rounded-panel">
         <div aria-hidden className="absolute inset-0">
-          {reducedMotion ? (
-            <StaticField shader={shader} />
-          ) : (
-            <Suspense fallback={<StaticField shader={shader} />}>
-              <Grainient
-                key={theme}
-                className="absolute inset-0"
-                color1={shader.color1}
-                color2={shader.color2}
-                color3={shader.color3}
-                lightMode={shader.lightMode}
-                timeSpeed={0.14}
-                warpStrength={0.8}
-                warpAmplitude={38}
-                grainAmount={0.06}
-                contrast={1.25}
-                saturation={0.85}
-                zoom={1.1}
-              />
-            </Suspense>
-          )}
+          <StaticField shader={shader} />
           <div className="absolute inset-0 bg-gradient-to-r from-background/85 via-background/55 to-background/20" />
         </div>
 
-        <div className="relative z-10 grid items-stretch lg:grid-cols-[1.05fr_1fr]">
-          <div className="flex flex-col justify-center p-8 sm:p-12 lg:p-16">
-            <Reveal key={`e-${i}`} as="span" className="eyebrow mb-6">
+        <div className="relative z-10 grid items-stretch lg:grid-cols-[1.25fr_.75fr]">
+          <div className="flex flex-col justify-center p-5 sm:p-7 lg:px-10 lg:py-6">
+            <Reveal key={`e-${i}`} as="span" className="eyebrow mb-3 self-start">
               <Sparkles className="size-3" /> {s.eyebrow}
             </Reveal>
 
-            <h1 className="headline text-3xl leading-[1.02] sm:text-4xl lg:text-5xl">
-              {s.title.map((line, n) => (
-                <Reveal key={`${i}-${n}`} as="span" className="block" delay={n * 90}>
+            <h1 className="headline text-2xl leading-[1.1] sm:text-3xl lg:text-[2.1rem]">
+              {(Array.isArray(s.title) ? s.title : [s.title]).map((line, n) => (
+                <Reveal key={`${i}-${n}`} as="span" delay={n * 90}>
+                  {n > 0 ? " " : ""}
                   {n === 1 ? <span className="gold-text">{line}</span> : line}
                 </Reveal>
               ))}
@@ -137,23 +106,23 @@ export default function Hero() {
               key={`b-${i}`}
               as="p"
               delay={260}
-              className="mt-6 max-w-md text-base leading-relaxed text-foreground/75"
+              className="mt-2 max-w-md text-sm leading-relaxed text-foreground/75"
             >
               {s.body}
             </Reveal>
 
-            <div className="mt-9 flex flex-wrap gap-3">
-              <Button asChild variant="brand" size="xl">
+            <div className="mt-4 flex flex-wrap gap-3">
+              <Button asChild variant="brand" size="lg">
                 <Link to={s.cta.to}>
                   {s.cta.label} <ArrowRight />
                 </Link>
               </Button>
-              <Button asChild variant="glass" size="xl">
+              <Button asChild variant="glass" size="lg">
                 <Link to={s.alt.to}>{s.alt.label}</Link>
               </Button>
             </div>
 
-            <div className="mt-10 flex items-center gap-2.5">
+            <div className="mt-4 flex items-center gap-2.5">
               {slides.map((sl, n) => (
                 <button
                   key={sl.eyebrow}
@@ -161,7 +130,7 @@ export default function Hero() {
                   onClick={() => setI(n)}
                   aria-label={`${n + 1}`}
                   aria-current={n === i}
-                  className="group py-2"
+                  className="group py-1.5"
                 >
                   <span
                     className={cn(
@@ -177,21 +146,25 @@ export default function Hero() {
             </div>
           </div>
 
-          <div className="relative min-h-[300px] overflow-hidden lg:min-h-[560px]">
-            {slides.map((sl, n) => (
-              <img
-                key={(sl.img || "fallback") + n}
-                src={sl.img || "/logo-hero.png"}
-                alt=""
-                aria-hidden={n !== i}
-                className={cn(
-                  "absolute inset-0 h-full w-full object-cover transition-all duration-[1200ms]",
-                  n === i ? "scale-100 opacity-100" : "scale-110 opacity-0"
-                )}
-              />
-            ))}
-            <div className="absolute inset-0 bg-gradient-to-r from-background via-background/35 to-transparent" />
-            <div className="absolute inset-0 bg-gradient-to-t from-background/60 to-transparent lg:hidden" />
+          <div className="relative min-h-[160px] overflow-hidden sm:min-h-[180px] lg:min-h-0">
+            {slides.map((sl, n) =>
+              n === i || n === (i + 1) % slides.length ? (
+                <img
+                  key={(sl.img || "fallback") + n}
+                  src={sl.img || "/logo.png"}
+                  alt=""
+                  aria-hidden={n !== i}
+                  loading={n === 0 ? "eager" : "lazy"}
+                  decoding="async"
+                  className={cn(
+                    "absolute inset-0 h-full w-full object-contain object-center p-3 transition-opacity duration-500 lg:p-4",
+                    n === i ? "opacity-100" : "opacity-0"
+                  )}
+                />
+              ) : null
+            )}
+            <div className="absolute inset-0 bg-gradient-to-r from-background via-background/20 to-transparent lg:from-background/50 lg:via-background/10" />
+            <div className="absolute inset-0 bg-gradient-to-t from-background/50 to-transparent lg:hidden" />
           </div>
         </div>
       </div>

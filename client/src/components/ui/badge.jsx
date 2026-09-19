@@ -2,6 +2,7 @@ import * as React from 'react'
 import { cva } from 'class-variance-authority'
 
 import { cn } from '@/lib/utils'
+import { useLang } from '../../context/LangContext'
 
 /**
  * shadcn's Badge plus the labels this catalogue actually needs.
@@ -41,15 +42,16 @@ function Badge({ className, variant, ...props }) {
 
 /** Stock status, mapped once so the three states read the same everywhere. */
 function StockBadge({ status, className }) {
+  const { t } = useLang()
   const map = {
-    in: ['In stock', 'success'],
-    low: ['Low stock', 'warning'],
-    out: ['Out of stock', 'destructive'],
-    published: ['Live', 'success'],
-    draft: ['Draft', 'muted'],
-    new: ['New', 'deal'],
-    open: ['In progress', 'info'],
-    closed: ['Closed', 'muted'],
+    in: [t.inStock, 'success'],
+    low: [t.lowStock, 'warning'],
+    out: [t.outOfStock, 'destructive'],
+    published: [t.liveStatus, 'success'],
+    draft: [t.draftStatus, 'muted'],
+    new: [t.newBadge, 'deal'],
+    open: [t.inProgress, 'info'],
+    closed: [t.closedStatus, 'muted'],
   }
   const [label, variant] = map[status] ?? [status, 'muted']
   return (

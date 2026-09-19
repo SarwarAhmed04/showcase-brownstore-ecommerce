@@ -16,7 +16,7 @@ import { useStore } from '../store'
 export function Wordmark({ compact = false }) {
   const { t } = useLang()
   return (
-    <Link to="/" className="group flex items-center gap-2.5" aria-label="Brown Store">
+    <Link to="/" className="group flex items-center gap-2.5" aria-label={t.brand}>
       <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md bg-gradient-to-br from-caramel-400 to-caramel-600 shadow-lg transition-transform duration-500 group-hover:-rotate-6">
         <Logo className="h-8 w-8" />
       </span>
@@ -60,7 +60,7 @@ export default function Navbar() {
 
   return (
     <header
-      className={cn('sticky top-0 z-50 transition-shadow duration-500', scrolled && 'glass-bar shadow-2xl')}
+      className={cn('sticky top-0 z-50 transition-shadow duration-300', scrolled && 'glass-bar shadow-md')}
       onMouseLeave={() => setCatOpen(false)}
     >
       <div className="container-x flex h-[70px] items-center gap-4">
@@ -101,7 +101,7 @@ export default function Navbar() {
             variant="ghost"
             size="icon"
             onClick={() => setSearchOpen(true)}
-            aria-label="Search"
+            aria-label={t.searchShortcut}
             className="rounded-pill md:hidden"
           >
             <Search />
@@ -136,7 +136,7 @@ export default function Navbar() {
           {/* ------- mobile menu ------- */}
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="Menu" className="rounded-pill lg:hidden">
+              <Button variant="ghost" size="icon" aria-label={t.menu} className="rounded-pill lg:hidden">
                 <Menu />
               </Button>
             </SheetTrigger>

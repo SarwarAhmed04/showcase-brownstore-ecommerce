@@ -2,12 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react'
 import ProductCard from './ProductCard'
+import { useLang } from '../context/LangContext'
 
-// A horizontally-scrolling shelf, the way the reference site presents each
-// category. Arrows appear only when there is actually somewhere to scroll.
 export default function ProductRail({ title, eyebrow, sub, items, to, cardWidth = 250 }) {
   const scroller = useRef(null)
   const [edges, setEdges] = useState({ start: true, end: false })
+  const { t } = useLang()
 
   const measure = useCallback(() => {
     const el = scroller.current
@@ -53,14 +53,14 @@ export default function ProductRail({ title, eyebrow, sub, items, to, cardWidth 
                 to={to}
                 className="mr-1 hidden items-center gap-1.5 text-sm font-semibold text-primary transition hover:gap-2.5 sm:flex"
               >
-                View all <ArrowRight size={15} />
+                {t.viewAll} <ArrowRight size={15} />
               </Link>
             )}
             <button
               type="button"
               onClick={() => nudge(-1)}
               disabled={edges.start}
-              aria-label={`Scroll ${title} left`}
+              aria-label={`${t.scrollLeft} ${title}`}
               className="glass-soft grid h-9 w-9 place-items-center rounded-full transition-all hover:text-primary disabled:opacity-30"
             >
               <ChevronLeft size={17} />
@@ -69,7 +69,7 @@ export default function ProductRail({ title, eyebrow, sub, items, to, cardWidth 
               type="button"
               onClick={() => nudge(1)}
               disabled={edges.end}
-              aria-label={`Scroll ${title} right`}
+              aria-label={`${t.scrollRight} ${title}`}
               className="glass-soft grid h-9 w-9 place-items-center rounded-full transition-all hover:text-primary disabled:opacity-30"
             >
               <ChevronRight size={17} />
@@ -94,7 +94,7 @@ export default function ProductRail({ title, eyebrow, sub, items, to, cardWidth 
                 <span className="grid h-12 w-12 place-items-center rounded-full bg-[rgb(var(--accent)/.14)] text-primary">
                   <ArrowRight size={20} />
                 </span>
-                <span className="text-sm font-semibold">See everything</span>
+                <span className="text-sm font-semibold">{t.seeEverything}</span>
               </span>
             </Link>
           )}

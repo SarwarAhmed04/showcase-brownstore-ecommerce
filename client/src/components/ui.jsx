@@ -1,6 +1,7 @@
 import { Star } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useReveal } from '../lib/hooks'
+import { useLang } from '../context/LangContext'
 
 /* Scroll-reveal wrapper. `delay` staggers items inside a grid. */
 export function Reveal({ children, delay = 0, className = '', as: Tag = 'div' }) {
@@ -110,21 +111,17 @@ export function PageSkeleton() {
 
 /* Shown when the API cannot be reached at all. */
 export function ConnectionError({ error, onRetry }) {
+  const { t } = useLang()
   return (
     <div className="container-x py-24">
       <div className="glass mx-auto max-w-lg rounded-panel p-10 text-center">
-        <h2 className="headline text-2xl">Cannot reach the catalogue</h2>
+        <h2 className="headline text-2xl">{t.cannotReach}</h2>
         <p className="mt-3 text-sm text-foreground/75">
-          {error?.message ?? 'The API did not respond.'}
-        </p>
-        <p className="mt-4 text-xs text-muted-foreground">
-          If you are running this locally, start the API with{' '}
-          <code className="rounded bg-[rgb(var(--surface)/.12)] px-1.5 py-0.5">npm run server</code>{' '}
-          — or use <code className="rounded bg-[rgb(var(--surface)/.12)] px-1.5 py-0.5">npm run dev:all</code> to run both.
+          {error?.message ?? t.apiNoRespond}
         </p>
         {onRetry && (
           <Button type="button" variant="brand" onClick={onRetry} className="mt-7">
-            Try again
+            {t.tryAgain}
           </Button>
         )}
       </div>

@@ -115,10 +115,33 @@ export function useScrolled(threshold = 12) {
 export function useScrollLock(active) {
   useEffect(() => {
     if (!active) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const html = document.documentElement
+    const body = document.body
+    const prevHtml = html.style.overflow
+    const prevBody = body.style.overflow
+    const prevPad = body.style.paddingRight
+    const gap = window.innerWidth - html.clientWidth
+    html.style.overflow = 'hidden'
+    body.style.overflow = 'hidden'
+    if (gap > 0) body.style.paddingRight = `${gap}px`
+
+    const allowInside = (target) =>
+      target instanceof Element && target.closest('[data-scroll-lock-ignore]')
+
+    const block = (event) => {
+      if (allowInside(event.target)) return
+      event.preventDefault()
+    }
+
+    window.addEventListener('wheel', block, { passive: false })
+    window.addEventListener('touchmove', block, { passive: false })
+
     return () => {
-      document.body.style.overflow = prev
+      html.style.overflow = prevHtml
+      body.style.overflow = prevBody
+      body.style.paddingRight = prevPad
+      window.removeEventListener('wheel', block)
+      window.removeEventListener('touchmove', block)
     }
   }, [active])
 }

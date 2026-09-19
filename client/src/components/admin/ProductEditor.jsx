@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { tName } from "../../i18n";
+import { useEscape, useScrollLock } from "../../lib/hooks";
 
 const INPUT =
   "w-full rounded-2xl border border-brown/10 bg-white px-4 py-2.5 text-sm font-medium text-brown outline-none ring-tan/40 focus:ring-2";
@@ -34,6 +35,23 @@ function fromLoc(value) {
 
 function locEqual(a, b) {
   return (a?.ku || "") === (b?.ku || "") && (a?.en || "") === (b?.en || "") && (a?.ar || "") === (b?.ar || "");
+}
+
+function warrantyFromValue(value) {
+  if (value == null || value === "") return emptyLoc();
+  if (typeof value === "string" || typeof value === "number") {
+    const text = String(value);
+    return { ku: text, en: text, ar: text };
+  }
+  if (typeof value === "object") {
+    if (value.ku || value.en || value.ar) return fromLoc(value);
+    const text = value.value || value.text || value.label || "";
+    if (text !== "") {
+      const s = String(text);
+      return { ku: s, en: s, ar: s };
+    }
+  }
+  return emptyLoc();
 }
 
 function colorText(color) {
@@ -122,8 +140,9 @@ export function buildOverridePatch(product, form, { priceMode = "custom" } = {})
     .filter(Boolean);
   const sourceKeywords = Array.isArray(source.keyword) ? source.keyword : [];
   patch.keyword = jsonEqual(keywords, sourceKeywords) ? null : keywords;
-  patch.warranty =
-    String(form.warranty || "") === String(source.warranty || "") ? null : form.warranty || null;
+  patch.warranty = locEqual(form.warranty, warrantyFromValue(source.warranty))
+    ? null
+    : form.warranty;
 
   for (const flag of ["is_featured", "is_new_arrival", "is_hot", "is_best_seller"]) {
     patch[flag] = Boolean(form[flag]) === Boolean(source[flag]) ? null : Boolean(form[flag]);
@@ -166,6 +185,9 @@ export default function ProductEditor({
   const [form, setForm] = useState(() => formFromProduct(product));
   const [priceMode, setPriceMode] = useState(product?.customPrice ? "custom" : mode === "platform" ? "percent" : "custom");
 
+  useScrollLock(true);
+  useEscape(onClose);
+
   useEffect(() => {
     setForm(formFromProduct(product));
     setPriceMode(product?.customPrice ? "custom" : mode === "platform" ? "percent" : "custom");
@@ -184,9 +206,12 @@ export default function ProductEditor({
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex justify-end">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" role="dialog" aria-modal="true">
       <button type="button" className="absolute inset-0 bg-brown/40" aria-label={t.cancel} onClick={onClose} />
-      <div className="relative z-10 flex h-full w-full max-w-2xl flex-col bg-cream shadow-2xl">
+      <div
+        className="relative z-10 flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-cream shadow-2xl"
+        data-scroll-lock-ignore
+      >
         <div className="flex items-start justify-between gap-3 border-b border-brown/10 px-5 py-4">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
@@ -316,14 +341,15 @@ export default function ProductEditor({
             <LocFields value={form.brand} onChange={(brand) => setField("brand", brand)} />
           </section>
 
+          <section>
+            <p className={LABEL}>{t.warranty}</p>
+            <LocFields value={form.warranty} onChange={(warranty) => setField("warranty", warranty)} />
+          </section>
+
           <section className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className={LABEL}>{t.badge}</label>
               <input value={form.badge} onChange={(e) => setField("badge", e.target.value)} className={INPUT} />
-            </div>
-            <div>
-              <label className={LABEL}>{t.warranty}</label>
-              <input value={form.warranty} onChange={(e) => setField("warranty", e.target.value)} className={INPUT} />
             </div>
             <div className="sm:col-span-2">
               <label className={LABEL}>{t.keywords}</label>
@@ -486,7 +512,7 @@ function formFromProduct(product) {
       isActive: true,
       brand: emptyLoc(),
       badge: "",
-      warranty: "",
+      warranty: emptyLoc(),
       keywords: "",
       is_featured: false,
       is_new_arrival: false,
@@ -506,7 +532,7 @@ function formFromProduct(product) {
     isActive: product.isActive !== false,
     brand: fromLoc(product.brand?.name),
     badge: product.badge || "",
-    warranty: product.warranty == null ? "" : String(product.warranty),
+    warranty: warrantyFromValue(product.warranty),
     keywords: Array.isArray(product.keyword) ? product.keyword.join(", ") : "",
     is_featured: Boolean(product.is_featured),
     is_new_arrival: Boolean(product.is_new_arrival),

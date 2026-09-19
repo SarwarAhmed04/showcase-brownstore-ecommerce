@@ -57,6 +57,7 @@ app.use("/api/admin", adminRouter);
 app.use("/api/partners", partnersRouter);
 app.use("/api/enquiries", enquiriesRouter);
 app.use("/api/banners", bannersRouter);
+app.use("/api/media", mediaRouter);
 app.use("/media", mediaRouter);
 
 const clientDist = path.resolve(__dirname, "../../client/dist");
@@ -133,7 +134,7 @@ async function start() {
   if (count === 0) {
     const imported = await importFileCache();
     if (!imported) {
-      console.log("No products yet — syncing from ibsher.com…");
+      console.log("No products yet — syncing catalog…");
       try {
         const result = await syncFromIbsher();
         console.log(

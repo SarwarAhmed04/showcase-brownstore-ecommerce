@@ -27,7 +27,7 @@ export function saveBannerImageFile(slot, dataUrl) {
 }
 
 export function removeLocalBannerImage(imagePath) {
-  if (!imagePath || !String(imagePath).startsWith("/media/local/banners/")) return;
+  if (!String(imagePath || "").includes("/media/local/banners/")) return;
   const name = path.basename(imagePath);
   const dir = path.resolve(UPLOAD_ROOT, "banners");
   const file = path.resolve(dir, name);

@@ -102,7 +102,7 @@ function SlotCard({ item, t, busySlot, onUpload, onRemove, onMove, onSaveText })
 
       <div
         className={`relative mt-4 overflow-hidden rounded-2xl bg-cream ${
-          slider ? "aspect-[8/3]" : "aspect-[10/3]"
+          slider ? "aspect-[3/1]" : "aspect-[4/1]"
         }`}
       >
         {item.image ? (

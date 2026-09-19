@@ -67,7 +67,7 @@ export default function ProductRow({ product: p }) {
               size="icon-sm"
               onClick={() => saved.toggle(p.id)}
               aria-pressed={isSaved}
-              aria-label={isSaved ? 'Remove from saved' : 'Save this item'}
+              aria-label={isSaved ? t.removeFromSaved : t.saveThisItem}
             >
               <Heart
                 className={cn(isSaved && 'text-clay-400')}
@@ -79,7 +79,7 @@ export default function ProductRow({ product: p }) {
               variant="glass"
               size="icon-sm"
               onClick={() => openQuickView(p)}
-              aria-label={`Quick view ${p.name}`}
+              aria-label={`${t.details} ${p.name}`}
             >
               <Eye />
             </Button>

@@ -5,11 +5,14 @@ import {
 } from "./overrides.js";
 
 const CDN = process.env.IBSHER_CDN || "https://cdn.ibsher.com";
-const MEDIA_PREFIX = "/media";
+const MEDIA_PREFIX = "/api/media";
 
 export function cdnUrl(path) {
   if (!path) return "";
   const raw = String(path);
+
+  if (raw.startsWith("/api/media")) return raw;
+  if (raw.startsWith("/media")) return `/api${raw}`;
 
   if (raw.startsWith("http://") || raw.startsWith("https://")) {
     try {

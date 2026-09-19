@@ -27,7 +27,7 @@ export default function ProductCard({ product: p, width, compact = false, classN
     <Card
       className={cn(
         'group glass relative flex flex-col overflow-hidden rounded-card border-0 p-0',
-        'transition-all duration-500 hover:-translate-y-1.5',
+        'transition-transform duration-300 hover:-translate-y-1',
         className,
       )}
       style={{ width }}
@@ -50,7 +50,7 @@ export default function ProductCard({ product: p, width, compact = false, classN
       <div className="pointer-events-none absolute left-3 top-3 flex flex-col items-start gap-2">
         {p.onDeal && <Badge variant="deal">{t.deals}</Badge>}
         {p.badge && <Badge variant="overlay">{p.badge}</Badge>}
-        {p.stock === 'out' && <Badge variant="overlay">Sold out</Badge>}
+        {p.stock === 'out' && <Badge variant="overlay">{t.outOfStock}</Badge>}
       </div>
 
       {/* hover actions — reachable by keyboard via group-focus-within */}
@@ -61,7 +61,7 @@ export default function ProductCard({ product: p, width, compact = false, classN
           size="icon-sm"
           onClick={() => saved.toggle(p.id)}
           aria-pressed={isSaved}
-          aria-label={isSaved ? `Remove ${p.name} from saved` : `Save ${p.name}`}
+          aria-label={isSaved ? t.removeFromSaved : t.saveThisItem}
         >
           <Heart className={cn(isSaved && 'text-clay-300')} fill={isSaved ? 'currentColor' : 'none'} />
         </Button>
@@ -70,7 +70,7 @@ export default function ProductCard({ product: p, width, compact = false, classN
           variant="overlay"
           size="icon-sm"
           onClick={() => openQuickView(p)}
-          aria-label={`Quick view ${p.name}`}
+          aria-label={`${t.details} ${p.name}`}
         >
           <Eye />
         </Button>
@@ -82,7 +82,10 @@ export default function ProductCard({ product: p, width, compact = false, classN
           {p.brand}
         </span>
 
-        <h3 className={cn('clamp-2 font-semibold leading-snug', compact ? 'text-xs' : 'text-sm')}>
+        <h3
+          className={cn('clamp-1 font-semibold leading-snug', compact ? 'text-xs' : 'text-sm')}
+          title={p.name}
+        >
           <Link to={`/product/${p.slug}`} className="transition-colors hover:text-primary">
             {p.name}
           </Link>
@@ -112,7 +115,6 @@ export function ProductCardSkeleton() {
       <div className="space-y-2.5 p-5">
         <Skeleton className="h-2.5 w-16" />
         <Skeleton className="h-3.5 w-full" />
-        <Skeleton className="h-3.5 w-2/3" />
         <Skeleton className="h-5 w-28" />
       </div>
     </Card>

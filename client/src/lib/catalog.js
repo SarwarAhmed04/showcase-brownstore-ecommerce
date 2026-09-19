@@ -26,7 +26,14 @@ export function adaptProduct(p, lang = "en") {
   if (p.sku) specs.SKU = p.sku;
   if (tName(p.brand?.name, lang)) specs.Brand = tName(p.brand.name, lang);
   if (tName(p.category?.name, lang)) specs.Category = tName(p.category.name, lang);
-  if (p.warranty) specs.Warranty = String(p.warranty);
+  if (p.warranty != null && p.warranty !== "") {
+    const w = p.warranty;
+    specs.Warranty =
+      typeof w === "string" || typeof w === "number"
+        ? String(w)
+        : tName(w, lang) || String(w.value || w.text || "");
+    if (!specs.Warranty) delete specs.Warranty;
+  }
   if (p.stock != null) specs.Stock = String(p.stock);
   if (p.itemCode && p.itemCode !== p.sku) specs.Code = String(p.itemCode);
 
