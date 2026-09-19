@@ -18,7 +18,7 @@ export function Wordmark({ compact = false }) {
   return (
     <Link to="/" className="group flex items-center gap-2.5" aria-label="Brown Store">
       <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md bg-gradient-to-br from-caramel-400 to-caramel-600 shadow-lg transition-transform duration-500 group-hover:-rotate-6">
-        <Logo className="h-7 w-7" />
+        <Logo className="h-8 w-8" />
       </span>
       {!compact && (
         <span className="leading-none">
