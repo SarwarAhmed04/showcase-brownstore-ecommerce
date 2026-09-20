@@ -40,7 +40,6 @@ export default function ProductRow({ product: p }) {
               <span className="text-2xs font-bold uppercase tracking-[.16em] text-muted-foreground">
                 {p.brand}
               </span>
-              {p.onDeal && <Badge variant="deal">{t.deals}</Badge>}
               {p.badge && <Badge variant="muted">{p.badge}</Badge>}
               {p.stock !== 'in' && <StockBadge status={p.stock} />}
             </div>

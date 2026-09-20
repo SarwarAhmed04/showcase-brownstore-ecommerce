@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
-import { ArrowRight, Clock, Flame } from 'lucide-react'
+import { ArrowRight, Clock } from 'lucide-react'
 import Hero from '../components/Hero'
 import ProductRail from '../components/ProductRail'
 import CategoryTile from '../components/CategoryTile'
@@ -15,11 +15,10 @@ import { api } from '../api'
 import { useEffect, useState } from 'react'
 
 export default function Home() {
-  const { categories, byCategory, brands, deals, featured, live: products } = useCatalog()
+  const { categories, byCategory, brands, featured, live: products } = useCatalog()
   const { t } = useLang()
   const [banners, setBanners] = useState([])
   const [bannersReady, setBannersReady] = useState(false)
-  const topDeals = deals.slice(0, 10)
   const newest = [...products].sort((a, b) => String(b.id).localeCompare(String(a.id))).slice(0, 10)
 
   useEffect(() => {
@@ -50,15 +49,6 @@ export default function Home() {
     <>
       {sliderBanners.length > 0 ? <BannerSlider banners={sliderBanners} /> : null}
       {bannersReady && sliderBanners.length === 0 ? <Hero /> : null}
-
-      <Reveal>
-        <ProductRail
-          eyebrow={<><Flame size={12} /> {t.endsMidnight}</>}
-          title={t.todaysDeals}
-          items={topDeals}
-          to="/deals"
-        />
-      </Reveal>
 
       <section className="container-x py-14">
         <Reveal>

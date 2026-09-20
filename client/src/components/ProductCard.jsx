@@ -48,7 +48,6 @@ export default function ProductCard({ product: p, width, compact = false, classN
       </Link>
 
       <div className="pointer-events-none absolute left-3 top-3 flex flex-col items-start gap-2">
-        {p.onDeal && <Badge variant="deal">{t.deals}</Badge>}
         {p.badge && <Badge variant="overlay">{p.badge}</Badge>}
         {p.stock === 'out' && <Badge variant="overlay">{t.outOfStock}</Badge>}
       </div>

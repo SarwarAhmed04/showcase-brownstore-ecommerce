@@ -54,7 +54,7 @@ export function adaptProduct(p, lang = "en") {
     rating: Number(p.rating) || 0,
     reviews: Number(p.reviews) || 0,
     featured: Boolean(p.is_featured || p.is_best_seller),
-    badge: p.badge || (p.is_new_arrival ? "New" : p.is_hot ? "Hot" : ""),
+    badge: p.badge || (p.is_new_arrival ? "New" : ""),
     specs,
     tags: [p.keyword].filter(Boolean),
     colors: (p.variants || []).map((v) => v.color).filter(Boolean),

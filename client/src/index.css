@@ -4,59 +4,10 @@
 @tailwind utilities;
 
 /* ============================================================
-   BROWN STORE — design tokens
-   Dark "espresso" is the primary skin; light "cream" is the alt.
+   BROWN STORE — design tokens (light cream only)
    ============================================================ */
 @layer base {
   :root {
-    --bg: 22 14 11;
-    --bg-2: 38 24 18;
-    --surface: 255 255 255;      /* glass tint colour */
-    --surface-a: 0.055;          /* glass tint alpha */
-    --stroke: 255 236 214;
-    --stroke-a: 0.14;
-    --text: 253 246 238;
-    --text-dim: 214 190 168;
-    --text-mute: 168 141 119;
-    --accent: 245 180 92;
-    --accent-2: 227 154 60;
-    --glow: 255 190 110;
-    --shadow: 0 24px 60px -20px rgb(0 0 0 / 0.65);
-    color-scheme: dark;
-
-    /* ---- shadcn/ui bridge -------------------------------------------
-       These are the names shadcn components reference. Pointing them at
-       the Brown Store palette is what makes an unmodified shadcn Button
-       come out espresso-and-gold rather than default slate.
-       Values are "R G B" triplets so opacity modifiers keep working. */
-    --background: 22 14 11;
-    --foreground: 253 246 238;
-    --card: 40 26 20;
-    --card-foreground: 253 246 238;
-    --popover: 32 20 15;
-    --popover-foreground: 253 246 238;
-    --primary: 245 180 92;              /* caramel — the only CTA hue */
-    --primary-foreground: 42 23 8;
-    --secondary: 56 36 26;
-    --secondary-foreground: 236 224 210;
-    --muted: 56 36 26;
-    --muted-foreground: 168 141 119;
-    --accent-surface: 68 45 32;         /* menu/list hover, NOT the brand gold */
-    --accent-surface-foreground: 253 246 238;
-    --destructive: 189 104 66;          /* clay 500 */
-    --destructive-foreground: 255 245 240;
-    --border: 55 45 39;                 /* solid equivalent of the glass rim */
-    --input: 64 52 44;
-    --ring: 245 180 92;
-    --radius: 0.75rem;
-
-    /* semantic status — never decorative */
-    --success: 138 167 108;             /* moss 400 */
-    --warning: 214 135 100;             /* clay 400 */
-    --info: 116 161 155;                /* patina 400 */
-  }
-
-  [data-theme='cream'] {
     --bg: 250 244 236;
     --bg-2: 238 224 208;
     --surface: 255 255 255;
@@ -72,14 +23,18 @@
     --shadow: 0 22px 50px -22px rgb(76 46 26 / 0.35);
     color-scheme: light;
 
-    /* ---- shadcn/ui bridge, cream skin ---- */
+    /* ---- shadcn/ui bridge -------------------------------------------
+       These are the names shadcn components reference. Pointing them at
+       the Brown Store palette is what makes an unmodified shadcn Button
+       come out caramel-on-cream rather than default slate.
+       Values are "R G B" triplets so opacity modifiers keep working. */
     --background: 250 244 236;
     --foreground: 40 25 18;
     --card: 255 255 255;
     --card-foreground: 40 25 18;
     --popover: 255 255 255;
     --popover-foreground: 40 25 18;
-    --primary: 176 106 32;              /* darkened caramel, for contrast on paper */
+    --primary: 176 106 32;
     --primary-foreground: 255 250 244;
     --secondary: 238 224 208;
     --secondary-foreground: 60 40 28;
@@ -87,15 +42,16 @@
     --muted-foreground: 138 108 85;
     --accent-surface: 240 228 214;
     --accent-surface-foreground: 40 25 18;
-    --destructive: 154 81 51;           /* clay 600 */
+    --destructive: 154 81 51;
     --destructive-foreground: 255 250 246;
     --border: 228 218 208;
     --input: 220 208 196;
     --ring: 176 106 32;
+    --radius: 0.75rem;
 
-    --success: 107 136 79;              /* moss 500 */
-    --warning: 189 104 66;              /* clay 500 */
-    --info: 79 129 123;                 /* patina 500 */
+    --success: 107 136 79;
+    --warning: 189 104 66;
+    --info: 79 129 123;
   }
 
   * { border-color: rgb(var(--stroke) / var(--stroke-a)); }

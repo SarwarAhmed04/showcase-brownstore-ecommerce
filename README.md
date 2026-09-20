@@ -31,7 +31,7 @@ npm run dev --prefix client
 
 Default admin (change in `server/.env`):
 
-- Email: `admin@brownstore.com`
+- Email: `admin@brownstore.net`
 - Password: `BrownStore!2026`
 
 On first boot the server pulls products if the database is empty. You can also press **Refresh Products** in the admin panel. If local MongoDB is not running, the API starts an in-memory MongoDB for that session.

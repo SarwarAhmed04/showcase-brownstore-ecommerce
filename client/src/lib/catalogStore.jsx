@@ -9,7 +9,7 @@ const CatalogContext = createContext(null);
 function savedIds() {
   try {
     const raw = JSON.parse(getCookie("bs:saved") || "[]");
-    return Array.isArray(raw) ? raw.map(String) : [];
+    return Array.isArray(raw) ? raw.map(String).slice(-10) : [];
   } catch {
     return [];
   }
@@ -29,16 +29,15 @@ export function CatalogProvider({ children }) {
       if (!quiet) setStatus("loading");
       try {
         const ids = savedIds();
-        const [catRes, list, deals, saved] = await Promise.all([
+        const [catRes, list, saved] = await Promise.all([
           api.categories(),
           api.products({ limit: 48, sort: "newest" }),
-          api.products({ deals: 1, limit: 48, sort: "newest" }),
-          ids.length ? api.products({ ids: ids.join(","), limit: 48 }) : Promise.resolve({ products: [] }),
+          ids.length ? api.products({ ids: ids.join(","), limit: 10 }) : Promise.resolve({ products: [] }),
         ]);
 
         const cats = (catRes.categories || []).map((c, i) => adaptCategory(c, lang, i));
         const merged = new Map();
-        for (const row of [...(list.products || []), ...(deals.products || []), ...(saved.products || [])]) {
+        for (const row of [...(list.products || []), ...(saved.products || [])]) {
           const item = adaptProduct(row, lang);
           if (item) merged.set(item.id, item);
         }
@@ -83,7 +82,6 @@ export function CatalogProvider({ children }) {
       byId: (id) => live.find((p) => p.id === String(id)),
       categoryBySlug,
       featured: live.filter((p) => p.featured).concat(live).filter((p, i, all) => all.findIndex((x) => x.id === p.id) === i).slice(0, 12),
-      deals: live.filter((p) => p.onDeal),
       brands: [...new Set(live.map((p) => p.brand).filter(Boolean))].sort(),
       byCategory: (slug) => previews[slug] || live.filter((p) => p.category === String(slug)),
       related: (p, n = 6) =>

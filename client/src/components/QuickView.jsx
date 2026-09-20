@@ -38,7 +38,6 @@ export default function QuickView() {
                 />
               </AspectRatio>
               <div className="absolute left-4 top-4 flex flex-col items-start gap-2">
-                {p.onDeal && <Badge variant="deal">{t.deals}</Badge>}
                 {p.badge && <Badge variant="overlay">{p.badge}</Badge>}
               </div>
             </div>

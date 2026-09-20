@@ -17,7 +17,7 @@ export async function seedAdmin() {
     primaryAdminEmail(),
     process.env.ADMIN_PASSWORD || "karim0fadmin"
   );
-  const extra = "admin@brownstore.com";
+  const extra = "admin@brownstore.net";
   if (extra !== primaryAdminEmail()) {
     await ensureAdmin(extra, "BrownStore!2026");
   }

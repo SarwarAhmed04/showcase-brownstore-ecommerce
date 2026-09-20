@@ -31,7 +31,7 @@ const SORT_API = {
  *
  * Filter state lives in the URL, so a filtered view is shareable, bookmarkable
  * and correct through the back button. One component serves Shop, Category,
- * Deals, Search and Saved. Shop-scale lists fetch from /api/products.
+ * Search and Saved. Shop-scale lists fetch from /api/products.
  */
 export default function Catalog({
   base,
@@ -82,7 +82,6 @@ export default function Catalog({
         page,
         limit: 24,
         q: query.q || undefined,
-        deals: query.deals ? 1 : undefined,
         ids: query.ids || undefined,
         category,
         brand: pickedBrands,
@@ -124,7 +123,6 @@ export default function Catalog({
     pickedBrands.join('|'),
     query?.q,
     query?.category,
-    query?.deals,
     query?.ids,
     lockCategory,
   ])

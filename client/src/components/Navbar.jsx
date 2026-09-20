@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, NavLink } from 'react-router-dom'
-import { ChevronDown, Heart, Menu, Moon, Search, Sun } from 'lucide-react'
+import { ChevronDown, Heart, Menu, Search } from 'lucide-react'
 import LanguageSwitcher from './LanguageSwitcher'
 import Logo from './Logo'
 import { useLang } from '../context/LangContext'
@@ -38,14 +38,13 @@ export default function Navbar() {
   const scrolled = useScrolled(10)
   const [menuOpen, setMenuOpen] = useState(false)
   const [catOpen, setCatOpen] = useState(false)
-  const { theme, toggleTheme, saved, setSearchOpen } = useStore()
+  const { saved, setSearchOpen } = useStore()
   const { categories } = useCatalog()
   const { t } = useLang()
 
   const NAV_ITEMS = [
     { to: '/', label: t.home, end: true },
     { to: '/shop', label: t.shop },
-    { to: '/deals', label: t.deals },
     { to: '/about', label: t.about },
     { to: '/contact', label: t.contact },
   ]
@@ -105,16 +104,6 @@ export default function Navbar() {
             className="rounded-pill md:hidden"
           >
             <Search />
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleTheme}
-            aria-label={theme === 'espresso' ? t.switchToCream : t.switchToEspresso}
-            className="rounded-pill"
-          >
-            {theme === 'espresso' ? <Sun /> : <Moon />}
           </Button>
 
           <LanguageSwitcher />

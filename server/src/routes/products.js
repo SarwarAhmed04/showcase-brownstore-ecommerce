@@ -21,7 +21,6 @@ function applyCatalogFilters(filter, query) {
   const categories = listParam(query.category);
   const brands = listParam(query.brand);
   const q = String(query.q || "").trim();
-  const deals = String(query.deals || "") === "1";
 
   if (ids.length) {
     filter.$or = [
@@ -43,17 +42,6 @@ function applyCatalogFilters(filter, query) {
         ],
       },
     ]);
-  }
-  if (deals) {
-    const dealMatch = {
-      $or: [
-        { discountPrice: { $gt: 0 } },
-        { is_hot: true },
-        { "overrides.is_hot": true },
-        { badge: { $nin: [null, ""] } },
-      ],
-    };
-    filter.$and = (filter.$and || []).concat([dealMatch]);
   }
   if (q) {
     const rx = new RegExp(escapeRegex(q), "i");
@@ -85,7 +73,6 @@ productsRouter.get("/", async (req, res) => {
 
     const facetFilter = applyCatalogFilters(publicProductFilter(), {
       q: req.query.q,
-      deals: req.query.deals,
       ids: req.query.ids,
       category: listParam(req.query.category).length <= 1 ? req.query.category : undefined,
     });

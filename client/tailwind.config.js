@@ -1,13 +1,12 @@
 /** @type {import('tailwindcss').Config} */
 
 /* Every colour is authored as an "R G B" triplet in a CSS variable so the same
-   token can be used at any opacity (`bg-primary/20`) and swapped wholesale
-   between the espresso and cream skins. `<alpha-value>` is what makes that
-   work — Tailwind substitutes the opacity modifier into the rgb() call. */
+   token can be used at any opacity (`bg-primary/20`). `<alpha-value>` is what
+   makes that work — Tailwind substitutes the opacity modifier into the rgb() call. */
 const withAlpha = (v) => `rgb(var(${v}) / <alpha-value>)`
 
 export default {
-  darkMode: ['class', '[data-theme="espresso"]'],
+  darkMode: 'class',
   content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
@@ -53,7 +52,7 @@ export default {
         // ---- semantic bridge ---------------------------------------------
         // shadcn/ui components reference these names. Pointing them at the
         // Brown Store variables is what makes an unmodified shadcn Button
-        // come out espresso-and-gold instead of default slate.
+        // come out caramel-on-cream instead of default slate.
         border: withAlpha('--border'),
         input: withAlpha('--input'),
         ring: withAlpha('--ring'),

@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { Flame, Heart, Home, LayoutGrid, Search } from 'lucide-react'
+import { Heart, Home, LayoutGrid, Search } from 'lucide-react'
 import { useStore } from '../store'
 import { useLang } from '../context/LangContext'
 
@@ -10,7 +10,6 @@ export default function MobileNav() {
   const tabs = [
     { to: '/', label: t.home, Icon: Home, end: true },
     { to: '/shop', label: t.shop, Icon: LayoutGrid },
-    { to: '/deals', label: t.deals, Icon: Flame },
     { to: '/saved', label: t.savedItems, Icon: Heart, badge: true },
   ]
 
@@ -20,7 +19,7 @@ export default function MobileNav() {
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       aria-label={t.primaryNav}
     >
-      <div className="grid grid-cols-5">
+      <div className="grid grid-cols-4">
         {tabs.slice(0, 2).map((item) => (
           <Tab key={item.to} {...item} count={saved.count} />
         ))}

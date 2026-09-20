@@ -34,8 +34,8 @@ export default function Contact() {
 
   const lines = [
     { Icon: MapPin, title: t.showroom, body: t.showroomAddress, sub: t.collectionShowroom },
-    { Icon: Phone, title: t.phone, body: '+964 773 802 9000', sub: t.hoursDaily },
-    { Icon: Mail, title: t.email, body: 'info@brownstore.com', sub: t.emailReplyDay },
+    { Icon: Phone, title: t.phone, body: '+964 751 760 7671', sub: t.hoursDaily, dir: 'ltr' },
+    { Icon: Mail, title: t.email, body: 'info@brownstore.net', sub: t.emailReplyDay },
     { Icon: Clock, title: t.hours, body: '10:00 – 22:00', sub: t.hoursSevenDays },
   ]
 
@@ -79,7 +79,7 @@ export default function Contact() {
                   <div className="text-2xs font-bold uppercase tracking-[.18em] text-muted-foreground">
                     {l.title}
                   </div>
-                  <div className="mt-1 font-semibold">{l.body}</div>
+                  <div className="mt-1 font-semibold" dir={l.dir}>{l.body}</div>
                   <div className="mt-0.5 text-xs text-muted-foreground">{l.sub}</div>
                 </div>
               </Card>

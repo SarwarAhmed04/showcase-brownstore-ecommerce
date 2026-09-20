@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useLang } from "../context/LangContext";
-import { useTheme } from "../context/ThemeContext";
 import Logo from "./Logo";
 import LanguageSwitcher from "./LanguageSwitcher";
 
@@ -11,23 +10,6 @@ const links = [
   { to: "/about", key: "about" },
   { to: "/contact", key: "contact" },
 ];
-
-function IconSun() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-    </svg>
-  );
-}
-
-function IconMoon() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-      <path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5Z" />
-    </svg>
-  );
-}
 
 function IconSearch() {
   return (
@@ -40,7 +22,6 @@ function IconSearch() {
 
 export default function Header() {
   const { t } = useLang();
-  const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const [scrolled, setScrolled] = useState(false);
   const [q, setQ] = useState("");
@@ -121,14 +102,6 @@ export default function Header() {
             className="grid size-10 place-items-center rounded-full text-fg-mute transition hover:bg-muted hover:text-fg md:hidden"
           >
             <IconSearch />
-          </button>
-          <button
-            type="button"
-            onClick={toggleTheme}
-            aria-label={theme === "espresso" ? t.switchToCream : t.switchToEspresso}
-            className="grid size-10 place-items-center rounded-full text-fg-mute transition hover:bg-muted hover:text-fg"
-          >
-            {theme === "espresso" ? <IconSun /> : <IconMoon />}
           </button>
           <LanguageSwitcher />
         </div>

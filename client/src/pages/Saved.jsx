@@ -21,7 +21,7 @@ export default function Saved() {
     }
     let cancelled = false
     api
-      .products({ ids: saved.ids.join(','), limit: 100 })
+      .products({ ids: saved.ids.join(','), limit: 10 })
       .then((data) => {
         if (cancelled) return
         setItems((data.products || []).map((row) => adaptProduct(row, lang)).filter(Boolean))

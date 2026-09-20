@@ -4,7 +4,6 @@ import { ArrowRight, RotateCcw, ShieldCheck, Sparkles, Truck } from "lucide-reac
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useMedia } from "../lib/hooks";
-import { useStore } from "../store";
 import { Reveal } from "./ui";
 import { useLang } from "../context/LangContext";
 import { useCatalog } from "../lib/catalogStore";
@@ -16,18 +15,13 @@ const PROMISES = [
   { Icon: Sparkles, key: "featurePicked", sub: "featurePickedSub" },
 ];
 
-const SHADER = {
-  espresso: { color1: "#ffcd85", color2: "#1b100c", color3: "#6d482c", lightMode: false },
-  cream: { color1: "#ffd9a3", color2: "#f7ede0", color3: "#d8c0a6", lightMode: true },
-};
-
-function StaticField({ shader }) {
+function StaticField() {
   return (
     <div
       className="absolute inset-0"
       style={{
-        background: `radial-gradient(120% 100% at 15% 0%, ${shader.color1}33, transparent 55%),
-                     linear-gradient(140deg, ${shader.color2}, ${shader.color3}66)`,
+        background: `radial-gradient(120% 100% at 15% 0%, #ffd9a333, transparent 55%),
+                     linear-gradient(140deg, #f7ede0, #d8c0a666)`,
       }}
     />
   );
@@ -35,7 +29,6 @@ function StaticField({ shader }) {
 
 export default function Hero() {
   const [i, setI] = useState(0);
-  const { theme } = useStore();
   const reducedMotion = useMedia("(prefers-reduced-motion: reduce)");
   const { t } = useLang();
   const { live, categories } = useCatalog();
@@ -57,7 +50,7 @@ export default function Hero() {
       title: t.heroSlide2Lines,
       body: t.categorySub,
       cta: { to: "/shop", label: t.shop },
-      alt: { to: "/deals", label: t.deals },
+      alt: { to: "/shop", label: t.shop },
       img: live[1]?.img || categories[0]?.cover,
     },
     {
@@ -77,13 +70,12 @@ export default function Hero() {
   }, [reducedMotion, slides.length]);
 
   const s = slides[i];
-  const shader = SHADER[theme] ?? SHADER.espresso;
 
   return (
     <section className="container-x pt-6 lg:pt-8">
       <div className="glass relative overflow-hidden rounded-panel">
         <div aria-hidden className="absolute inset-0">
-          <StaticField shader={shader} />
+          <StaticField />
           <div className="absolute inset-0 bg-gradient-to-r from-background/85 via-background/55 to-background/20" />
         </div>
 

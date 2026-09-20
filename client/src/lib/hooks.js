@@ -4,7 +4,7 @@ import { getCookie, setCookie } from './cookies'
 /* -------------------------------------------------------------------- cookies
    Wrapped in try/catch: private windows and blocked cookies both throw on
    access, and a saved-items list is never worth taking the page down for. */
-export function useCookieState(key, initial) {
+export function useCookieState(key, initial, maxAgeSec) {
   const [value, setValue] = useState(() => {
     try {
       const raw = getCookie(key)
@@ -16,29 +16,43 @@ export function useCookieState(key, initial) {
 
   useEffect(() => {
     try {
-      setCookie(key, JSON.stringify(value))
+      setCookie(key, JSON.stringify(value), maxAgeSec)
     } catch {
       /* cookies unavailable — keep the in-memory value */
     }
-  }, [key, value])
+  }, [key, value, maxAgeSec])
 
   return [value, setValue]
 }
 
+export const SAVED_LIMIT = 10
+const SAVED_MAX_AGE_SEC = 60 * 60 * 24 * 7
+
+function trimSaved(ids) {
+  return ids.map(String).slice(-SAVED_LIMIT)
+}
+
 /* ------------------------------------------------------- saved / wishlist */
 export function useSaved() {
-  const [ids, setIds] = useCookieState('bs:saved', [])
-  const has = useCallback((id) => ids.map(String).includes(String(id)), [ids])
+  const [ids, setIds] = useCookieState('bs:saved', [], SAVED_MAX_AGE_SEC)
+  const list = trimSaved(ids)
+
+  useEffect(() => {
+    if (ids.length > SAVED_LIMIT) setIds(trimSaved(ids))
+  }, [ids, setIds])
+
+  const has = useCallback((id) => list.includes(String(id)), [list])
   const toggle = useCallback(
     (id) =>
       setIds((cur) => {
         const sid = String(id)
         const next = cur.map(String)
-        return next.includes(sid) ? next.filter((x) => x !== sid) : [...next, sid]
+        if (next.includes(sid)) return next.filter((x) => x !== sid)
+        return trimSaved([...next, sid])
       }),
     [setIds],
   )
-  return { ids: ids.map(String), has, toggle, count: ids.length }
+  return { ids: list, has, toggle, count: list.length }
 }
 
 /* ------------------------------------------------- scroll-reveal on mount

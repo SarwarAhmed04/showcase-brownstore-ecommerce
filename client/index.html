@@ -13,18 +13,6 @@
       rel="stylesheet"
     />
     <title>BrownStore</title>
-    <script>
-      try {
-        var m = document.cookie.match(/(?:^|; )brownstore-theme=([^;]*)/);
-        var t = m ? decodeURIComponent(m[1]) : "";
-        document.documentElement.setAttribute(
-          "data-theme",
-          t === "cream" ? "cream" : "espresso"
-        );
-      } catch (e) {
-        document.documentElement.setAttribute("data-theme", "espresso");
-      }
-    </script>
   </head>
   <body>
     <div id="root"></div>

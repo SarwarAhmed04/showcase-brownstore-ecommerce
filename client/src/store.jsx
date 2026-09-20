@@ -1,11 +1,9 @@
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
-import { useTheme } from "./context/ThemeContext";
 import { useSaved } from "./lib/hooks";
 
 const StoreContext = createContext(null);
 
 export function StoreProvider({ children }) {
-  const { theme, toggleTheme } = useTheme();
   const saved = useSaved();
   const [quickView, setQuickView] = useState(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -13,8 +11,6 @@ export function StoreProvider({ children }) {
 
   const value = useMemo(
     () => ({
-      theme,
-      toggleTheme,
       saved,
       quickView,
       openQuickView: setQuickView,
@@ -22,7 +18,7 @@ export function StoreProvider({ children }) {
       searchOpen,
       setSearchOpen,
     }),
-    [theme, toggleTheme, saved, quickView, closeQuickView, searchOpen]
+    [saved, quickView, closeQuickView, searchOpen]
   );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

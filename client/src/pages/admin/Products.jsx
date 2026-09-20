@@ -379,7 +379,6 @@ export default function AdminProducts() {
                   "badge",
                   "is_featured",
                   "is_new_arrival",
-                  "is_hot",
                   "is_best_seller",
                 ],
               });

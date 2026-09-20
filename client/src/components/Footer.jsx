@@ -9,7 +9,6 @@ export default function Footer() {
   const { t } = useLang()
   const shop = [
     { to: '/shop', label: t.allProducts },
-    { to: '/deals', label: t.dailyDeals },
     { to: '/shop?sort=new', label: t.newArrivals },
     { to: '/saved', label: t.savedItems },
   ]
@@ -44,11 +43,11 @@ export default function Footer() {
               </li>
               <li className="flex gap-3">
                 <Phone size={16} className="mt-0.5 shrink-0 text-primary" />
-                <span dir="ltr">+964 773 802 9000</span>
+                <span dir="ltr">+964 751 760 7671</span>
               </li>
               <li className="flex gap-3">
                 <Mail size={16} className="mt-0.5 shrink-0 text-primary" />
-                <span>info@brownstore.com</span>
+                <span>info@brownstore.net</span>
               </li>
             </ul>
           </div>

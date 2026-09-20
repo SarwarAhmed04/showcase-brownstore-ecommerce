@@ -144,7 +144,7 @@ export function buildOverridePatch(product, form, { priceMode = "custom" } = {})
     ? null
     : form.warranty;
 
-  for (const flag of ["is_featured", "is_new_arrival", "is_hot", "is_best_seller"]) {
+  for (const flag of ["is_featured", "is_new_arrival", "is_best_seller"]) {
     patch[flag] = Boolean(form[flag]) === Boolean(source[flag]) ? null : Boolean(form[flag]);
   }
 
@@ -365,7 +365,6 @@ export default function ProductEditor({
             {[
               ["is_featured", t.featured],
               ["is_new_arrival", t.newArrivals],
-              ["is_hot", t.deals],
               ["is_best_seller", t.bestSeller],
             ].map(([key, label]) => (
               <button
@@ -516,7 +515,6 @@ function formFromProduct(product) {
       keywords: "",
       is_featured: false,
       is_new_arrival: false,
-      is_hot: false,
       is_best_seller: false,
       variants: [],
     };
@@ -536,7 +534,6 @@ function formFromProduct(product) {
     keywords: Array.isArray(product.keyword) ? product.keyword.join(", ") : "",
     is_featured: Boolean(product.is_featured),
     is_new_arrival: Boolean(product.is_new_arrival),
-    is_hot: Boolean(product.is_hot),
     is_best_seller: Boolean(product.is_best_seller),
     variants: variantsFromProduct(product),
   };

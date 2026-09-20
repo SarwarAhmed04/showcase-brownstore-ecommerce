@@ -36,7 +36,7 @@ export function removeCookie(name) {
   setCookie(name, "", 0);
 }
 
-const LEGACY_KEYS = ["brownstore_lang", "brownstore-theme", "bs:saved"];
+const LEGACY_KEYS = ["brownstore_lang", "bs:saved"];
 
 export function migrateLegacyStorage() {
   try {
@@ -46,6 +46,8 @@ export function migrateLegacyStorage() {
       if (!existing && legacy) setCookie(key, legacy);
       localStorage.removeItem(key);
     }
+    removeCookie("brownstore-theme");
+    localStorage.removeItem("brownstore-theme");
     localStorage.removeItem("brownstore_token");
   } catch {
     /* ignore */
