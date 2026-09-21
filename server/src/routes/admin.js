@@ -22,7 +22,18 @@ import {
   toAdminCategory,
 } from "../utils/categoryView.js";
 import { removeLocalBannerImage, saveBannerImageFile } from "../utils/bannerFiles.js";
-import { Banner, applyCopy, copyFields, ensureBanners, isBannerAlign, isBannerSlot, pickLoc, toAdminBanner } from "../models/Banner.js";
+import {
+  Banner,
+  applyCopy,
+  applyDuration,
+  copyFields,
+  ensureBanners,
+  isBannerAlign,
+  isBannerSlot,
+  pickLoc,
+  sanitizeBannerLink,
+  toAdminBanner,
+} from "../models/Banner.js";
 import {
   fetchIbsherCategories,
   fetchIbsherProducts,
@@ -491,6 +502,13 @@ adminRouter.patch("/banners/:slot", async (req, res) => {
     if (req.body.title) source.title = pickLoc(req.body.title, source.title);
     if (req.body.subtitle) source.subtitle = pickLoc(req.body.subtitle, source.subtitle);
     if (isBannerAlign(req.body.textAlign)) source.textAlign = req.body.textAlign;
+    if ("link" in req.body) {
+      const rawLink = String(req.body.link || "").trim();
+      const link = sanitizeBannerLink(rawLink);
+      if (rawLink && !link) return res.status(400).json({ message: "Invalid link" });
+      source.link = link;
+    }
+    if ("duration" in req.body) applyDuration(source, req.body.duration);
 
     const to = isBannerSlot(req.body.slot);
     if (to && to !== from) {

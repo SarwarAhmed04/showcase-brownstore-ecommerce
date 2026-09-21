@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { tName } from "../i18n";
 import { useLang } from "../context/LangContext";
 import { imgUrl } from "../lib/img";
@@ -14,6 +15,38 @@ const ALIGN_CLASS = {
   "bottom-center": "items-end justify-center text-center",
   "bottom-end": "items-end justify-end text-end",
 };
+
+function bannerHref(banner) {
+  const href = String(banner?.link || "").trim();
+  if (!href) return "";
+  if (href.startsWith("/") && !href.startsWith("//")) return href;
+  if (/^https?:\/\//i.test(href)) return href;
+  return "";
+}
+
+function BannerFrame({ banner, className, children }) {
+  const href = bannerHref(banner);
+  const classes = `${className}${href ? " cursor-pointer" : ""}`;
+  if (!href) return <div className={classes}>{children}</div>;
+  if (href.startsWith("/")) {
+    return (
+      <Link to={href} className={`${classes} block`} aria-label={banner.title?.en || "Banner"}>
+        {children}
+      </Link>
+    );
+  }
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`${classes} block`}
+      aria-label={banner.title?.en || "Banner"}
+    >
+      {children}
+    </a>
+  );
+}
 
 export function BannerCopy({ banner, compact = false }) {
   const { lang } = useLang();
@@ -64,10 +97,11 @@ export function BannerSlider({ banners }) {
       <div className="relative overflow-hidden rounded-panel bg-secondary">
         <div className="aspect-[2/1] sm:aspect-[5/2] lg:aspect-[3/1]">
           {slides.map((item) => (
-            <div
+            <BannerFrame
               key={item.slot}
+              banner={item}
               className={`absolute inset-0 transition-opacity duration-700 ${
-                item.slot === current.slot ? "opacity-100" : "opacity-0"
+                item.slot === current.slot ? "opacity-100 z-[1]" : "opacity-0 z-0 pointer-events-none"
               }`}
             >
               <img
@@ -79,7 +113,7 @@ export function BannerSlider({ banners }) {
                 className="h-full w-full object-cover"
               />
               <BannerCopy banner={item} />
-            </div>
+            </BannerFrame>
           ))}
         </div>
         {slides.length > 1 ? (
@@ -106,12 +140,12 @@ export function BannerStrip({ banner }) {
   if (!banner?.image) return null;
   return (
     <section className="container-x py-6">
-      <div className="relative overflow-hidden rounded-panel bg-secondary">
+      <BannerFrame banner={banner} className="relative overflow-hidden rounded-panel bg-secondary">
         <div className="aspect-[8/3] sm:aspect-[4/1]">
           <img src={imgUrl(banner.image)} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
           <BannerCopy banner={banner} compact />
         </div>
-      </div>
+      </BannerFrame>
     </section>
   );
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { useLang } from "../../context/LangContext";
 import { imgUrl } from "../../lib/img";
+import { bannerUploadSize, fileToJpegDataUrl } from "../../lib/imageUpload";
 import Spinner from "../../components/Spinner";
 import { BannerCopy } from "../../components/HomeBanners";
 
@@ -17,17 +18,20 @@ const ALIGNS = [
   "bottom-end",
 ];
 
+const DURATIONS = ["1d", "7d", "30d", "unlimited"];
+
 function emptyLoc() {
   return { ku: "", en: "", ar: "" };
 }
 
-function readFile(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error("Could not read image"));
-    reader.readAsDataURL(file);
-  });
+function remainingLabel(item, t) {
+  if (!item.expiresAt || item.duration === "unlimited") return t.bannerUnlimitedLive;
+  const ms = new Date(item.expiresAt).getTime() - Date.now();
+  if (ms <= 0) return t.bannerExpired;
+  const days = Math.floor(ms / 86400000);
+  const hours = Math.max(1, Math.floor((ms % 86400000) / 3600000));
+  if (days > 0) return t.bannerRemainingDays.replace("{n}", String(days));
+  return t.bannerRemainingHours.replace("{n}", String(hours));
 }
 
 function LocFields({ label, value, onChange, t }) {
@@ -58,16 +62,20 @@ function LocFields({ label, value, onChange, t }) {
   );
 }
 
-function SlotCard({ item, t, busySlot, onUpload, onRemove, onMove, onSaveText }) {
+function SlotCard({ item, t, busySlot, onUpload, onRemove, onMove, onSave }) {
   const slider = item.slot <= 3;
   const [title, setTitle] = useState(item.title || emptyLoc());
   const [subtitle, setSubtitle] = useState(item.subtitle || emptyLoc());
   const [textAlign, setTextAlign] = useState(item.textAlign || "bottom-start");
+  const [link, setLink] = useState(item.link || "");
+  const [duration, setDuration] = useState(item.duration || "unlimited");
 
   useEffect(() => {
     setTitle(item.title || emptyLoc());
     setSubtitle(item.subtitle || emptyLoc());
     setTextAlign(item.textAlign || "bottom-start");
+    setLink(item.link || "");
+    setDuration(item.duration || "unlimited");
   }, [item]);
 
   return (
@@ -83,6 +91,11 @@ function SlotCard({ item, t, busySlot, onUpload, onRemove, onMove, onSaveText })
           <p className="mt-2 text-xs font-semibold tracking-wide text-brown/40">
             {slider ? t.bannerSizeSlider : t.bannerSizeInline}
           </p>
+          {item.image ? (
+            <p className={`mt-2 text-xs font-semibold ${item.expired ? "text-red-700" : "text-brown/45"}`}>
+              {remainingLabel(item, t)}
+            </p>
+          ) : null}
         </div>
         <label className="text-xs font-semibold text-brown/50">
           {t.bannerPosition}
@@ -147,6 +160,30 @@ function SlotCard({ item, t, busySlot, onUpload, onRemove, onMove, onSaveText })
       <div className="mt-5 space-y-4 border-t border-brown/10 pt-4">
         <LocFields label={t.bannerTitle} value={title} onChange={setTitle} t={t} />
         <LocFields label={t.bannerSubtitle} value={subtitle} onChange={setSubtitle} t={t} />
+        <label className="block">
+          <p className="mb-1.5 text-xs font-semibold text-brown/50">{t.bannerLink}</p>
+          <input
+            value={link}
+            onChange={(event) => setLink(event.target.value)}
+            placeholder={t.bannerLinkHint}
+            dir="ltr"
+            className="w-full rounded-xl border border-brown/10 bg-cream px-3 py-2 text-sm text-brown outline-none focus:ring-2 focus:ring-tan"
+          />
+        </label>
+        <label className="block">
+          <p className="mb-1.5 text-xs font-semibold text-brown/50">{t.bannerDuration}</p>
+          <select
+            value={duration}
+            onChange={(event) => setDuration(event.target.value)}
+            className="w-full rounded-xl border border-brown/10 bg-cream px-3 py-2 text-sm font-semibold text-brown outline-none focus:ring-2 focus:ring-tan"
+          >
+            {DURATIONS.map((value) => (
+              <option key={value} value={value}>
+                {t[`bannerDuration_${value}`] || value}
+              </option>
+            ))}
+          </select>
+        </label>
         <div>
           <p className="mb-1.5 text-xs font-semibold text-brown/50">{t.bannerTextPlace}</p>
           <div className="grid w-36 grid-cols-3 gap-1">
@@ -169,7 +206,7 @@ function SlotCard({ item, t, busySlot, onUpload, onRemove, onMove, onSaveText })
         <button
           type="button"
           disabled={Boolean(busySlot)}
-          onClick={() => onSaveText(item.slot, { title, subtitle, textAlign })}
+          onClick={() => onSave(item.slot, { title, subtitle, textAlign, link, duration })}
           className="rounded-full bg-brown px-4 py-2 text-xs font-semibold text-cream"
         >
           {t.bannerSaveText}
@@ -203,12 +240,16 @@ export default function AdminBanners() {
     setError("");
     setMessage("");
     try {
-      const image = await readFile(file);
+      const image = await fileToJpegDataUrl(file, bannerUploadSize(slot));
       const data = await api.uploadBannerImage(slot, image);
       setBanners(data.banners || []);
       setMessage(t.bannerSaved);
     } catch (err) {
-      setError(err.message);
+      setError(
+        err.message === "Failed to fetch" || err.message === "Image too large"
+          ? t.bannerUploadFailed
+          : err.message
+      );
     } finally {
       setBusySlot(0);
     }
@@ -245,7 +286,7 @@ export default function AdminBanners() {
     }
   }
 
-  async function onSaveText(slot, body) {
+  async function onSave(slot, body) {
     setBusySlot(slot);
     setError("");
     setMessage("");
@@ -280,7 +321,7 @@ export default function AdminBanners() {
             onUpload={onUpload}
             onRemove={onRemove}
             onMove={onMove}
-            onSaveText={onSaveText}
+            onSave={onSave}
           />
         ))}
       </div>

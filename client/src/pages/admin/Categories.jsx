@@ -3,16 +3,8 @@ import { api } from "../../api";
 import { useLang } from "../../context/LangContext";
 import { tName } from "../../i18n";
 import { imgUrl } from "../../lib/img";
+import { fileToJpegDataUrl } from "../../lib/imageUpload";
 import Spinner from "../../components/Spinner";
-
-function readFile(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error("Could not read image"));
-    reader.readAsDataURL(file);
-  });
-}
 
 function CategoryCard({ item, t, lang, onUpdated }) {
   const [name, setName] = useState({
@@ -52,12 +44,16 @@ function CategoryCard({ item, t, lang, onUpdated }) {
     setBusy(true);
     setStatus("");
     try {
-      const image = await readFile(file);
+      const image = await fileToJpegDataUrl(file, { maxEdge: 1400 });
       const data = await api.uploadCategoryImage(item.id, image);
       onUpdated(data.category);
       setStatus(t.saved);
     } catch (err) {
-      setStatus(err.message);
+      setStatus(
+        err.message === "Failed to fetch" || err.message === "Image too large"
+          ? t.bannerUploadFailed
+          : err.message
+      );
     } finally {
       setBusy(false);
     }

@@ -10,7 +10,14 @@ async function request(path, options = {}) {
     headers["Content-Type"] = "application/json";
   }
 
-  const res = await fetch(apiUrl(path), { ...options, headers, credentials: "include" });
+  let res;
+  try {
+    res = await fetch(apiUrl(path), { ...options, headers, credentials: "include" });
+  } catch (err) {
+    const size = typeof options.body === "string" ? options.body.length : 0;
+    if (size > 700000) throw new Error("Image too large");
+    throw err;
+  }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(json.message || `Request failed (${res.status})`);
