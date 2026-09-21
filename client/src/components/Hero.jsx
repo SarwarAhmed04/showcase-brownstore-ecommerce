@@ -59,7 +59,7 @@ export default function Hero() {
       title: t.heroSlide3Lines,
       body: t.featuredSub,
       cta: { to: "/shop", label: t.viewAll },
-      alt: { to: "/about", label: t.about },
+      alt: { to: "/shop", label: t.shop },
       img: live[2]?.img || categories[1]?.cover,
     },
   ];
@@ -80,7 +80,7 @@ export default function Hero() {
           <div className="absolute inset-0 bg-gradient-to-r from-background/85 via-background/55 to-background/20" />
         </div>
 
-        <div className="relative z-10 grid items-stretch lg:grid-cols-[1.25fr_.75fr]">
+        <div className="relative z-10 grid items-stretch lg:grid-cols-[1.15fr_.95fr]">
           <div className="flex flex-col justify-center p-5 sm:p-7 lg:px-10 lg:py-6">
             <Reveal key={`e-${i}`} as="span" className="eyebrow mb-3 self-start">
               <Sparkles className="size-3" /> {s.eyebrow}
@@ -139,7 +139,7 @@ export default function Hero() {
             </div>
           </div>
 
-          <div className="relative min-h-[160px] overflow-hidden sm:min-h-[180px] lg:min-h-0">
+          <div className="shot cutout relative flex min-h-[160px] items-stretch justify-end overflow-hidden sm:min-h-[180px] lg:min-h-0">
             {slides.map((sl, n) =>
               n === i || n === (i + 1) % slides.length ? (
                 <img
@@ -150,14 +150,13 @@ export default function Hero() {
                   loading={n === 0 ? "eager" : "lazy"}
                   decoding="async"
                   className={cn(
-                    "absolute inset-0 h-full w-full object-contain object-center p-3 transition-opacity duration-500 lg:p-4",
-                    n === i ? "opacity-100" : "opacity-0"
+                    "h-full w-full object-contain object-right p-4 sm:p-6",
+                    n === i ? "relative opacity-100" : "absolute inset-0 opacity-0"
                   )}
                 />
               ) : null
             )}
-            <div className="absolute inset-0 bg-gradient-to-r from-background via-background/20 to-transparent lg:from-background/50 lg:via-background/10" />
-            <div className="absolute inset-0 bg-gradient-to-t from-background/50 to-transparent lg:hidden" />
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-background/50 to-transparent lg:hidden" />
           </div>
         </div>
       </div>

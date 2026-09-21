@@ -93,10 +93,10 @@ export function PageSkeleton() {
       <div className="shimmer mb-4 h-3 w-40 rounded-full" />
       <div className="shimmer mb-3 h-12 w-2/3 max-w-xl rounded-2xl" />
       <div className="shimmer mb-10 h-4 w-1/2 max-w-md rounded-full" />
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {Array.from({ length: 8 }, (_, i) => (
           <div key={i} className="glass overflow-hidden rounded-card">
-            <div className="shimmer aspect-[4/5] w-full" />
+            <div className="shimmer aspect-square w-full" />
             <div className="space-y-2.5 p-5">
               <div className="shimmer h-2.5 w-16 rounded-full" />
               <div className="shimmer h-3.5 w-full rounded-full" />

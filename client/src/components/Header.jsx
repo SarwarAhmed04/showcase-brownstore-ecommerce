@@ -7,7 +7,6 @@ import LanguageSwitcher from "./LanguageSwitcher";
 const links = [
   { to: "/", end: true, key: "home" },
   { to: "/shop", key: "shop" },
-  { to: "/about", key: "about" },
   { to: "/contact", key: "contact" },
 ];
 
@@ -52,13 +51,8 @@ export default function Header() {
           <span className="grid size-10 place-items-center rounded-xl bg-primary/15 text-primary">
             <Logo className="h-8 w-8" />
           </span>
-          <span className="leading-tight">
-            <span className="font-display block text-lg font-bold tracking-tight text-fg">
-              Brown Store
-            </span>
-            <span className="hidden text-[10px] font-semibold tracking-[0.18em] text-fg-mute uppercase sm:block">
-              {t.tagline}
-            </span>
+          <span className="font-display block text-lg font-bold tracking-tight text-fg leading-tight">
+            Brown Store
           </span>
         </Link>
 

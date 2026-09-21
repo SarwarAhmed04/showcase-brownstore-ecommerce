@@ -133,11 +133,13 @@ function Row({ product, onEdit, t, lang }) {
       }`}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <img
-          src={imgUrl(product.image) || "/logo.png"}
-          alt=""
-          className="h-12 w-12 shrink-0 rounded-xl bg-cream object-cover"
-        />
+        <span className="isolate h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-cream">
+          <img
+            src={imgUrl(product.image) || "/logo.png"}
+            alt=""
+            className="h-full w-full object-contain mix-blend-multiply p-0.5"
+          />
+        </span>
         <div className="min-w-0">
           <p className="truncate font-medium">{tName(product.name, lang)}</p>
           <p className="truncate text-xs text-brown/40">

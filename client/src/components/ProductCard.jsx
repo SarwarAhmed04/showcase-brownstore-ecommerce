@@ -33,17 +33,15 @@ export default function ProductCard({ product: p, width, compact = false, classN
       style={{ width }}
     >
       {/* ---------- imagery ---------- */}
-      <Link to={`/product/${p.slug}`} aria-label={p.name} className="shot block">
-        <AspectRatio ratio={4 / 5}>
+      <Link to={`/product/${p.slug}`} aria-label={p.name} className="shot cutout block">
+        <AspectRatio ratio={1}>
           <img
-            src={imgUrl(p.img, { w: 640, h: 800 })}
+            src={imgUrl(p.img, { w: 640, h: 640 })}
             alt={p.name}
             loading="lazy"
             decoding="async"
-            className="h-full w-full object-cover"
+            className="h-full w-full object-contain p-3 sm:p-4"
           />
-          {/* scrim keeps overlay badges legible on any photograph */}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/45 via-transparent to-black/10" />
         </AspectRatio>
       </Link>
 
@@ -76,7 +74,7 @@ export default function ProductCard({ product: p, width, compact = false, classN
       </div>
 
       {/* ---------- copy ---------- */}
-      <div className={cn('flex flex-1 flex-col', compact ? 'gap-1.5 p-4' : 'gap-2 p-5')}>
+      <div className={cn('flex flex-1 flex-col', compact ? 'gap-1 p-3' : 'gap-1.5 p-3.5 sm:p-4')}>
         <span className="text-2xs font-bold uppercase tracking-[.16em] text-muted-foreground">
           {p.brand}
         </span>
@@ -108,10 +106,10 @@ export default function ProductCard({ product: p, width, compact = false, classN
 export function ProductCardSkeleton() {
   return (
     <Card className="glass overflow-hidden rounded-card border-0 p-0">
-      <AspectRatio ratio={4 / 5}>
+      <AspectRatio ratio={1}>
         <Skeleton className="h-full w-full rounded-none" />
       </AspectRatio>
-      <div className="space-y-2.5 p-5">
+      <div className="space-y-2 p-3.5">
         <Skeleton className="h-2.5 w-16" />
         <Skeleton className="h-3.5 w-full" />
         <Skeleton className="h-5 w-28" />

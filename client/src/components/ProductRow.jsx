@@ -23,13 +23,13 @@ export default function ProductRow({ product: p }) {
       <Link
         to={`/product/${p.slug}`}
         aria-label={p.name}
-        className="shot h-28 w-24 shrink-0 overflow-hidden rounded-md sm:h-40 sm:w-40"
+        className="shot cutout h-24 w-24 shrink-0 overflow-hidden rounded-md sm:h-32 sm:w-32"
       >
         <img
           src={imgUrl(p.img, { w: 400, h: 400 })}
           alt={p.name}
           loading="lazy"
-          className="h-full w-full object-cover"
+          className="h-full w-full object-contain p-2 sm:p-3"
         />
       </Link>
 

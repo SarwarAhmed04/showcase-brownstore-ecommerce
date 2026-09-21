@@ -5,7 +5,7 @@ import { useCatalog } from '../lib/catalogStore'
 import { useLang } from '../context/LangContext'
 
 export default function Shop() {
-  const { total, status } = useCatalog()
+  const { status } = useCatalog()
   const { t } = useLang()
   if (status === 'loading') return <PageSkeleton />
 
@@ -14,7 +14,7 @@ export default function Shop() {
       <PageHead
         eyebrow={t.shopEyebrow}
         title={t.shopTitle}
-        sub={(t.shopSub || '').replace('{n}', String(total || 0))}
+        sub={t.shopSub}
         crumbs={[{ label: t.shop }]}
       />
       <Catalog query={{}} />

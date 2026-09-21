@@ -21,13 +21,8 @@ export function Wordmark({ compact = false }) {
         <Logo className="h-8 w-8" />
       </span>
       {!compact && (
-        <span className="leading-none">
-          <span className="block whitespace-nowrap font-display text-lg font-black tracking-tight">
-            Brown<span className="gold-text"> Store</span>
-          </span>
-          <span className="hidden whitespace-nowrap text-2xs font-bold uppercase tracking-[.28em] text-muted-foreground sm:block">
-            {t.tagline}
-          </span>
+        <span className="block whitespace-nowrap font-display text-lg font-black tracking-tight leading-none">
+          Brown<span className="gold-text"> Store</span>
         </span>
       )}
     </Link>
@@ -45,7 +40,6 @@ export default function Navbar() {
   const NAV_ITEMS = [
     { to: '/', label: t.home, end: true },
     { to: '/shop', label: t.shop },
-    { to: '/about', label: t.about },
     { to: '/contact', label: t.contact },
   ]
 

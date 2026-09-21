@@ -138,7 +138,7 @@ export default function ProductDetail() {
       {payload.related?.length > 0 && (
         <section className="mt-16">
           <h2 className="headline mb-6 text-2xl text-fg">{t.related}</h2>
-          <div className="grid grid-cols-2 gap-3.5 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {payload.related.map((p) => (
               <ProductCard key={p.id} product={adaptProduct(p, lang)} />
             ))}

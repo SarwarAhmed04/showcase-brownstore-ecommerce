@@ -10,7 +10,6 @@ import Category from "./pages/Category";
 import Product from "./pages/Product";
 import Search from "./pages/Search";
 import Saved from "./pages/Saved";
-import About from "./pages/About";
 import Contact from "./pages/Contact";
 import NotFound from "./pages/NotFound";
 import AdminLogin from "./pages/admin/Login";
@@ -39,7 +38,7 @@ export default function App() {
                   <Route path="/deals" element={<Navigate to="/shop" replace />} />
                   <Route path="/search" element={<Search />} />
                   <Route path="/saved" element={<Saved />} />
-                  <Route path="/about" element={<About />} />
+                  <Route path="/about" element={<Navigate to="/" replace />} />
                   <Route path="/contact" element={<Contact />} />
                   <Route path="*" element={<NotFound />} />
                 </Route>

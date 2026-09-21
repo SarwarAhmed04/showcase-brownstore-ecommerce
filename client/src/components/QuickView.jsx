@@ -29,12 +29,12 @@ export default function QuickView() {
         {p && (
           <div className="grid sm:grid-cols-2">
             {/* image */}
-            <div className="shot relative">
+            <div className="shot cutout relative">
               <AspectRatio ratio={1} className="sm:h-full">
                 <img
                   src={imgUrl(p.img, { w: 800, h: 800 })}
                   alt={p.name}
-                  className="h-full w-full object-cover"
+                  className="h-full w-full object-contain p-6"
                 />
               </AspectRatio>
               <div className="absolute left-4 top-4 flex flex-col items-start gap-2">

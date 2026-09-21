@@ -93,11 +93,13 @@ export default function EnquiryDialog({ product, trigger, defaultSubject }) {
 
             {product && (
               <div className="glass-soft flex items-center gap-3 rounded-md p-3">
-                <img
-                  src={imgUrl(product.img, { w: 96, h: 96 })}
-                  alt=""
-                  className="size-12 shrink-0 rounded-md object-cover"
-                />
+                <span className="shot cutout size-12 shrink-0 overflow-hidden rounded-md">
+                  <img
+                    src={imgUrl(product.img, { w: 96, h: 96 })}
+                    alt=""
+                    className="h-full w-full object-contain p-0.5"
+                  />
+                </span>
                 <div className="min-w-0 flex-1">
                   <div className="clamp-1 text-xs font-semibold">{product.name}</div>
                   <div className="text-2xs text-muted-foreground">{product.brand}</div>

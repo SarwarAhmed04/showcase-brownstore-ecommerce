@@ -4,7 +4,7 @@ import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react'
 import ProductCard from './ProductCard'
 import { useLang } from '../context/LangContext'
 
-export default function ProductRail({ title, eyebrow, sub, items, to, cardWidth = 250 }) {
+export default function ProductRail({ title, eyebrow, sub, items, to, cardWidth = 210 }) {
   const scroller = useRef(null)
   const [edges, setEdges] = useState({ start: true, end: false })
   const { t } = useLang()

@@ -5,7 +5,6 @@ import { imgUrl } from '../lib/img'
 import { useLang } from '../context/LangContext'
 
 export default function CategoryTile({ category: c, large = false }) {
-  const count = Number(c.count) || 0
   const { t } = useLang()
 
   return (
@@ -47,7 +46,7 @@ export default function CategoryTile({ category: c, large = false }) {
         {large && <p className="mt-1.5 text-sm text-foreground/75">{c.tagline}</p>}
 
         <div className="mt-2 flex items-center gap-1.5 text-2xs font-semibold text-muted-foreground transition-colors group-hover:text-primary">
-          {count} {count === 1 ? t.itemOne : t.itemsMany}
+          {t.shop}
           <ArrowRight size={12} className="transition-transform group-hover:translate-x-1" />
         </div>
       </div>

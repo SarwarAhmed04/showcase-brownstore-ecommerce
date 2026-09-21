@@ -13,10 +13,7 @@ export default function Footer() {
     { to: '/saved', label: t.savedItems },
   ]
   const company = [
-    { to: '/about', label: t.ourStory },
-    { to: '/about#showroom', label: t.visitShowroom },
     { to: '/contact', label: t.contactUs },
-    { to: '/about#promise', label: t.brownPromise },
   ]
 
   return (

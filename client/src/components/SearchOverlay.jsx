@@ -88,11 +88,13 @@ export default function SearchOverlay() {
                 onSelect={() => go(`/product/${p.slug}`)}
                 className="gap-3"
               >
-                <img
-                  src={imgUrl(p.img, { w: 96, h: 96 })}
-                  alt=""
-                  className="size-9 shrink-0 rounded-md object-cover"
-                />
+                <span className="shot cutout size-9 shrink-0 overflow-hidden rounded-md">
+                  <img
+                    src={imgUrl(p.img, { w: 96, h: 96 })}
+                    alt=""
+                    className="h-full w-full object-contain p-0.5"
+                  />
+                </span>
                 <div className="min-w-0 flex-1">
                   <div className="clamp-1 text-xs font-semibold">{p.name}</div>
                   <div className="text-2xs text-muted-foreground">{p.brand}</div>

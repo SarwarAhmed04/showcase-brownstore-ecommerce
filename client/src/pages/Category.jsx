@@ -16,8 +16,6 @@ export default function Category() {
   if (status === "loading") return <PageSkeleton />;
   if (!cat) return <Navigate to="/404" replace />;
 
-  const count = Number(cat.count) || 0;
-
   return (
     <div className="container-x py-10 lg:py-14">
       <div className="glass relative mb-9 overflow-hidden rounded-panel">
@@ -36,8 +34,7 @@ export default function Category() {
           <PageHead
             eyebrow={
               <>
-                <CategoryIcon name={cat.icon} size={12} /> {count}{" "}
-                {count === 1 ? t.productOne : t.productsMany}
+                <CategoryIcon name={cat.icon} size={12} /> {t.shop}
               </>
             }
             title={cat.name}

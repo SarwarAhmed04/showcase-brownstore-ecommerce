@@ -122,19 +122,19 @@ export default function Product() {
 
         <div className="-mt-4 grid gap-8 lg:grid-cols-2 lg:gap-12">
           <div className="lg:sticky lg:top-[190px] lg:self-start">
-            <Card className="glass shot relative overflow-hidden rounded-panel border-0 p-0">
+            <div className="shot cutout relative overflow-hidden rounded-panel">
               <AspectRatio ratio={1}>
                 <img
                   key={shot}
                   src={imgUrl(gallery[shot]) || "/logo.png"}
                   alt={p.name}
-                  className="h-full w-full animate-fadeIn object-cover"
+                  className="h-full w-full object-contain p-6 sm:p-8"
                 />
               </AspectRatio>
               <div className="absolute left-4 top-4 flex flex-col items-start gap-2">
                 {p.badge && <Badge variant="overlay">{p.badge}</Badge>}
               </div>
-            </Card>
+            </div>
 
             {gallery.length > 1 && (
               <div className="mt-3 grid grid-cols-4 gap-3">
@@ -145,12 +145,12 @@ export default function Product() {
                     onClick={() => setShot(i)}
                     aria-pressed={i === shot}
                     className={cn(
-                      "shot overflow-hidden rounded-md border-2 transition-all",
+                      "shot cutout overflow-hidden rounded-md border-2 transition-all",
                       i === shot ? "border-primary opacity-100" : "border-transparent opacity-55 hover:opacity-90"
                     )}
                   >
                     <AspectRatio ratio={1}>
-                      <img src={imgUrl(src)} alt="" className="h-full w-full object-cover" />
+                      <img src={imgUrl(src)} alt="" className="h-full w-full object-contain p-1.5" />
                     </AspectRatio>
                   </button>
                 ))}

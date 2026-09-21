@@ -23,13 +23,7 @@ export default function Search() {
             {t.searchResults} <span className="gold-text">“{q}”</span>
           </>
         }
-        sub={
-          total
-            ? `${total} ${total === 1 ? t.productOne : t.productsMany}`
-            : total === 0
-              ? t.searchNoMatch
-              : t.loading
-        }
+        sub={total === 0 ? t.searchNoMatch : undefined}
         crumbs={[{ label: t.searchShortcut }]}
       />
 

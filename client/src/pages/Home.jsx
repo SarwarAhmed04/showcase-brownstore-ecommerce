@@ -96,7 +96,7 @@ export default function Home() {
           />
         </Reveal>
 
-        <div className="grid grid-cols-2 gap-3.5 sm:gap-5 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           {featured.slice(0, 8).map((p, i) => (
             <Reveal key={p.id} delay={(i % 4) * 70}>
               <ProductCard product={p} />
@@ -134,9 +134,6 @@ export default function Home() {
                   <Link to="/shop">
                     {t.seeTheMachines} <ArrowRight />
                   </Link>
-                </Button>
-                <Button asChild variant="glass" size="lg">
-                  <Link to="/about">{t.howWeChoose}</Link>
                 </Button>
               </div>
             </div>

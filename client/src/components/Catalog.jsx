@@ -199,8 +199,6 @@ export default function Catalog({
     return [...list].sort(by[sort] ?? by.featured)
   }, [remote, remoteItems, base, pickedCats, pickedBrands, sort])
 
-  const resultCount = remote ? remoteTotal : shown.length
-
   const filters = (
     <div className="space-y-6">
       {!lockCategory && catsHere.length > 1 && (
@@ -210,7 +208,6 @@ export default function Catalog({
               key={c.slug}
               id={`cat-${c.slug}`}
               label={c.name}
-              count={c.count}
               checked={pickedCats.includes(c.slug)}
               onChange={() => toggleMulti('cat', c.slug)}
             />
@@ -227,7 +224,6 @@ export default function Catalog({
                 key={b.value}
                 id={`brand-${String(b.value).replace(/\s+/g, '-')}`}
                 label={b.label}
-                count={b.count}
                 checked={pickedBrands.includes(b.value) || pickedBrands.includes(b.label)}
                 onChange={() => toggleMulti('brand', b.value)}
               />
@@ -279,16 +275,11 @@ export default function Catalog({
                 </SheetHeader>
                 <div className="mt-6">{filters}</div>
                 <Button variant="brand" className="mt-7 w-full" onClick={() => setSheetOpen(false)}>
-                  {resultCount} {resultCount === 1 ? t.productOne : t.productsMany}
+                  {t.seeResults}
                 </Button>
               </SheetContent>
             </Sheet>
           )}
-
-          <span className="text-xs text-muted-foreground">
-            <strong className="font-bold text-foreground">{resultCount}</strong>{' '}
-            {resultCount === 1 ? t.productOne : t.productsMany}
-          </span>
 
           <div className="ml-auto flex items-center gap-2">
             <Select value={sort} onValueChange={(v) => setParam('sort', v === 'featured' ? null : v)}>
@@ -354,7 +345,7 @@ export default function Catalog({
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3.5 sm:gap-5 xl:grid-cols-3 2xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
             {shown.map((p, i) => (
               <Reveal key={p.id} delay={Math.min(i, 8) * 45}>
                 <ProductCard product={p} />
@@ -374,9 +365,6 @@ export default function Catalog({
             >
               <ChevronLeft /> {t.scrollPrev}
             </Button>
-            <span className="px-3 text-xs text-muted-foreground" dir="ltr">
-              {t.page} {page} {t.of} {remotePages}
-            </span>
             <Button
               type="button"
               variant="glass"
@@ -404,7 +392,7 @@ function FilterGroup({ title, children }) {
   )
 }
 
-function CheckRow({ id, label, count, checked, onChange }) {
+function CheckRow({ id, label, checked, onChange }) {
   return (
     <div className="flex items-center gap-2.5">
       <Checkbox id={id} checked={checked} onCheckedChange={onChange} />
@@ -413,7 +401,6 @@ function CheckRow({ id, label, count, checked, onChange }) {
         className="flex flex-1 cursor-pointer items-center gap-2 text-xs font-normal"
       >
         <span className="flex-1">{label}</span>
-        <span className="text-2xs text-muted-foreground">{count}</span>
       </Label>
     </div>
   )

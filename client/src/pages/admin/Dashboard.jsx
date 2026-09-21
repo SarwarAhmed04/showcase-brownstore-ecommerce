@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { useAuth } from "../../context/AuthContext";
@@ -41,6 +41,85 @@ function MixRow({ label, value, total, tone }) {
           style={{ width: `${pct}%` }}
         />
       </div>
+    </div>
+  );
+}
+
+function RecentProductsRail({ products, lang, t }) {
+  const scroller = useRef(null);
+  const [edges, setEdges] = useState({ start: true, end: true });
+
+  const measure = useCallback(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const max = el.scrollWidth - el.clientWidth;
+    const offset = Math.abs(el.scrollLeft);
+    setEdges({
+      start: offset <= 6,
+      end: max <= 6 || Math.abs(offset - max) <= 6,
+    });
+  }, []);
+
+  useEffect(() => {
+    measure();
+    const el = scroller.current;
+    if (!el) return undefined;
+    const frame = requestAnimationFrame(measure);
+    el.addEventListener("scroll", measure, { passive: true });
+    window.addEventListener("resize", measure);
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(el);
+    return () => {
+      cancelAnimationFrame(frame);
+      el.removeEventListener("scroll", measure);
+      window.removeEventListener("resize", measure);
+      observer?.disconnect();
+    };
+  }, [measure, products]);
+
+  const maskImage = `linear-gradient(${lang === "en" ? "to right" : "to left"}, ${
+    edges.start ? "black 0" : "transparent 0, black 2.5rem"
+  }, ${edges.end ? "black 100%" : "black calc(100% - 2.5rem), transparent 100%"})`;
+
+  return (
+    <div
+      ref={scroller}
+      className="no-scrollbar -mx-1 flex gap-3 overflow-x-auto py-1 pb-2"
+      style={{
+        maskImage,
+        WebkitMaskImage: maskImage,
+      }}
+    >
+      {products.map((product) => (
+        <Link
+          key={product.id}
+          to={`/admin/products?q=${encodeURIComponent(product.sku || "")}`}
+          className="w-40 shrink-0 rounded-3xl bg-white p-3 shadow-sm ring-1 ring-brown/5 transition hover:-translate-y-0.5 hover:ring-tan/40"
+        >
+          <div className="aspect-square isolate overflow-hidden rounded-2xl bg-cream">
+            <img
+              src={imgUrl(product.image) || "/logo.png"}
+              alt=""
+              className="h-full w-full object-contain mix-blend-multiply p-2"
+            />
+          </div>
+          <p className="mt-3 line-clamp-2 min-h-10 text-sm font-medium">
+            {tName(product.name, lang)}
+          </p>
+          <p className="mt-1 truncate text-[11px] text-brown/40">
+            {product.sku || product.itemCode || "—"}
+          </p>
+          {product.outOfStock ? (
+            <p className="mt-2 text-[11px] font-semibold text-red-800">
+              {t.outOfStock}
+            </p>
+          ) : (
+            <p className="mt-2 text-[11px] font-semibold text-emerald-800">
+              {t.inStock}
+            </p>
+          )}
+        </Link>
+      ))}
     </div>
   );
 }
@@ -206,38 +285,7 @@ export default function AdminDashboard() {
                 {t.viewAllProducts}
               </Link>
             </div>
-            <div className="-mx-1 flex gap-3 overflow-x-auto pb-2">
-              {(stats.recent || []).map((product) => (
-                <Link
-                  key={product.id}
-                  to={`/admin/products?q=${encodeURIComponent(product.sku || "")}`}
-                  className="w-40 shrink-0 rounded-3xl bg-white p-3 shadow-sm ring-1 ring-brown/5 transition hover:-translate-y-0.5 hover:ring-tan/40"
-                >
-                  <div className="aspect-square overflow-hidden rounded-2xl bg-cream">
-                    <img
-                      src={imgUrl(product.image) || "/logo.png"}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  </div>
-                  <p className="mt-3 line-clamp-2 min-h-10 text-sm font-medium">
-                    {tName(product.name, lang)}
-                  </p>
-                  <p className="mt-1 truncate text-[11px] text-brown/40">
-                    {product.sku || product.itemCode || "—"}
-                  </p>
-                  {product.outOfStock ? (
-                    <p className="mt-2 text-[11px] font-semibold text-red-800">
-                      {t.outOfStock}
-                    </p>
-                  ) : (
-                    <p className="mt-2 text-[11px] font-semibold text-emerald-800">
-                      {t.inStock}
-                    </p>
-                  )}
-                </Link>
-              ))}
-            </div>
+            <RecentProductsRail products={stats.recent || []} lang={lang} t={t} />
           </section>
 
           <section className="relative overflow-hidden rounded-[2rem] border border-dashed border-tan/70 bg-[repeating-linear-gradient(90deg,transparent,transparent_12px,rgba(210,166,121,0.12)_12px,rgba(210,166,121,0.12)_13px)] px-6 py-5 md:px-8">
