@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { tName } from "../i18n";
 import { useLang } from "../context/LangContext";
+import { imgUrl } from "../lib/img";
 
 const ALIGN_CLASS = {
   "top-start": "items-start justify-start text-start",
@@ -70,7 +71,7 @@ export function BannerSlider({ banners }) {
               }`}
             >
               <img
-                src={item.image}
+                src={imgUrl(item.image)}
                 alt=""
                 loading={item.slot === slides[0]?.slot ? "eager" : "lazy"}
                 decoding="async"
@@ -107,7 +108,7 @@ export function BannerStrip({ banner }) {
     <section className="container-x py-6">
       <div className="relative overflow-hidden rounded-panel bg-secondary">
         <div className="aspect-[8/3] sm:aspect-[4/1]">
-          <img src={banner.image} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+          <img src={imgUrl(banner.image)} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
           <BannerCopy banner={banner} compact />
         </div>
       </div>

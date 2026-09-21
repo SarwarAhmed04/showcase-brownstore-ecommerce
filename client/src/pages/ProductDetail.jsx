@@ -4,6 +4,7 @@ import { api } from "../api";
 import { useLang } from "../context/LangContext";
 import { tName } from "../i18n";
 import { adaptProduct } from "../lib/catalog";
+import { imgUrl } from "../lib/img";
 import ProductCard from "../components/ProductCard";
 import Spinner from "../components/Spinner";
 
@@ -43,7 +44,7 @@ export default function ProductDetail() {
           <div className="glass overflow-hidden rounded-panel">
             {activeImage ? (
               <img
-                src={activeImage}
+                src={imgUrl(activeImage)}
                 alt={tName(product.name, lang)}
                 className="aspect-square w-full object-cover"
               />
@@ -64,7 +65,7 @@ export default function ProductDetail() {
                     i === imageIndex ? "ring-primary" : "ring-transparent"
                   }`}
                 >
-                  <img src={img.url} alt="" className="h-full w-full object-cover" />
+                  <img src={imgUrl(img.url)} alt="" className="h-full w-full object-cover" />
                 </button>
               ))}
             </div>

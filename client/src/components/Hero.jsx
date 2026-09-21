@@ -7,6 +7,7 @@ import { useMedia } from "../lib/hooks";
 import { Reveal } from "./ui";
 import { useLang } from "../context/LangContext";
 import { useCatalog } from "../lib/catalogStore";
+import { imgUrl } from "../lib/img";
 
 const PROMISES = [
   { Icon: Truck, key: "featureSameDay", sub: "featureSameDaySub" },
@@ -143,7 +144,7 @@ export default function Hero() {
               n === i || n === (i + 1) % slides.length ? (
                 <img
                   key={(sl.img || "fallback") + n}
-                  src={sl.img || "/logo.png"}
+                  src={imgUrl(sl.img) || "/logo.png"}
                   alt=""
                   aria-hidden={n !== i}
                   loading={n === 0 ? "eager" : "lazy"}

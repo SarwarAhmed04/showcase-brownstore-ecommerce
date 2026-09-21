@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { useLang } from "../../context/LangContext";
 import { tName } from "../../i18n";
+import { imgUrl } from "../../lib/img";
 import Spinner from "../../components/Spinner";
 
 function readFile(file) {
@@ -81,7 +82,7 @@ function CategoryCard({ item, t, lang, onUpdated }) {
       <div className="flex gap-4">
         <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-cream">
           {item.image ? (
-            <img src={item.image} alt="" className="h-full w-full object-cover" />
+            <img src={imgUrl(item.image)} alt="" className="h-full w-full object-cover" />
           ) : (
             <div className="flex h-full items-center justify-center text-xs text-brown/30">
               —

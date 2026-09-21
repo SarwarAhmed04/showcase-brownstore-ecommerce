@@ -5,6 +5,7 @@ import { api } from "../../api";
 import { useAuth } from "../../context/AuthContext";
 import { useLang } from "../../context/LangContext";
 import { tName } from "../../i18n";
+import { imgUrl } from "../../lib/img";
 import Spinner from "../../components/Spinner";
 import AdminModal from "../../components/admin/AdminModal";
 import ProductEditor, { formatGrouped } from "../../components/admin/ProductEditor";
@@ -63,7 +64,7 @@ function PartnerLogo({ image, name, className = "h-14 w-14" }) {
   }
   return (
     <img
-      src={image}
+      src={imgUrl(image)}
       alt={name || ""}
       className={`rounded-2xl bg-white object-cover ring-1 ring-brown/10 ${className}`}
     />
@@ -984,7 +985,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           {(products.products || []).map((item) => (
             <div key={item.id} className="flex items-center gap-3 py-3">
               <img
-                src={item.image || "/logo.png"}
+                src={imgUrl(item.image) || "/logo.png"}
                 alt=""
                 className="h-12 w-12 rounded-xl bg-cream object-cover"
               />

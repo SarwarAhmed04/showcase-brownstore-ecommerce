@@ -3,10 +3,11 @@ import { Link } from "react-router-dom";
 import { tName } from "../i18n";
 import { useLang } from "../context/LangContext";
 import Logo from "./Logo";
+import { imgUrl } from "../lib/img";
 
 function CatImage({ src, className }) {
   if (src) {
-    return <img src={src} alt="" className={className} />;
+    return <img src={imgUrl(src)} alt="" className={className} />;
   }
   return (
     <div className={`flex items-center justify-center bg-muted ${className}`}>

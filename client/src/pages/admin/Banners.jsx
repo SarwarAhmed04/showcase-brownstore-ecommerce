@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { useLang } from "../../context/LangContext";
+import { imgUrl } from "../../lib/img";
 import Spinner from "../../components/Spinner";
 import { BannerCopy } from "../../components/HomeBanners";
 
@@ -107,7 +108,7 @@ function SlotCard({ item, t, busySlot, onUpload, onRemove, onMove, onSaveText })
       >
         {item.image ? (
           <>
-            <img src={item.image} alt="" className="h-full w-full object-cover" />
+            <img src={imgUrl(item.image)} alt="" className="h-full w-full object-cover" />
             <BannerCopy banner={{ ...item, title, subtitle, textAlign }} compact={!slider} />
           </>
         ) : (

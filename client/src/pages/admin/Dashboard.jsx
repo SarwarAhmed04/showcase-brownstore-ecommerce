@@ -4,6 +4,7 @@ import { api } from "../../api";
 import { useAuth } from "../../context/AuthContext";
 import { useLang } from "../../context/LangContext";
 import { tName } from "../../i18n";
+import { imgUrl } from "../../lib/img";
 import Spinner from "../../components/Spinner";
 
 function formatCount(value) {
@@ -214,7 +215,7 @@ export default function AdminDashboard() {
                 >
                   <div className="aspect-square overflow-hidden rounded-2xl bg-cream">
                     <img
-                      src={product.image || "/logo.png"}
+                      src={imgUrl(product.image) || "/logo.png"}
                       alt=""
                       className="h-full w-full object-cover"
                     />
