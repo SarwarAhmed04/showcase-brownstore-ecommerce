@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Plus } from "lucide-react";
+import { Pencil, Plus } from "lucide-react";
 import { api } from "../../api";
 import { useAuth } from "../../context/AuthContext";
 import { useLang } from "../../context/LangContext";
@@ -9,9 +9,10 @@ import Spinner from "../../components/Spinner";
 import AdminModal from "../../components/admin/AdminModal";
 import ProductEditor, { formatGrouped } from "../../components/admin/ProductEditor";
 
-const SCOPES = ["all", "category", "subcategory", "collection"];
-const SELECT =
-  "w-full rounded-full border border-brown/10 bg-cream px-4 py-2.5 text-sm font-semibold text-brown outline-none ring-tan/40 focus:ring-2";
+const SCOPES = ["all", "category", "subcategory", "collection", "vendor"];
+const CONTROL =
+  "rounded-full border border-brown/10 bg-cream px-4 py-2.5 text-sm font-semibold text-brown outline-none ring-tan/40 focus:ring-2";
+const SELECT = `w-full ${CONTROL}`;
 
 function optionLabel(item, lang) {
   const name = tName(item.name, lang) || item.id;
@@ -23,6 +24,7 @@ function scopeLabel(t, scope) {
   if (scope === "all") return t.allCommission;
   if (scope === "subcategory") return t.subCategory;
   if (scope === "collection") return t.collection;
+  if (scope === "vendor") return t.vendor;
   return t.category;
 }
 
@@ -225,9 +227,9 @@ function CopyField({ label, value, t }) {
   const [copied, setCopied] = useState(false);
   if (!value) return null;
   return (
-    <div>
+    <div className="min-w-0">
       <label className="mb-1 block text-xs font-semibold text-brown/50">{label}</label>
-      <div className="flex gap-2">
+      <div className="flex min-w-0 gap-2">
         <input
           readOnly
           dir="ltr"
@@ -259,12 +261,14 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     categories: [],
     subcategories: [],
     collections: [],
+    vendors: [],
   });
   const [commissions, setCommissions] = useState([]);
   const [scope, setScope] = useState("all");
   const [categoryId, setCategoryId] = useState("");
   const [subCategoryId, setSubCategoryId] = useState("");
   const [collectionId, setCollectionId] = useState("");
+  const [vendorId, setVendorId] = useState("");
   const [percentage, setPercentage] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -279,7 +283,10 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   const [editing, setEditing] = useState(null);
   const [editBusy, setEditBusy] = useState(false);
   const [editMessage, setEditMessage] = useState("");
-  const [platformName, setPlatformName] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editImage, setEditImage] = useState("");
+  const [tab, setTab] = useState("products");
 
   const subcategories = useMemo(
     () =>
@@ -303,9 +310,10 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     return api.adminPlatform(partnerSlug).then((detail) => {
       const next = detail.platform || detail.partner || null;
       setPartner(next);
-      setPlatformName(next?.name || "");
       setCommissions(detail.commissions || []);
-      setTargets(detail.targets || { categories: [], subcategories: [], collections: [] });
+      setTargets(
+        detail.targets || { categories: [], subcategories: [], collections: [], vendors: [] }
+      );
     });
   }
 
@@ -338,6 +346,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     setCategoryId("");
     setSubCategoryId("");
     setCollectionId("");
+    setVendorId("");
     setPercentage("");
   }
 
@@ -352,6 +361,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           : ""
     );
     setCollectionId(rule.scope === "collection" ? rule.targetId : "");
+    setVendorId(rule.scope === "vendor" ? rule.targetId : "");
     setPercentage(String(rule.percentage));
   }
 
@@ -359,6 +369,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     if (scope === "all") return "*";
     if (scope === "category") return categoryId;
     if (scope === "subcategory") return subCategoryId;
+    if (scope === "vendor") return vendorId;
     return collectionId;
   }
 
@@ -368,11 +379,13 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     const rate = Number(percentage);
     if (scope !== "all" && !targetId) {
       setError(
-        scope === "collection"
-          ? t.selectCollection
-          : scope === "subcategory"
-            ? t.selectSubCategory
-            : t.selectCategory
+        scope === "vendor"
+          ? t.selectVendor
+          : scope === "collection"
+            ? t.selectCollection
+            : scope === "subcategory"
+              ? t.selectSubCategory
+              : t.selectCategory
       );
       return;
     }
@@ -482,94 +495,158 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   const example = `GET ${partner.catalogUrl}?page=1&limit=100\nX-API-Key: ${plainKey || partner.apiKeyPrefix || "bs_****"}`;
 
   return (
-    <div>
+    <div className="min-w-0">
       <Link
         to="/admin/platforms"
         className="text-sm font-semibold text-brown/50 hover:text-brown"
       >
         ← {t.backToPlatforms}
       </Link>
-      <div className="mt-3 mb-6 flex items-center gap-4">
+      <div className="mt-3 mb-6 flex w-full min-w-0 items-center gap-4">
         <PartnerLogo image={partner.image} name={partner.name} className="h-16 w-16" />
         <div className="min-w-0 flex-1">
           <h2 className="font-display text-3xl">{partner.name}</h2>
           <p className="mt-1 text-sm text-brown/50">{t.commissionSignHint}</p>
         </div>
+        <button
+          type="button"
+          onClick={() => {
+            setError("");
+            setEditName(partner.name || "");
+            setEditImage(partner.image || "");
+            setEditOpen(true);
+          }}
+          className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-white text-brown shadow-sm ring-1 ring-brown/10 transition hover:bg-cream"
+          aria-label={t.editPlatform}
+        >
+          <Pencil className="h-5 w-5" strokeWidth={2} />
+        </button>
       </div>
 
-      <form
-        className="mb-6 flex flex-wrap items-end gap-3 rounded-3xl bg-white p-4 ring-1 ring-brown/5"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          setBusy(true);
-          setError("");
-          try {
-            const data = await api.patchPlatform(partnerSlug, { name: platformName });
-            setPartner(data.platform);
-            setMessage(t.platformSaved);
-          } catch (err) {
-            setError(err.message);
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        <div className="min-w-[12rem] flex-1">
-          <label className="mb-1 block text-xs font-semibold text-brown/50">{t.platformName}</label>
-          <input
-            value={platformName}
-            onChange={(e) => setPlatformName(e.target.value)}
-            className={SELECT}
-          />
-        </div>
-        <label className="cursor-pointer rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown">
-          {t.platformImage}
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
+      {editOpen ? (
+        <AdminModal
+          onClose={() => {
+            if (!busy) setEditOpen(false);
+          }}
+        >
+          <form
+            className="mx-auto w-full max-w-md rounded-3xl bg-white p-6 shadow-xl ring-1 ring-brown/10"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              if (!editName.trim()) return;
               setBusy(true);
+              setError("");
               try {
-                const data = await api.patchPlatform(partnerSlug, { image: await readFile(file) });
+                const patch = { name: editName.trim() };
+                if (typeof editImage === "string" && editImage.startsWith("data:")) {
+                  patch.image = editImage;
+                }
+                const data = await api.patchPlatform(partnerSlug, patch);
                 setPartner(data.platform);
+                setMessage(t.platformSaved);
+                setEditOpen(false);
               } catch (err) {
                 setError(err.message);
               } finally {
                 setBusy(false);
               }
             }}
-          />
-        </label>
-        <button type="submit" disabled={busy} className="rounded-full bg-brown px-4 py-2.5 text-sm font-semibold text-cream">
-          {t.save}
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={async () => {
-            if (!window.confirm(t.deletePlatformConfirm)) return;
-            setBusy(true);
-            try {
-              await api.deletePlatform(partnerSlug);
-              window.location.assign("/admin/platforms");
-            } catch (err) {
-              setError(err.message);
-              setBusy(false);
-            }
-          }}
-          className="rounded-full bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-800"
-        >
-          {t.deletePlatform}
-        </button>
-      </form>
+          >
+            <h3 className="font-display text-2xl">{t.editPlatform}</h3>
+            {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
+            <label className="mt-5 mb-1 block text-xs font-semibold text-brown/50">
+              {t.platformName}
+            </label>
+            <input
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              className={SELECT}
+              autoFocus
+              required
+            />
+            <div className="mt-4 flex items-center gap-3">
+              <PartnerLogo image={editImage} name={editName} className="h-14 w-14" />
+              <label className="cursor-pointer rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown">
+                {editImage ? t.platformImageReady : t.platformImage}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!file) return;
+                    try {
+                      setEditImage(await readFile(file));
+                    } catch (err) {
+                      setError(err.message);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+            <div className="mt-6 flex gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setEditOpen(false)}
+                className="flex-1 rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown"
+              >
+                {t.cancel}
+              </button>
+              <button
+                type="submit"
+                disabled={busy || !editName.trim()}
+                className="flex-1 rounded-full bg-brown px-4 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
+              >
+                {t.save}
+              </button>
+            </div>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                if (!window.confirm(t.deletePlatformConfirm)) return;
+                setBusy(true);
+                try {
+                  await api.deletePlatform(partnerSlug);
+                  window.location.assign("/admin/platforms");
+                } catch (err) {
+                  setError(err.message);
+                  setBusy(false);
+                }
+              }}
+              className="mt-3 w-full rounded-full bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-800"
+            >
+              {t.deletePlatform}
+            </button>
+          </form>
+        </AdminModal>
+      ) : null}
 
-      {error ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
+      <div className="mb-6 grid grid-cols-2 gap-1 rounded-full bg-white p-1 shadow-sm ring-1 ring-brown/5">
+        {[
+          { id: "products", label: t.products },
+          { id: "api", label: t.partnerApi },
+        ].map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setTab(item.id)}
+            className={`rounded-full px-4 py-2.5 text-sm font-semibold transition ${
+              tab === item.id ? "bg-brown text-cream" : "text-brown/55 hover:text-brown"
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {error && !editOpen ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
       {message ? <p className="mb-4 text-sm text-brown/70">{message}</p> : null}
 
-      <section className="mb-6 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
+      {tab === "api" ? (
+      <section className="mb-6 min-w-0 overflow-hidden rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
         <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
           {t.partnerApi}
         </p>
@@ -615,6 +692,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           )}
         </div>
       </section>
+      ) : null}
 
       {pinOpen ? (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
@@ -674,127 +752,155 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         </div>
       ) : null}
 
-      <div className="grid items-start gap-6 xl:grid-cols-[22rem_minmax(0,1fr)]">
+      {tab === "products" ? (
+      <>
+      <div className="space-y-6">
         <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
           <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
             {t.addCommission}
           </p>
-          <form onSubmit={onSave} className="mt-5 space-y-4">
-            <div className="grid grid-cols-2 gap-1 rounded-3xl bg-cream p-1 sm:grid-cols-4 sm:rounded-full">
-              {SCOPES.map((item) => (
+          <form onSubmit={onSave} className="mt-4 space-y-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="shrink-0">
+                <div className="flex flex-wrap gap-1 rounded-[1.25rem] bg-cream p-1 sm:rounded-full">
+                  {SCOPES.map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      onClick={() => {
+                        setScope(item);
+                        setCategoryId("");
+                        setSubCategoryId("");
+                        setCollectionId("");
+                        setVendorId("");
+                      }}
+                      className={`rounded-full px-3 py-2 text-[11px] font-semibold sm:px-4 sm:text-xs ${
+                        scope === item ? "bg-brown text-cream" : "text-brown/60"
+                      }`}
+                    >
+                      {scopeLabel(t, item)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="ms-auto flex items-end gap-3">
+                <div className="w-28 shrink-0">
+                  <label className="mb-1 block text-xs font-semibold text-brown/50">
+                    {t.commissionPercentage}
+                  </label>
+                  <input
+                    type="number"
+                    min="-99"
+                    max="500"
+                    step="0.1"
+                    required
+                    dir="ltr"
+                    placeholder="+10 / -10"
+                    value={percentage}
+                    onChange={(e) => setPercentage(e.target.value)}
+                    className={`${CONTROL} w-full font-medium tabular-nums`}
+                  />
+                </div>
                 <button
-                  key={item}
-                  type="button"
-                  onClick={() => {
-                    setScope(item);
-                    setSubCategoryId("");
-                    setCollectionId("");
-                    if (item === "all" || item === "category") {
+                  type="submit"
+                  disabled={busy}
+                  className="shrink-0 rounded-full bg-brown px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
+                >
+                  {t.save}
+                </button>
+              </div>
+            </div>
+
+            {scope === "vendor" ? (
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-brown/50">
+                  {t.vendor}
+                </label>
+                <select
+                  value={vendorId}
+                  onChange={(e) => setVendorId(e.target.value)}
+                  className={`${SELECT} max-w-xl`}
+                >
+                  <option value="">{t.selectVendor}</option>
+                  {(targets.vendors || []).map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {optionLabel(item, lang)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : scope !== "all" ? (
+              <div
+                className={`grid gap-3 ${
+                  scope === "collection" ? "sm:grid-cols-3" : "sm:grid-cols-2"
+                }`}
+              >
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-brown/50">
+                    {t.category}
+                  </label>
+                  <select
+                    value={categoryId}
+                    onChange={(e) => {
+                      setCategoryId(e.target.value);
                       setSubCategoryId("");
                       setCollectionId("");
-                    }
-                  }}
-                  className={`rounded-full px-1 py-2 text-[11px] font-semibold sm:text-xs ${
-                    scope === item ? "bg-brown text-cream" : "text-brown/60"
-                  }`}
-                >
-                  {scopeLabel(t, item)}
-                </button>
-              ))}
-            </div>
+                    }}
+                    className={SELECT}
+                  >
+                    <option value="">{t.selectCategory}</option>
+                    {(targets.categories || []).map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {optionLabel(item, lang)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-            {scope !== "all" ? (
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-brown/50">
-                  {t.category}
-                </label>
-                <select
-                  value={categoryId}
-                  onChange={(e) => {
-                    setCategoryId(e.target.value);
-                    setSubCategoryId("");
-                    setCollectionId("");
-                  }}
-                  className={SELECT}
-                >
-                  <option value="">{t.selectCategory}</option>
-                  {(targets.categories || []).map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {optionLabel(item, lang)}
-                    </option>
-                  ))}
-                </select>
+                {scope === "subcategory" || scope === "collection" ? (
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-brown/50">
+                      {t.subCategory}
+                    </label>
+                    <select
+                      value={subCategoryId}
+                      onChange={(e) => {
+                        setSubCategoryId(e.target.value);
+                        setCollectionId("");
+                      }}
+                      className={SELECT}
+                    >
+                      <option value="">{t.selectSubCategory}</option>
+                      {subcategories.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {optionLabel(item, lang)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+
+                {scope === "collection" ? (
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-brown/50">
+                      {t.collection}
+                    </label>
+                    <select
+                      value={collectionId}
+                      onChange={(e) => setCollectionId(e.target.value)}
+                      className={SELECT}
+                    >
+                      <option value="">{t.selectCollection}</option>
+                      {collections.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {optionLabel(item, lang)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
               </div>
             ) : null}
-
-            {scope === "subcategory" || scope === "collection" ? (
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-brown/50">
-                  {t.subCategory}
-                </label>
-                <select
-                  value={subCategoryId}
-                  onChange={(e) => {
-                    setSubCategoryId(e.target.value);
-                    setCollectionId("");
-                  }}
-                  className={SELECT}
-                >
-                  <option value="">{t.selectSubCategory}</option>
-                  {subcategories.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {optionLabel(item, lang)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
-
-            {scope === "collection" ? (
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-brown/50">
-                  {t.collection}
-                </label>
-                <select
-                  value={collectionId}
-                  onChange={(e) => setCollectionId(e.target.value)}
-                  className={SELECT}
-                >
-                  <option value="">{t.selectCollection}</option>
-                  {collections.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {optionLabel(item, lang)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
-
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-brown/50">
-                {t.commissionPercentage}
-              </label>
-              <input
-                type="number"
-                min="-99"
-                max="500"
-                step="0.1"
-                required
-                dir="ltr"
-                placeholder="+10 / -10"
-                value={percentage}
-                onChange={(e) => setPercentage(e.target.value)}
-                className={`${SELECT} font-medium tabular-nums`}
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={busy}
-              className="w-full rounded-full bg-brown px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
-            >
-              {t.save}
-            </button>
           </form>
         </section>
 
@@ -803,12 +909,9 @@ function PartnerCommission({ partnerSlug, t, lang }) {
             {t.existingCommissions}
           </p>
           {commissions.length ? (
-            <div className="mt-5 grid gap-3">
+            <div className="mt-4 divide-y divide-brown/5">
               {commissions.map((rule) => (
-                <article
-                  key={rule.id}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-cream p-4 ring-1 ring-brown/5"
-                >
+                <article key={rule.id} className="flex items-center gap-3 py-3">
                   <button
                     type="button"
                     onClick={() => fillFromRule(rule)}
@@ -817,21 +920,21 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                     <p className="text-[11px] font-semibold tracking-wide text-tan uppercase">
                       {scopeLabel(t, rule.scope)}
                     </p>
-                    <p className="mt-1 truncate font-medium">
+                    <p className="mt-0.5 truncate font-medium">
                       {rule.scope === "all"
                         ? t.allProducts
                         : tName(rule.targetName, lang) || rule.targetId}
                     </p>
                   </button>
                   <p
-                    className={`font-display text-2xl tabular-nums ${
+                    className={`shrink-0 font-display text-xl tabular-nums ${
                       Number(rule.percentage) < 0 ? "text-red-800" : ""
                     }`}
                     dir="ltr"
                   >
                     {formatRate(rule.percentage)}
                   </p>
-                  <div className="flex items-center gap-2">
+                  <div className="flex shrink-0 items-center gap-2">
                     <button
                       type="button"
                       disabled={busy}
@@ -857,7 +960,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
               ))}
             </div>
           ) : (
-            <p className="mt-5 text-sm text-brown/45">{t.noCommissions}</p>
+            <p className="mt-4 text-sm text-brown/45">{t.noCommissions}</p>
           )}
         </section>
       </div>
@@ -911,6 +1014,8 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           ))}
         </div>
       </section>
+      </>
+      ) : null}
 
       {editing ? (
         <ProductEditor

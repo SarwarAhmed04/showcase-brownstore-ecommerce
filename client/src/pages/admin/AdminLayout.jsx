@@ -217,7 +217,7 @@ export default function AdminLayout() {
         </div>
       </aside>
 
-      <div className="lg:ms-[15.5rem]">
+      <div className="min-w-0 lg:ms-[15.5rem]">
         <header className="sticky top-0 z-30 flex h-16 items-center gap-3 bg-[#faf4ec]/90 px-5 backdrop-blur-md md:px-8">
           <div className="flex shrink-0 items-center gap-2">
             <button

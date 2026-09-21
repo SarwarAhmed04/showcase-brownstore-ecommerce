@@ -34,6 +34,7 @@ function scopeLabel(t, scope) {
   if (scope === "all") return t.allCommission;
   if (scope === "subcategory") return t.subCategory;
   if (scope === "collection") return t.collection;
+  if (scope === "vendor") return t.vendor;
   return t.category;
 }
 

@@ -13,6 +13,7 @@ export const ALL_TARGET_NAME = {
 };
 
 const SCOPE_RANK = {
+  vendor: 4,
   collection: 3,
   subcategory: 2,
   category: 1,
@@ -20,10 +21,15 @@ const SCOPE_RANK = {
 };
 
 function localizedName(name) {
+  if (typeof name === "string") {
+    const value = name.trim();
+    return { ku: value, en: value, ar: value };
+  }
+  const fallback = String(name?.en || name?.ku || name?.ar || "").trim();
   return {
-    ku: String(name?.ku || ""),
-    en: String(name?.en || ""),
-    ar: String(name?.ar || ""),
+    ku: String(name?.ku || fallback),
+    en: String(name?.en || fallback),
+    ar: String(name?.ar || fallback),
   };
 }
 
@@ -58,7 +64,7 @@ function mapRows(rows) {
 }
 
 export async function commissionTargets() {
-  const [categories, subcategories, collections] = await Promise.all([
+  const [categories, subcategories, collections, vendors] = await Promise.all([
     Product.aggregate([
       { $match: { "category._id": { $exists: true, $ne: null } } },
       {
@@ -105,12 +111,24 @@ export async function commissionTargets() {
       },
       { $sort: { "name.en": 1, "name.ku": 1 } },
     ]),
+    Product.aggregate([
+      { $match: { "createdBy._id": { $exists: true, $ne: null } } },
+      {
+        $group: {
+          _id: { $toString: "$createdBy._id" },
+          name: { $first: "$createdBy.name" },
+          products: { $sum: 1 },
+        },
+      },
+      { $sort: { name: 1 } },
+    ]),
   ]);
 
   return {
     categories: mapRows(categories),
     subcategories: mapRows(subcategories),
     collections: mapRows(collections),
+    vendors: mapRows(vendors),
   };
 }
 
@@ -123,7 +141,9 @@ export function findTarget(targets, scope, targetId) {
       ? targets.categories
       : scope === "subcategory"
         ? targets.subcategories
-        : targets.collections;
+        : scope === "vendor"
+          ? targets.vendors
+          : targets.collections;
   return list.find((item) => item.id === String(targetId)) || null;
 }
 
@@ -145,6 +165,7 @@ export function resolveCommissionRate(product, rules) {
   const collectionId = entityId(raw.collectionName);
   const subCategoryId = entityId(raw.subCategory);
   const categoryId = entityId(raw.category);
+  const vendorId = entityId(raw.createdBy);
 
   const active = (rules || []).filter((rule) => rule.isActive !== false);
   const ranked = active
@@ -153,6 +174,9 @@ export function resolveCommissionRate(product, rules) {
     .sort((a, b) => b.rank - a.rank);
 
   for (const { rule } of ranked) {
+    if (rule.scope === "vendor" && vendorId && rule.targetId === vendorId) {
+      return Number.isFinite(Number(rule.percentage)) ? Number(rule.percentage) : 0;
+    }
     if (rule.scope === "collection" && collectionId && rule.targetId === collectionId) {
       return Number.isFinite(Number(rule.percentage)) ? Number(rule.percentage) : 0;
     }
