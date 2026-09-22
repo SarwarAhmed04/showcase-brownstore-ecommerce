@@ -224,6 +224,170 @@ function PartnerCards({ t }) {
   );
 }
 
+const CHANGE_FIELDS = [
+  ["sku", "sku"],
+  ["price", "price"],
+  ["discountPrice", "discountPrice"],
+  ["stock", "stock"],
+  ["outOfStock", "outOfStock"],
+  ["isActive", "status"],
+  ["name", "productName"],
+  ["description", "description"],
+  ["brand", "productBrand"],
+  ["category", "category"],
+  ["subCategory", "subCategory"],
+  ["collectionName", "collection"],
+  ["variants", "variants"],
+  ["warranty", "warranty"],
+  ["keyword", "keywords"],
+  ["badge", "badge"],
+  ["is_featured", "featured"],
+  ["is_new_arrival", "newArrivals"],
+  ["is_hot", "hot"],
+  ["is_best_seller", "bestSeller"],
+];
+
+function isOverrideSet(key, snap) {
+  if (key === "outOfStock") return snap.outOfStock === true;
+  const value = snap[key];
+  if (value == null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return true;
+}
+
+function sourceFieldValue(source, key) {
+  if (!source) return null;
+  if (key === "sku") return source.sku || source.itemCode || "";
+  if (key === "price") return Number(source.sellingPrice ?? source.price ?? 0);
+  if (key === "discountPrice") return Number(source.discountPrice || 0);
+  if (key === "stock") return Number(source.stock || 0);
+  if (key === "outOfStock") return Boolean(source.outOfStock);
+  if (key === "isActive") return source.isActive !== false;
+  if (["is_featured", "is_new_arrival", "is_hot", "is_best_seller"].includes(key)) {
+    return Boolean(source[key]);
+  }
+  return source[key] ?? null;
+}
+
+function formatChangeValue(field, value, t, lang) {
+  if (value == null || value === "") return "—";
+  if (field === "price" || field === "discountPrice") {
+    return formatGrouped(value) || "0";
+  }
+  if (field === "outOfStock") return value ? t.outOfStock : t.inStock;
+  if (field === "isActive") return value ? t.commissionActive : t.commissionInactive;
+  if (["is_featured", "is_new_arrival", "is_hot", "is_best_seller"].includes(field)) {
+    return value ? t.yes : t.no;
+  }
+  if (field === "name" || field === "description" || field === "warranty") {
+    if (typeof value === "object") {
+      return tName(value, lang) || Object.values(value).filter(Boolean).join(" · ") || "—";
+    }
+    return String(value);
+  }
+  if (["brand", "category", "subCategory", "collectionName"].includes(field)) {
+    return tName(value?.name, lang) || "—";
+  }
+  if (field === "keyword") {
+    return Array.isArray(value) ? value.filter(Boolean).join(", ") || "—" : String(value);
+  }
+  if (field === "variants") {
+    const count = Array.isArray(value) ? value.length : 0;
+    return `${count} ${t.variants}`;
+  }
+  return String(value);
+}
+
+function listPlatformChanges(item, t, lang) {
+  const snap = item?.platformOverrides || item?.overrides || {};
+  const source = item?.source || {};
+  return CHANGE_FIELDS.filter(([key]) => isOverrideSet(key, snap)).map(([key, labelKey]) => ({
+    field: key,
+    label: t[labelKey] || key,
+    from: formatChangeValue(key, sourceFieldValue(source, key), t, lang),
+    to: formatChangeValue(key, snap[key], t, lang),
+  }));
+}
+
+function PlatformProductRow({ item, t, lang, onEdit, onMessage, showCustomized }) {
+  return (
+    <div className="flex items-center gap-3 py-3">
+      <img
+        src={imgUrl(item.image) || "/logo.png"}
+        alt=""
+        className="h-12 w-12 rounded-xl bg-cream object-cover"
+      />
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-medium">{tName(item.name, lang)}</p>
+        <p className="text-xs text-brown/45">
+          {item.sku || "—"} ·{" "}
+          {item.customPrice && item.storePrice != null
+            ? `${formatGrouped(item.storePrice)} → ${formatGrouped(item.platformPrice || 0)}`
+            : formatGrouped(item.platformPrice || item.sellingPrice || 0)}
+          {showCustomized && item.customized ? ` · ${t.customizedCount}` : ""}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {onMessage ? (
+          <button
+            type="button"
+            onClick={onMessage}
+            className="rounded-full bg-cream px-3 py-1.5 text-xs font-semibold text-brown"
+          >
+            {t.changeMessage}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={onEdit}
+          className="rounded-full bg-brown px-3 py-1.5 text-xs font-semibold text-cream"
+        >
+          {t.editProduct}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ChangeMessageDialog({ item, t, lang, onClose }) {
+  const changes = listPlatformChanges(item, t, lang);
+  return (
+    <AdminModal onClose={onClose}>
+      <div className="mx-auto w-full max-w-lg rounded-3xl bg-white p-6 shadow-xl ring-1 ring-brown/10">
+        <h3 className="font-display text-2xl">{t.changeMessageTitle}</h3>
+        <p className="mt-1 truncate text-sm font-medium">{tName(item.name, lang)}</p>
+        <p className="mt-2 text-sm text-brown/50">{t.changeMessageHint}</p>
+        {changes.length ? (
+          <div className="mt-5 divide-y divide-brown/5">
+            {changes.map((row) => (
+              <article key={row.field} className="py-3">
+                <p className="text-[11px] font-semibold tracking-wide text-tan uppercase">
+                  {row.label}
+                </p>
+                <p className="mt-1 text-sm">
+                  <span className="text-brown/45">{row.from}</span>
+                  <span className="mx-2 text-brown/30">→</span>
+                  <span className="font-semibold">{row.to}</span>
+                </p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-5 text-sm text-brown/45">{t.noChangeDetails}</p>
+        )}
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-6 w-full rounded-full bg-brown px-4 py-2.5 text-sm font-semibold text-cream"
+        >
+          {t.close}
+        </button>
+      </div>
+    </AdminModal>
+  );
+}
+
 function CopyField({ label, value, t }) {
   const [copied, setCopied] = useState(false);
   if (!value) return null;
@@ -280,8 +444,15 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState("");
   const [products, setProducts] = useState({ products: [], pagination: { pages: 1, total: 0 } });
+  const [customized, setCustomized] = useState({
+    products: [],
+    pagination: { page: 1, pages: 1, total: 0 },
+  });
   const [productQ, setProductQ] = useState("");
+  const [customQ, setCustomQ] = useState("");
+  const [customPage, setCustomPage] = useState(1);
   const [editing, setEditing] = useState(null);
+  const [messageProduct, setMessageProduct] = useState(null);
   const [editBusy, setEditBusy] = useState(false);
   const [editMessage, setEditMessage] = useState("");
   const [editOpen, setEditOpen] = useState(false);
@@ -322,8 +493,42 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     return api.adminPlatformProducts(partnerSlug, { q: productQ, limit: 20 }).then(setProducts);
   }
 
+  function loadCustomized() {
+    return api
+      .adminPlatformProducts(partnerSlug, {
+        q: customQ,
+        limit: 20,
+        page: customPage,
+        customized: 1,
+      })
+      .then((data) => {
+        setCustomized(data);
+        const pages = Number(data.pagination?.pages) || 1;
+        setCustomPage((current) => (current > pages ? pages : current));
+      });
+  }
+
   function load() {
-    return Promise.all([loadDetail(), loadProducts()]);
+    return Promise.all([loadDetail(), loadProducts(), loadCustomized()]);
+  }
+
+  async function openPlatformProduct(item) {
+    setEditMessage("");
+    try {
+      const data = await api.adminPlatformProduct(partnerSlug, item.id);
+      setEditing(data.product || item);
+    } catch {
+      setEditing(item);
+    }
+  }
+
+  async function openChangeMessage(item) {
+    try {
+      const data = await api.adminPlatformProduct(partnerSlug, item.id);
+      setMessageProduct(data.product || item);
+    } catch {
+      setMessageProduct(item);
+    }
   }
 
   useEffect(() => {
@@ -331,6 +536,10 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     setPlainKey("");
     setError("");
     setMessage("");
+    setCustomPage(1);
+    setCustomQ("");
+    setProductQ("");
+    setTab("products");
     loadDetail()
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -342,6 +551,13 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     }, 220);
     return () => clearTimeout(id);
   }, [partnerSlug, productQ]);
+
+  useEffect(() => {
+    const id = setTimeout(() => {
+      loadCustomized().catch(() => {});
+    }, 220);
+    return () => clearTimeout(id);
+  }, [partnerSlug, customQ, customPage]);
 
   function resetForm() {
     setCategoryId("");
@@ -625,20 +841,22 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         </AdminModal>
       ) : null}
 
-      <div className="mb-6 grid grid-cols-2 gap-1 rounded-full bg-white p-1 shadow-sm ring-1 ring-brown/5">
+      <div className="mb-6 grid grid-cols-3 gap-1 rounded-full bg-white p-1 shadow-sm ring-1 ring-brown/5">
         {[
           { id: "products", label: t.products },
+          { id: "customized", label: t.customizedProducts, count: partner.customizedCount || 0 },
           { id: "api", label: t.partnerApi },
         ].map((item) => (
           <button
             key={item.id}
             type="button"
             onClick={() => setTab(item.id)}
-            className={`rounded-full px-4 py-2.5 text-sm font-semibold transition ${
+            className={`rounded-full px-2 py-2.5 text-xs font-semibold transition sm:px-4 sm:text-sm ${
               tab === item.id ? "bg-brown text-cream" : "text-brown/55 hover:text-brown"
             }`}
           >
             {item.label}
+            {item.count ? ` (${item.count})` : ""}
           </button>
         ))}
       </div>
@@ -983,39 +1201,88 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         </div>
         <div className="mt-5 divide-y divide-brown/5">
           {(products.products || []).map((item) => (
-            <div key={item.id} className="flex items-center gap-3 py-3">
-              <img
-                src={imgUrl(item.image) || "/logo.png"}
-                alt=""
-                className="h-12 w-12 rounded-xl bg-cream object-cover"
-              />
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-medium">{tName(item.name, lang)}</p>
-                <p className="text-xs text-brown/45">
-                  {item.sku || "—"} · {formatGrouped(item.platformPrice || item.sellingPrice || 0)}
-                  {item.customized ? ` · ${t.customizedCount}` : ""}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={async () => {
-                  setEditMessage("");
-                  try {
-                    const data = await api.adminPlatformProduct(partnerSlug, item.id);
-                    setEditing(data.product || item);
-                  } catch {
-                    setEditing(item);
-                  }
-                }}
-                className="rounded-full bg-brown px-3 py-1.5 text-xs font-semibold text-cream"
-              >
-                {t.editProduct}
-              </button>
-            </div>
+            <PlatformProductRow
+              key={item.id}
+              item={item}
+              t={t}
+              lang={lang}
+              showCustomized
+              onEdit={() => openPlatformProduct(item)}
+            />
           ))}
         </div>
       </section>
       </>
+      ) : null}
+
+      {tab === "customized" ? (
+        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
+                {t.customizedProducts}
+              </p>
+              <p className="mt-1 text-sm text-brown/50">{t.customizedProductsHint}</p>
+            </div>
+            <input
+              value={customQ}
+              onChange={(e) => {
+                setCustomPage(1);
+                setCustomQ(e.target.value);
+              }}
+              placeholder={t.search}
+              className="rounded-full border border-brown/10 bg-cream px-4 py-2 text-sm"
+            />
+          </div>
+          {(customized.products || []).length ? (
+            <div className="mt-5 divide-y divide-brown/5">
+              {(customized.products || []).map((item) => (
+                <PlatformProductRow
+                  key={item.id}
+                  item={item}
+                  t={t}
+                  lang={lang}
+                  onEdit={() => openPlatformProduct(item)}
+                  onMessage={() => openChangeMessage(item)}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="mt-8 text-sm text-brown/45">{t.noCustomizedProducts}</p>
+          )}
+          {customized.pagination?.pages > 1 ? (
+            <div className="mt-4 flex justify-center gap-2">
+              {Array.from({ length: customized.pagination.pages }, (_, i) => i + 1)
+                .filter(
+                  (n) =>
+                    n === 1 ||
+                    n === customized.pagination.pages ||
+                    Math.abs(n - customPage) <= 2
+                )
+                .map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setCustomPage(n)}
+                    className={`h-9 min-w-9 rounded-full ${
+                      n === customPage ? "bg-brown text-cream" : "bg-cream"
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {messageProduct ? (
+        <ChangeMessageDialog
+          item={messageProduct}
+          t={t}
+          lang={lang}
+          onClose={() => setMessageProduct(null)}
+        />
       ) : null}
 
       {editing ? (

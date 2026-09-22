@@ -241,20 +241,22 @@ export default function Catalog({
   )
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[260px_1fr]">
+    <div className="grid gap-8 lg:grid-cols-[260px_1fr] lg:items-start">
       {isDesktop && (
-        <aside className="hidden lg:block">
-          <div className="glass sticky top-[190px] rounded-card p-6">
-            <h2 className="mb-5 flex items-center gap-2 text-sm font-bold">
+        <aside className="hidden lg:sticky lg:top-[7.25rem] lg:block lg:h-[calc(100dvh-7.75rem)] lg:self-start">
+          <div className="glass flex h-full flex-col overflow-hidden rounded-card p-6">
+            <h2 className="mb-5 flex shrink-0 items-center gap-2 text-sm font-bold">
               <SlidersHorizontal className="size-4 text-primary" /> {t.filters}
             </h2>
-            {filters}
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+              {filters}
+            </div>
           </div>
         </aside>
       )}
 
-      <div>
-        <div className="glass mb-6 flex flex-wrap items-center gap-3 rounded-card px-4 py-3">
+      <div className="min-w-0 lg:sticky lg:top-[7.25rem] lg:flex lg:h-[calc(100dvh-7.75rem)] lg:flex-col lg:self-start">
+        <div className="glass mb-3 flex shrink-0 flex-wrap items-center gap-3 rounded-card px-4 py-3">
           {!isDesktop && (
             <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
               <SheetTrigger asChild>
@@ -320,6 +322,9 @@ export default function Catalog({
           </div>
         </div>
 
+        <div className="relative min-h-0 lg:flex lg:flex-1 lg:flex-col">
+        <div className="hidden h-px shrink-0 bg-[rgb(var(--stroke)/0.14)] lg:block" />
+        <div className="min-h-0 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain">
         {loading ? (
           <PageSkeleton />
         ) : shown.length === 0 ? (
@@ -353,9 +358,11 @@ export default function Catalog({
             ))}
           </div>
         )}
+        </div>
+        <div className="hidden h-px shrink-0 bg-[rgb(var(--stroke)/0.14)] lg:block" />
 
         {remote && remotePages > 1 && !loading && (
-          <div className="mt-8 flex flex-wrap items-center justify-center gap-2">
+          <div className="mt-4 flex shrink-0 flex-wrap items-center justify-center gap-2">
             <Button
               type="button"
               variant="glass"
@@ -376,6 +383,7 @@ export default function Catalog({
             </Button>
           </div>
         )}
+        </div>
       </div>
     </div>
   )

@@ -612,14 +612,40 @@ async function loadPartnerOr404(slug, res) {
   return partner;
 }
 
+function wantsCustomizedOnly(query) {
+  return ["1", "true", "yes"].includes(String(query?.customized || "").trim().toLowerCase());
+}
+
+function customizedProductMatches(product, overrides, q) {
+  const name = product.name || {};
+  const overName = overrides.name || {};
+  const hay = [
+    name.ku,
+    name.en,
+    name.ar,
+    product.itemCode,
+    product.overrides?.sku,
+    overrides.sku,
+    overName.ku,
+    overName.en,
+    overName.ar,
+  ];
+  return hay.some((value) => String(value || "").toLowerCase().includes(q));
+}
+
 async function partnerCounts() {
-  const [ruleCounts, customCounts] = await Promise.all([
+  const [ruleCounts, customRows] = await Promise.all([
     Commission.aggregate([{ $group: { _id: "$partner", rules: { $sum: 1 } } }]),
-    PlatformProduct.aggregate([{ $group: { _id: "$partner", customized: { $sum: 1 } } }]),
+    PlatformProduct.find({}, { partner: 1, overrides: 1 }).lean(),
   ]);
+  const customized = {};
+  for (const row of customRows) {
+    if (!hasCustomOverrides(row.overrides)) continue;
+    customized[row.partner] = (customized[row.partner] || 0) + 1;
+  }
   return {
     rules: Object.fromEntries(ruleCounts.map((row) => [row._id, row.rules])),
-    customized: Object.fromEntries(customCounts.map((row) => [row._id, row.customized])),
+    customized,
   };
 }
 
@@ -782,14 +808,60 @@ adminRouter.get("/platforms/:slug/products", async (req, res) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
     const filter = adminProductFilter(req.query);
-    const [items, total, facets, rules] = await Promise.all([
+    const [facets, rules] = await Promise.all([
+      productFacets(),
+      Commission.find({ partner: partner.slug, isActive: { $ne: false } }),
+    ]);
+
+    if (wantsCustomizedOnly(req.query)) {
+      const q = String(req.query.q || "").trim().toLowerCase();
+      const customRows = await PlatformProduct.find({ partner: partner.slug }).sort({
+        updatedAt: -1,
+      });
+      const edited = customRows.filter((row) => hasCustomOverrides(row.overrides));
+      if (!edited.length) {
+        return res.json({
+          platform: toAdminPartner(partner, req),
+          products: [],
+          pagination: { page, limit, total: 0, pages: 1 },
+          facets,
+        });
+      }
+      const matched = await Product.find({
+        _id: { $in: edited.map((row) => row.product) },
+      });
+      const matchedMap = new Map(matched.map((item) => [String(item._id), item]));
+      const ordered = edited
+        .map((row) => {
+          const item = matchedMap.get(String(row.product));
+          if (!item) return null;
+          if (q && !customizedProductMatches(item, row.overrides || {}, q)) return null;
+          return { item, overrides: row.overrides || {} };
+        })
+        .filter(Boolean);
+      const total = ordered.length;
+      const pageItems = ordered.slice((page - 1) * limit, page * limit);
+      return res.json({
+        platform: toAdminPartner(partner, req),
+        products: pageItems.map(({ item, overrides }) =>
+          toPlatformProductDto(item, overrides, rules)
+        ),
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit) || 1,
+        },
+        facets,
+      });
+    }
+
+    const [items, total] = await Promise.all([
       Product.find(filter)
         .sort({ updatedAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit),
       Product.countDocuments(filter),
-      productFacets(),
-      Commission.find({ partner: partner.slug, isActive: { $ne: false } }),
     ]);
     const rows = await PlatformProduct.find({
       partner: partner.slug,
