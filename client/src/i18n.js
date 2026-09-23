@@ -1421,13 +1421,13 @@ export const translations = {
   },
 };
 
-export function tName(obj, lang = "ku") {
+export function tName(obj, lang = "ar") {
   if (!obj) return "";
   if (typeof obj === "string") return obj;
   return obj[lang] || obj.ku || obj.en || obj.ar || "";
 }
 
-export function formatPrice(value, lang = "ku") {
+export function formatPrice(value, lang = "ar") {
   if (value == null || Number.isNaN(Number(value))) return "—";
   const locale = lang === "ar" ? "ar-IQ" : "en-US";
   return `${Number(value).toLocaleString(locale)} ${translations[lang]?.iq || "IQD"}`;

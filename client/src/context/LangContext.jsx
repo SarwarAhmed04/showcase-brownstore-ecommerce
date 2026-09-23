@@ -6,7 +6,7 @@ const LangContext = createContext(null);
 
 export function LangProvider({ children }) {
   const [lang, setLang] = useState(
-    () => getCookie("brownstore_lang") || "ku"
+    () => getCookie("brownstore_lang") || "ar"
   );
 
   useEffect(() => {
@@ -19,7 +19,7 @@ export function LangProvider({ children }) {
     () => ({
       lang,
       setLang,
-      t: translations[lang] || translations.ku,
+      t: translations[lang] || translations.ar,
       dir: lang === "en" ? "ltr" : "rtl",
     }),
     [lang]
