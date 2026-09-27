@@ -39,6 +39,36 @@ export function hashApiKey(key) {
   return crypto.createHash("sha256").update(String(key)).digest("hex");
 }
 
+function apiKeySeal() {
+  const secret = String(process.env.JWT_SECRET || "brownstore-dev-api-key-seal");
+  return crypto.createHash("sha256").update(`brownstore-api-key:${secret}`).digest();
+}
+
+export function encryptApiKey(key) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", apiKeySeal(), iv);
+  const data = Buffer.concat([cipher.update(String(key), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${iv.toString("base64url")}.${tag.toString("base64url")}.${data.toString("base64url")}`;
+}
+
+export function decryptApiKey(payload) {
+  const [ivPart, tagPart, dataPart] = String(payload || "").split(".");
+  if (!ivPart || !tagPart || !dataPart) {
+    throw new Error("Stored API key is unreadable");
+  }
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    apiKeySeal(),
+    Buffer.from(ivPart, "base64url")
+  );
+  decipher.setAuthTag(Buffer.from(tagPart, "base64url"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(dataPart, "base64url")),
+    decipher.final(),
+  ]).toString("utf8");
+}
+
 export function generateApiKey(slug) {
   const secret = crypto.randomBytes(24).toString("base64url");
   const key = `bs_${slug}_${secret}`;
@@ -46,6 +76,7 @@ export function generateApiKey(slug) {
     key,
     hash: hashApiKey(key),
     prefix: `${key.slice(0, 18)}…`,
+    enc: encryptApiKey(key),
   };
 }
 
@@ -70,6 +101,7 @@ export function toAdminPartner(doc, req, extra = {}) {
     image: raw.image || "",
     isActive: raw.isActive !== false,
     hasApiKey: Boolean(raw.apiKeyHash),
+    canRevealApiKey: Boolean(raw.apiKeyRevealable),
     apiKeyPrefix: raw.apiKeyPrefix || "",
     catalogUrl: req ? partnerCatalogUrl(req, slug) : `/api/partners/${slug}/products`,
     categoriesUrl: req

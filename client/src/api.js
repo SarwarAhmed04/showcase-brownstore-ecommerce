@@ -21,10 +21,28 @@ async function request(path, options = {}) {
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(json.message || `Request failed (${res.status})`);
+    err.status = res.status;
     err.details = json.details;
     throw err;
   }
   return json;
+}
+
+async function downloadFile(path, filename) {
+  const res = await fetch(apiUrl(path), { credentials: "include" });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(json.message || `Request failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export const api = {
@@ -117,8 +135,25 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ pin }),
     }),
+  revealPartnerApiKey: (slug, pin) =>
+    request(`/api/admin/partners/${encodeURIComponent(slug)}/api-key/reveal`, {
+      method: "POST",
+      body: JSON.stringify({ pin }),
+    }),
   adminPlatforms: () => request("/api/admin/platforms"),
   adminPlatform: (slug) => request(`/api/admin/platforms/${encodeURIComponent(slug)}`),
+  platformExcelMeta: (slug) =>
+    request(`/api/admin/platforms/${encodeURIComponent(slug)}/excel?meta=1`),
+  savePlatformExcelColumns: (slug, columns) =>
+    request(`/api/admin/platforms/${encodeURIComponent(slug)}/excel-columns`, {
+      method: "PUT",
+      body: JSON.stringify({ columns }),
+    }),
+  downloadPlatformExcel: (slug, lang) =>
+    downloadFile(
+      `/api/admin/platforms/${encodeURIComponent(slug)}/excel?lang=${encodeURIComponent(lang || "en")}`,
+      `${slug}-commission.xlsx`
+    ),
   createPlatform: (body) =>
     request("/api/admin/platforms", {
       method: "POST",

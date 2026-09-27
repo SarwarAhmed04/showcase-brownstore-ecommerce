@@ -160,7 +160,7 @@ function entityId(value) {
   return String(value);
 }
 
-export function resolveCommissionRate(product, rules) {
+export function winningCommission(product, rules) {
   const raw = typeof product?.toObject === "function" ? product.toObject() : product;
   const collectionId = entityId(raw.collectionName);
   const subCategoryId = entityId(raw.subCategory);
@@ -174,24 +174,54 @@ export function resolveCommissionRate(product, rules) {
     .sort((a, b) => b.rank - a.rank);
 
   for (const { rule } of ranked) {
-    if (rule.scope === "vendor" && vendorId && rule.targetId === vendorId) {
-      return Number.isFinite(Number(rule.percentage)) ? Number(rule.percentage) : 0;
-    }
-    if (rule.scope === "collection" && collectionId && rule.targetId === collectionId) {
-      return Number.isFinite(Number(rule.percentage)) ? Number(rule.percentage) : 0;
-    }
-    if (rule.scope === "subcategory" && subCategoryId && rule.targetId === subCategoryId) {
-      return Number.isFinite(Number(rule.percentage)) ? Number(rule.percentage) : 0;
-    }
-    if (rule.scope === "category" && categoryId && rule.targetId === categoryId) {
-      return Number.isFinite(Number(rule.percentage)) ? Number(rule.percentage) : 0;
-    }
-    if (rule.scope === "all") {
-      return Number.isFinite(Number(rule.percentage)) ? Number(rule.percentage) : 0;
-    }
+    if (rule.scope === "vendor" && vendorId && rule.targetId === vendorId) return rule;
+    if (rule.scope === "collection" && collectionId && rule.targetId === collectionId) return rule;
+    if (rule.scope === "subcategory" && subCategoryId && rule.targetId === subCategoryId) return rule;
+    if (rule.scope === "category" && categoryId && rule.targetId === categoryId) return rule;
+    if (rule.scope === "all") return rule;
   }
 
-  return 0;
+  return null;
+}
+
+export function resolveCommissionRate(product, rules) {
+  const rule = winningCommission(product, rules);
+  if (!rule) return 0;
+  const rate = Number(rule.percentage);
+  return Number.isFinite(rate) ? rate : 0;
+}
+
+export function commissionMatchFilter(rules) {
+  const active = (rules || []).filter((rule) => rule.isActive !== false);
+  if (!active.length) return null;
+  if (active.some((rule) => rule.scope === "all")) return {};
+
+  const buckets = {
+    category: [],
+    subcategory: [],
+    collection: [],
+    vendor: [],
+  };
+  for (const rule of active) {
+    const id = String(rule.targetId || "");
+    if (!id || !buckets[rule.scope]) continue;
+    buckets[rule.scope].push(id);
+  }
+
+  const or = [];
+  const push = (path, ids) => {
+    if (!ids.length) return;
+    or.push({
+      $expr: {
+        $in: [{ $toString: { $ifNull: [`$${path}`, ""] } }, ids],
+      },
+    });
+  };
+  push("category._id", buckets.category);
+  push("subCategory._id", buckets.subcategory);
+  push("collectionName._id", buckets.collection);
+  push("createdBy._id", buckets.vendor);
+  return or.length ? { $or: or } : null;
 }
 
 export function sortCommissions(items) {

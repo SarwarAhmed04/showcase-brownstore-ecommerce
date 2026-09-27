@@ -48,6 +48,8 @@ function actionTitle(item, t) {
       return t.activityActionCommissionDelete;
     case "partner.api_key":
       return item.meta?.regenerated ? t.activityActionApiKeyRegen : t.activityActionApiKeyNew;
+    case "partner.api_key_view":
+      return t.activityActionApiKeyView;
     case "account.create":
       return t.activityActionAccountCreate;
     case "account.delete":
@@ -105,6 +107,7 @@ function activityDetail(item, t, lang) {
       return bits.filter(Boolean).join(" · ");
     }
     case "partner.api_key":
+    case "partner.api_key_view":
       return partner;
     case "account.create":
     case "account.delete":

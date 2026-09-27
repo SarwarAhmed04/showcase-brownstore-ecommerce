@@ -51,12 +51,19 @@ import {
   toAdminCommission,
 } from "../utils/commission.js";
 import {
+  decryptApiKey,
   generateApiKey,
   isPartnerSlug,
   toAdminPartner,
   uniquePartnerSlug,
 } from "../utils/partnerAuth.js";
 import { partnerPricePreview } from "../utils/partnerCatalog.js";
+import {
+  buildCommissionWorkbook,
+  countCommissionProducts,
+  excelColumnList,
+  savedExcelOrder,
+} from "../utils/commissionExcel.js";
 import { Activity } from "../models/Activity.js";
 import {
   activityFilter,
@@ -801,6 +808,48 @@ function toPlatformProductDto(product, extra, rules) {
   };
 }
 
+adminRouter.put("/platforms/:slug/excel-columns", async (req, res) => {
+  try {
+    const partner = await loadPartnerOr404(req.params.slug, res);
+    if (!partner) return;
+    partner.excelColumns = savedExcelOrder(req.body?.columns);
+    partner.excelColumnsSet = true;
+    await partner.save();
+    res.json({ columns: excelColumnList(partner.excelColumns, true) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to save Excel columns" });
+  }
+});
+
+adminRouter.get("/platforms/:slug/excel", async (req, res) => {
+  try {
+    const partner = await loadPartnerOr404(req.params.slug, res);
+    if (!partner) return;
+    const rules = await Commission.find({ partner: partner.slug, isActive: { $ne: false } });
+    const lang = ["ku", "en", "ar"].includes(String(req.query.lang)) ? String(req.query.lang) : "en";
+    if (String(req.query.meta || "") === "1") {
+      const total = await countCommissionProducts(rules);
+      return res.json({
+        total,
+        columns: excelColumnList(partner.excelColumns, partner.excelColumnsSet),
+      });
+    }
+    const { workbook } = await buildCommissionWorkbook(partner, rules, lang);
+    const filename = `${partner.slug}-commission.xlsx`;
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error(err);
+    if (!res.headersSent) res.status(500).json({ message: "Failed to build Excel" });
+  }
+});
+
 adminRouter.get("/platforms/:slug/products", async (req, res) => {
   try {
     const partner = await loadPartnerOr404(req.params.slug, res);
@@ -970,6 +1019,8 @@ adminRouter.post("/partners/:slug/api-key", async (req, res) => {
     const generated = generateApiKey(partner.slug);
     partner.apiKeyHash = generated.hash;
     partner.apiKeyPrefix = generated.prefix;
+    partner.apiKeyEnc = generated.enc;
+    partner.apiKeyRevealable = true;
     await partner.save();
     await logActivity(req, "partner.api_key", {
       partner: partner.slug,
@@ -983,6 +1034,32 @@ adminRouter.post("/partners/:slug/api-key", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to generate API key" });
+  }
+});
+
+adminRouter.post("/partners/:slug/api-key/reveal", async (req, res) => {
+  try {
+    if (!verifyApiKeyPin(req.body?.pin)) {
+      return res.status(403).json({ message: "Invalid PIN" });
+    }
+    const slug = String(req.params.slug || "").toLowerCase();
+    if (!isPartnerSlug(slug)) {
+      return res.status(400).json({ message: "Unknown partner" });
+    }
+    const partner = await Partner.findOne({ slug }).select("+apiKeyEnc");
+    if (!partner) return res.status(404).json({ message: "Partner not found" });
+    if (!partner.apiKeyEnc) {
+      return res.status(409).json({ message: "API key must be regenerated before it can be shown" });
+    }
+    const apiKey = decryptApiKey(partner.apiKeyEnc);
+    await logActivity(req, "partner.api_key_view", {
+      partner: partner.slug,
+      partnerName: partnerDisplayName(partner.slug),
+    });
+    res.json({ apiKey });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to show API key" });
   }
 });
 

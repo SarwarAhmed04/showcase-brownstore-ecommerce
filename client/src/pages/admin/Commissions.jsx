@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Pencil, Plus } from "lucide-react";
+import { GripVertical, Pencil, Plus, X } from "lucide-react";
 import { api } from "../../api";
 import { useAuth } from "../../context/AuthContext";
 import { useLang } from "../../context/LangContext";
@@ -388,7 +388,7 @@ function ChangeMessageDialog({ item, t, lang, onClose }) {
   );
 }
 
-function CopyField({ label, value, t }) {
+function CopyField({ label, value, t, onHide, hideLabel }) {
   const [copied, setCopied] = useState(false);
   if (!value) return null;
   return (
@@ -401,6 +401,15 @@ function CopyField({ label, value, t }) {
           value={value}
           className={`${SELECT} min-w-0 flex-1 font-mono text-xs font-medium`}
         />
+        {onHide ? (
+          <button
+            type="button"
+            onClick={onHide}
+            className="shrink-0 rounded-full bg-cream px-4 py-2.5 text-xs font-semibold text-brown"
+          >
+            {hideLabel}
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={async () => {
@@ -413,6 +422,229 @@ function CopyField({ label, value, t }) {
         >
           {copied ? t.copied : t.copy}
         </button>
+      </div>
+    </div>
+  );
+}
+
+const DEFAULT_EXCEL_COLUMNS = [
+  "nameKu",
+  "nameEn",
+  "nameAr",
+  "descriptionKu",
+  "descriptionEn",
+  "descriptionAr",
+  "sku",
+  "stock",
+  "price",
+  "discountPrice",
+  "commission",
+  "platformPrice",
+  "availability",
+  "status",
+  "brandKu",
+  "brandEn",
+  "brandAr",
+  "warrantyKu",
+  "warrantyEn",
+  "warrantyAr",
+  "badge",
+  "keywords",
+  "featured",
+  "newArrival",
+  "bestSeller",
+  "variants",
+  ...Array.from({ length: 10 }, (_, index) => `image:${index + 1}`),
+];
+
+function excelColumnLetter(index) {
+  let n = index + 1;
+  let letters = "";
+  while (n > 0) {
+    n -= 1;
+    letters = String.fromCharCode(65 + (n % 26)) + letters;
+    n = Math.floor(n / 26);
+  }
+  return letters;
+}
+
+function visualRightSign(scroller) {
+  const probe = scroller.firstElementChild;
+  if (!probe || scroller.scrollWidth - scroller.clientWidth <= 1) return 1;
+  const start = scroller.scrollLeft;
+  const before = probe.getBoundingClientRect().left;
+  const delta = Math.abs(start) > 1 ? -12 : 12;
+  scroller.scrollLeft = start + delta;
+  const after = probe.getBoundingClientRect().left;
+  scroller.scrollLeft = start;
+  const moved = after - before;
+  if (Math.abs(moved) < 0.5) return 1;
+  return moved / delta < 0 ? 1 : -1;
+}
+
+function ExcelColumnOrder({ columns, onReorder, onRemove, removeLabel }) {
+  const dragFrom = useRef(null);
+  const scrollerRef = useRef(null);
+  const dragX = useRef(null);
+  const scrolling = useRef(false);
+  const frame = useRef(0);
+  const rightSign = useRef(1);
+  const [dragIndex, setDragIndex] = useState(null);
+
+  function stopAutoScroll() {
+    scrolling.current = false;
+    dragX.current = null;
+    if (frame.current) cancelAnimationFrame(frame.current);
+    frame.current = 0;
+  }
+
+  function stepScroll() {
+    const scroller = scrollerRef.current;
+    const x = dragX.current;
+    if (!scrolling.current || !scroller || x == null) return;
+    const rect = scroller.getBoundingClientRect();
+    const edge = 72;
+    let towardRight = 0;
+    if (x <= rect.left + edge) {
+      const depth = Math.min(1, (rect.left + edge - x) / edge);
+      towardRight = -Math.max(6, Math.round(24 * depth));
+    } else if (x >= rect.right - edge) {
+      const depth = Math.min(1, (x - (rect.right - edge)) / edge);
+      towardRight = Math.max(6, Math.round(24 * depth));
+    }
+    if (towardRight) scroller.scrollLeft += rightSign.current * towardRight;
+    frame.current = requestAnimationFrame(stepScroll);
+  }
+
+  function startAutoScroll(event) {
+    const scroller = scrollerRef.current;
+    if (scroller) rightSign.current = visualRightSign(scroller);
+    dragX.current = event.clientX || null;
+    if (scrolling.current) return;
+    scrolling.current = true;
+    frame.current = requestAnimationFrame(stepScroll);
+  }
+
+  function trackDrag(event) {
+    if (event.clientX === 0 && event.clientY === 0) return;
+    dragX.current = event.clientX;
+  }
+
+  useEffect(() => () => stopAutoScroll(), []);
+
+  useEffect(() => {
+    if (dragIndex == null) return undefined;
+    function onDragOver(event) {
+      trackDrag(event);
+    }
+    window.addEventListener("dragover", onDragOver);
+    return () => window.removeEventListener("dragover", onDragOver);
+  }, [dragIndex]);
+
+  function move(from, to) {
+    if (from == null || to == null || from === to) return;
+    const next = [...columns];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    onReorder(next);
+  }
+
+  function endDrag() {
+    dragFrom.current = null;
+    setDragIndex(null);
+    stopAutoScroll();
+  }
+
+  const verticalFade =
+    "linear-gradient(to bottom, transparent, rgba(61,35,23,0.38) 18%, rgba(61,35,23,0.38) 82%, transparent)";
+  const horizontalFade =
+    "linear-gradient(to right, transparent, rgba(61,35,23,0.38) 4%, rgba(61,35,23,0.38) 96%, transparent)";
+
+  return (
+    <div ref={scrollerRef} className="mt-3 overflow-x-auto rounded-xl border border-brown/10 bg-white">
+      <div className="relative flex w-max min-w-full">
+        {columns.map((column, index) => (
+          <div key={column.key} className="relative flex shrink-0 flex-col">
+            <div className="flex h-8 items-center justify-center bg-[#f3f3f3] px-4 text-[11px] font-semibold text-brown/50">
+              {excelColumnLetter(index)}
+            </div>
+            <div
+              draggable
+              onDragStart={(event) => {
+                if (event.target.closest("[data-remove-column]")) {
+                  event.preventDefault();
+                  return;
+                }
+                dragFrom.current = index;
+                setDragIndex(index);
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", column.key);
+                startAutoScroll(event);
+              }}
+              onDrag={trackDrag}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                trackDrag(event);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                move(dragFrom.current, index);
+                endDrag();
+              }}
+              onDragEnd={endDrag}
+              className={`group relative flex h-10 cursor-grab items-center px-3 text-xs font-semibold whitespace-nowrap select-none active:cursor-grabbing ${
+                dragIndex === index ? "bg-brown text-cream" : "bg-cream text-brown"
+              }`}
+            >
+              <span className="flex items-center gap-2" dir="ltr">
+                <GripVertical
+                  className={`h-4 w-4 shrink-0 ${dragIndex === index ? "text-cream" : "text-brown/40"}`}
+                  strokeWidth={2.5}
+                  aria-hidden="true"
+                />
+                <span>{column.label}</span>
+              </span>
+              <button
+                type="button"
+                data-remove-column
+                draggable={false}
+                aria-label={removeLabel}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onRemove(column);
+                }}
+                className={`absolute top-0.5 right-0.5 z-[2] flex h-4 w-4 items-center justify-center rounded-full bg-white text-brown opacity-0 shadow-sm ring-1 ring-brown/15 group-hover:opacity-100 focus:opacity-100 ${
+                  dragIndex === index ? "text-brown" : ""
+                }`}
+              >
+                <X className="h-3 w-3" strokeWidth={2.5} />
+              </button>
+            </div>
+            {index < columns.length - 1 ? (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-y-0 end-0 z-[1] w-px"
+                style={{ background: verticalFade }}
+              />
+            ) : null}
+          </div>
+        ))}
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-8 z-[1] h-px"
+          style={{ background: horizontalFade }}
+        />
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-px"
+          style={{ background: horizontalFade }}
+        />
       </div>
     </div>
   );
@@ -441,6 +673,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   const [message, setMessage] = useState("");
   const [plainKey, setPlainKey] = useState("");
   const [pinOpen, setPinOpen] = useState(false);
+  const [pinPurpose, setPinPurpose] = useState("generate");
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState("");
   const [products, setProducts] = useState({ products: [], pagination: { pages: 1, total: 0 } });
@@ -459,6 +692,12 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   const [editName, setEditName] = useState("");
   const [editImage, setEditImage] = useState("");
   const [tab, setTab] = useState("products");
+  const [excelTotal, setExcelTotal] = useState(null);
+  const [excelColumns, setExcelColumns] = useState([]);
+  const [excelSaved, setExcelSaved] = useState(false);
+  const [columnToDelete, setColumnToDelete] = useState(null);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [excelBusy, setExcelBusy] = useState(false);
 
   const subcategories = useMemo(
     () =>
@@ -540,6 +779,10 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     setCustomQ("");
     setProductQ("");
     setTab("products");
+    setExcelColumns([]);
+    setExcelSaved(false);
+    setColumnToDelete(null);
+    setResetOpen(false);
     loadDetail()
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -558,6 +801,25 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     }, 220);
     return () => clearTimeout(id);
   }, [partnerSlug, customQ, customPage]);
+
+  useEffect(() => {
+    if (tab !== "excel") return undefined;
+    let ignore = false;
+    setExcelTotal(null);
+    api
+      .platformExcelMeta(partnerSlug)
+      .then((data) => {
+        if (ignore) return;
+        setExcelTotal(Number(data.total) || 0);
+        setExcelColumns(data.columns || []);
+      })
+      .catch(() => {
+        if (!ignore) setExcelTotal(0);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [tab, partnerSlug, commissions]);
 
   function resetForm() {
     setCategoryId("");
@@ -665,8 +927,8 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     setPinError("");
   }
 
-  function onRegenerateKey() {
-    if (!isPrimary) {
+  function openPin(purpose) {
+    if (purpose === "generate" && !isPrimary) {
       setError(t.apiKeyPinOnlyPrimary);
       return;
     }
@@ -674,12 +936,13 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     setMessage("");
     setPin("");
     setPinError("");
+    setPinPurpose(purpose);
     setPinOpen(true);
   }
 
   async function onConfirmPin(event) {
     event.preventDefault();
-    if (!isPrimary) {
+    if (pinPurpose === "generate" && !isPrimary) {
       setPinError(t.apiKeyPinOnlyPrimary);
       return;
     }
@@ -692,13 +955,18 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     setError("");
     setMessage("");
     try {
-      const data = await api.regeneratePartnerApiKey(partnerSlug, pin);
-      setPartner(data.partner);
-      setPlainKey(data.apiKey || "");
+      if (pinPurpose === "reveal") {
+        const data = await api.revealPartnerApiKey(partnerSlug, pin);
+        setPlainKey(data.apiKey || "");
+      } else {
+        const data = await api.regeneratePartnerApiKey(partnerSlug, pin);
+        setPartner(data.partner);
+        setPlainKey(data.apiKey || "");
+      }
       setPinOpen(false);
       setPin("");
     } catch (err) {
-      setPinError(t.apiKeyPinInvalid);
+      setPinError(err.status === 409 ? t.apiKeyNeedsRegen : t.apiKeyPinInvalid);
     } finally {
       setBusy(false);
     }
@@ -841,10 +1109,11 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         </AdminModal>
       ) : null}
 
-      <div className="mb-6 grid grid-cols-3 gap-1 rounded-full bg-white p-1 shadow-sm ring-1 ring-brown/5">
+      <div className="mb-6 grid grid-cols-2 gap-1 rounded-full bg-white p-1 shadow-sm ring-1 ring-brown/5 sm:grid-cols-4">
         {[
           { id: "products", label: t.products },
           { id: "customized", label: t.customizedProducts, count: partner.customizedCount || 0 },
+          { id: "excel", label: t.excelTab },
           { id: "api", label: t.partnerApi },
         ].map((item) => (
           <button
@@ -873,10 +1142,45 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         <div className="mt-5 grid gap-4">
           <CopyField label={t.catalogUrl} value={partner.catalogUrl} t={t} />
           <CopyField label={t.categoriesUrl} value={partner.categoriesUrl} t={t} />
-          {plainKey ? (
+          {partner.hasApiKey || plainKey ? (
             <div>
-              <CopyField label={t.apiKey} value={plainKey} t={t} />
-              <p className="mt-2 text-xs font-semibold text-amber-800">{t.apiKeyOnce}</p>
+              {plainKey ? (
+                <CopyField
+                  label={t.apiKey}
+                  value={plainKey}
+                  t={t}
+                  onHide={() => setPlainKey("")}
+                  hideLabel={t.hideApiKey}
+                />
+              ) : (
+                <div className="min-w-0">
+                  <label className="mb-1 block text-xs font-semibold text-brown/50">
+                    {t.apiKey}
+                  </label>
+                  <div className="flex min-w-0 gap-2">
+                    <input
+                      readOnly
+                      dir="ltr"
+                      type="password"
+                      value={partner.apiKeyPrefix || "••••••••••••••••"}
+                      className={`${SELECT} min-w-0 flex-1 font-mono text-xs font-medium`}
+                    />
+                    {partner.canRevealApiKey ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => openPin("reveal")}
+                        className="shrink-0 rounded-full bg-brown px-4 py-2.5 text-xs font-semibold text-cream disabled:opacity-50"
+                      >
+                        {t.showApiKey}
+                      </button>
+                    ) : null}
+                  </div>
+                  {!partner.canRevealApiKey ? (
+                    <p className="mt-2 text-xs font-semibold text-amber-800">{t.apiKeyNeedsRegen}</p>
+                  ) : null}
+                </div>
+              )}
             </div>
           ) : (
             <div>
@@ -884,7 +1188,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                 {t.apiKey}
               </label>
               <p className="rounded-full bg-cream px-4 py-2.5 font-mono text-sm text-brown/70" dir="ltr">
-                {partner.apiKeyPrefix || t.noApiKey}
+                {t.noApiKey}
               </p>
             </div>
           )}
@@ -901,7 +1205,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
             <button
               type="button"
               disabled={busy}
-              onClick={onRegenerateKey}
+              onClick={() => openPin("generate")}
               className="w-fit rounded-full bg-brown px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
             >
               {partner.hasApiKey ? t.regenerateApiKey : t.generateApiKey}
@@ -911,6 +1215,100 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           )}
         </div>
       </section>
+      ) : null}
+
+      {resetOpen ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-brown/40"
+            aria-label={t.cancel}
+            onClick={() => setResetOpen(false)}
+          />
+          <div className="relative z-10 w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl ring-1 ring-brown/10">
+            <h3 className="font-display text-2xl">{t.excelResetTitle}</h3>
+            <p className="mt-2 text-sm text-brown/50">{t.excelResetHint}</p>
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setResetOpen(false)}
+                className="flex-1 rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown"
+              >
+                {t.cancel}
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setResetOpen(false);
+                  setExcelSaved(false);
+                  try {
+                    const data = await api.savePlatformExcelColumns(
+                      partnerSlug,
+                      DEFAULT_EXCEL_COLUMNS
+                    );
+                    setExcelColumns(data.columns || []);
+                    setExcelSaved(true);
+                  } catch (err) {
+                    setError(err.message || t.excelFailed);
+                  }
+                }}
+                className="flex-1 rounded-full bg-brown px-4 py-2.5 text-sm font-semibold text-cream"
+              >
+                {t.excelReset}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {columnToDelete ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-brown/40"
+            aria-label={t.cancel}
+            onClick={() => setColumnToDelete(null)}
+          />
+          <div className="relative z-10 w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl ring-1 ring-brown/10">
+            <h3 className="font-display text-2xl">{t.excelDeleteTitle}</h3>
+            <p className="mt-2 text-sm text-brown/50">
+              {t.excelDeleteHint.replace("{name}", columnToDelete.label)}
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setColumnToDelete(null)}
+                className="flex-1 rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown"
+              >
+                {t.cancel}
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const removed = columnToDelete;
+                  const next = excelColumns.filter((column) => column.key !== removed.key);
+                  setColumnToDelete(null);
+                  setExcelColumns(next);
+                  setExcelSaved(false);
+                  try {
+                    const data = await api.savePlatformExcelColumns(
+                      partnerSlug,
+                      next.map((column) => column.key)
+                    );
+                    setExcelColumns(data.columns || next);
+                    setExcelSaved(true);
+                  } catch (err) {
+                    setExcelColumns(excelColumns);
+                    setError(err.message || t.excelFailed);
+                  }
+                }}
+                className="flex-1 rounded-full bg-brown px-4 py-2.5 text-sm font-semibold text-cream"
+              >
+                {t.excelDeleteConfirm}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {pinOpen ? (
@@ -925,9 +1323,13 @@ function PartnerCommission({ partnerSlug, t, lang }) {
             onSubmit={onConfirmPin}
             className="relative z-10 w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl ring-1 ring-brown/10"
           >
-            <h3 className="font-display text-2xl">{t.apiKeyPinTitle}</h3>
-            <p className="mt-2 text-sm text-brown/50">{t.apiKeyPinHint}</p>
-            {partner.hasApiKey ? (
+            <h3 className="font-display text-2xl">
+              {pinPurpose === "reveal" ? t.apiKeyRevealTitle : t.apiKeyPinTitle}
+            </h3>
+            <p className="mt-2 text-sm text-brown/50">
+              {pinPurpose === "reveal" ? t.apiKeyRevealHint : t.apiKeyPinHint}
+            </p>
+            {pinPurpose === "generate" && partner.hasApiKey ? (
               <p className="mt-2 text-xs font-semibold text-amber-800">
                 {t.regenerateApiKeyConfirm}
               </p>
@@ -969,6 +1371,83 @@ function PartnerCommission({ partnerSlug, t, lang }) {
             </div>
           </form>
         </div>
+      ) : null}
+
+      {tab === "excel" ? (
+        <section className="mb-6 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
+          <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
+            {t.excelTab}
+          </p>
+          <p className="mt-2 max-w-xl text-sm text-brown/50">{t.excelHint}</p>
+          {excelTotal != null ? (
+            <div className="mt-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-brown/50">{t.excelOrderHint}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setColumnToDelete(null);
+                    setResetOpen(true);
+                  }}
+                  className="shrink-0 rounded-full bg-cream px-4 py-2 text-xs font-semibold text-brown"
+                >
+                  {t.excelReset}
+                </button>
+              </div>
+              <ExcelColumnOrder
+                columns={excelColumns}
+                removeLabel={t.excelDeleteConfirm}
+                onRemove={setColumnToDelete}
+                onReorder={async (next) => {
+                  setExcelColumns(next);
+                  setExcelSaved(false);
+                  try {
+                    const data = await api.savePlatformExcelColumns(
+                      partnerSlug,
+                      next.map((column) => column.key)
+                    );
+                    setExcelColumns(data.columns || next);
+                    setExcelSaved(true);
+                  } catch (err) {
+                    setError(err.message || t.excelFailed);
+                  }
+                }}
+              />
+              {excelSaved ? (
+                <p className="mt-2 text-xs font-semibold text-brown/60">{t.excelOrderSaved}</p>
+              ) : null}
+            </div>
+          ) : null}
+          {excelTotal == null ? (
+            <p className="mt-5 text-sm text-brown/45">{t.loading}</p>
+          ) : excelTotal > 0 ? (
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              <p className="text-sm font-semibold text-brown">
+                {excelTotal.toLocaleString("en-US")} {t.excelReady}
+              </p>
+              <button
+                type="button"
+                disabled={excelBusy}
+                onClick={async () => {
+                  setExcelBusy(true);
+                  setError("");
+                  try {
+                    await api.downloadPlatformExcel(partnerSlug, lang);
+                  } catch (err) {
+                    setError(err.message || t.excelFailed);
+                  } finally {
+                    setExcelBusy(false);
+                  }
+                }}
+                className="rounded-full bg-brown px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
+              >
+                {excelBusy ? t.loading : t.excelDownload}
+              </button>
+            </div>
+          ) : (
+            <p className="mt-5 text-sm text-brown/55">{t.excelEmpty}</p>
+          )}
+        </section>
       ) : null}
 
       {tab === "products" ? (

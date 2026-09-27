@@ -15,6 +15,10 @@ const partnerSchema = new mongoose.Schema(
     image: { type: String, default: "" },
     apiKeyHash: { type: String, default: "" },
     apiKeyPrefix: { type: String, default: "" },
+    apiKeyEnc: { type: String, default: "", select: false },
+    apiKeyRevealable: { type: Boolean, default: false },
+    excelColumns: { type: [String], default: [] },
+    excelColumnsSet: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }
