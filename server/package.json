@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/index.js",
+    "dev": "node --max-old-space-size=4096 --watch src/index.js",
     "start": "node src/index.js"
   },
   "dependencies": {

@@ -8,6 +8,7 @@ const categorySchema = new mongoose.Schema(
     name: localized,
     images: { type: Array, default: [] },
     isActive: { type: Boolean, default: true },
+    displayOrder: { type: Number, default: 0 },
     overrides: {
       name: {
         ku: { type: String, default: "" },
@@ -19,5 +20,9 @@ const categorySchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+categorySchema.index({ displayOrder: 1, createdAt: 1 });
+
+export const categoryListSort = { displayOrder: 1, createdAt: 1 };
 
 export const Category = mongoose.model("Category", categorySchema);

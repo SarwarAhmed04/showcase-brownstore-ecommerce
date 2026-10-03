@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { Category } from "../models/Category.js";
+import { Category, categoryListSort } from "../models/Category.js";
 import { Product } from "../models/Product.js";
 import { getSiteSettings } from "../models/SiteSettings.js";
 import { toPublicCategory } from "../utils/categoryView.js";
@@ -10,7 +10,7 @@ export const categoriesRouter = Router();
 categoriesRouter.get("/", async (_req, res) => {
   try {
     const [categories, settings, counts] = await Promise.all([
-      Category.find({ isActive: { $ne: false } }).sort({ createdAt: 1 }),
+      Category.find({ isActive: { $ne: false } }).sort(categoryListSort),
       getSiteSettings(),
       Product.aggregate([
         { $match: publicProductFilter() },
@@ -19,7 +19,7 @@ categoriesRouter.get("/", async (_req, res) => {
     ]);
     const countMap = Object.fromEntries(counts.map((row) => [String(row._id), row.count]));
     res.json({
-      layout: settings.categoryLayout || "pills",
+      layout: settings.categoryLayout || "mosaic",
       categoryLimit: Number(settings.categoryLimit) || 0,
       categories: categories.map((doc) => {
         const item = toPublicCategory(doc);

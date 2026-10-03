@@ -133,21 +133,34 @@ async function start() {
   const count = await Product.countDocuments();
   if (count === 0) {
     const imported = await importFileCache();
-    if (!imported) {
-      console.log("No products yet — syncing catalog…");
-      try {
-        const result = await syncFromIbsher();
-        console.log(
-          `Initial sync: ${result.products} products, ${result.categories} categories`
-        );
-      } catch (err) {
-        console.error("Initial sync failed:", err.message);
-      }
-    }
+    if (imported) console.log("Imported local cache; refreshing the live catalog");
+    else console.log("No products yet — syncing catalog");
   } else {
     console.log(`Loaded ${count} products from MongoDB`);
   }
+
+  const refreshCatalog = () => {
+    syncFromIbsher()
+      .then((result) => {
+        console.log(
+          `Catalog sync (${result.source}): ${result.products} products, remote ${result.remoteTotal}, removed ${result.removed}`
+        );
+        if (result.limited) {
+          console.warn(
+            "Public ibsher catalog is smaller than the admin published count. Set IBSHER_ADMIN_EMAIL and IBSHER_ADMIN_PASSWORD to sync every published product."
+          );
+        }
+      })
+      .catch((err) => console.error("Catalog sync failed:", err.message));
+  };
+
+  refreshCatalog();
+  setInterval(refreshCatalog, 60 * 60 * 1000);
 }
+
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled rejection:", err);
+});
 
 start().catch((err) => {
   console.error("Failed to start server:", err);

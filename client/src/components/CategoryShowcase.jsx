@@ -121,18 +121,22 @@ export default function CategoryShowcase({ categories, layout = "pills", lang })
 
   if (layout === "circles") {
     return (
-      <div className="flex gap-6 overflow-x-auto pb-2">
+      <div className="grid grid-cols-3 gap-x-3 gap-y-6 sm:grid-cols-5 lg:grid-cols-9">
         {items.map((cat) => (
           <Link
             key={cat.id}
-            to={`/shop?category=${cat.id}`}
-            className="flex min-w-28 flex-col items-center gap-3"
+            to={`/category/${cat.id}`}
+            className="flex flex-col items-center gap-3"
           >
-            <CatImage
-              src={cat.image}
-              className="h-24 w-24 rounded-full object-cover ring-4 ring-primary/25 shadow-md"
-            />
-            <span className="max-w-28 text-center text-sm font-medium text-fg">
+            <span className="relative block aspect-square w-full max-w-36 overflow-hidden rounded-full bg-[#f7f3ec] ring-1 ring-foreground/10">
+              <img
+                src={imgUrl(cat.image)}
+                alt=""
+                className="absolute inset-0 h-full w-full object-cover"
+                style={{ objectFit: "cover" }}
+              />
+            </span>
+            <span className="max-w-36 text-center text-sm font-medium leading-snug text-fg">
               {tName(cat.name, lang)}
             </span>
           </Link>
@@ -147,7 +151,7 @@ export default function CategoryShowcase({ categories, layout = "pills", lang })
         {items.map((cat) => (
           <Link
             key={cat.id}
-            to={`/shop?category=${cat.id}`}
+            to={`/category/${cat.id}`}
             className="group glass overflow-hidden rounded-card transition hover:-translate-y-0.5"
           >
             <div className="shot aspect-[4/3]">
@@ -171,7 +175,7 @@ export default function CategoryShowcase({ categories, layout = "pills", lang })
         {items.map((cat) => (
           <Link
             key={cat.id}
-            to={`/shop?category=${cat.id}`}
+            to={`/category/${cat.id}`}
             className="group relative min-h-56 overflow-hidden rounded-panel bg-bg-2 shadow-lg"
           >
             <CatImage
@@ -194,7 +198,7 @@ export default function CategoryShowcase({ categories, layout = "pills", lang })
         {items.map((cat, index) => (
           <Link
             key={cat.id}
-            to={`/shop?category=${cat.id}`}
+            to={`/category/${cat.id}`}
             className="glass flex items-center gap-4 rounded-card p-3 transition hover:ring-1 hover:ring-primary/40"
           >
             <span className="w-8 text-center font-display text-lg text-primary">
@@ -218,7 +222,7 @@ export default function CategoryShowcase({ categories, layout = "pills", lang })
       {items.map((cat) => (
         <Link
           key={cat.id}
-          to={`/shop?category=${cat.id}`}
+          to={`/category/${cat.id}`}
           className="glass flex min-w-32 flex-col items-center gap-2 rounded-card p-4 text-center transition hover:ring-1 hover:ring-primary/40"
         >
           <CatImage src={cat.image} className="h-14 w-14 rounded-full object-cover" />

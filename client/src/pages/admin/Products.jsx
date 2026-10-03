@@ -248,7 +248,8 @@ export default function AdminProducts() {
     setMessage("");
     try {
       const result = await api.sync();
-      setMessage(`${result.products} ${t.products}`);
+      const count = Number(result.products || 0).toLocaleString("en-US");
+      setMessage(result.limited ? `${count} ${t.products}. ${t.syncLimited}` : `${count} ${t.products}`);
       const refreshed = await api.adminProducts(query);
       setData(refreshed);
     } catch (err) {

@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-export const CATEGORY_LAYOUTS = ["pills", "circles", "cards", "posters", "rail"];
+export const CATEGORY_LAYOUTS = ["mosaic", "pills", "circles", "cards", "posters", "rail"];
 
 const siteSettingsSchema = new mongoose.Schema(
   {
@@ -8,7 +8,7 @@ const siteSettingsSchema = new mongoose.Schema(
     categoryLayout: {
       type: String,
       enum: CATEGORY_LAYOUTS,
-      default: "pills",
+      default: "mosaic",
     },
     categoryLimit: { type: Number, default: 0 },
   },

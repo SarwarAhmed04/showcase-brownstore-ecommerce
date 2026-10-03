@@ -11,7 +11,11 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/api": "http://localhost:5000",
+      "/api": {
+        target: "http://localhost:5000",
+        timeout: 600000,
+        proxyTimeout: 600000,
+      },
       "/media": "http://localhost:5000",
     },
   },

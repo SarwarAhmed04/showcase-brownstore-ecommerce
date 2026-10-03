@@ -58,8 +58,12 @@ function actionTitle(item, t) {
       return t.activityActionProductUpdate;
     case "catalog.sync":
       return t.activityActionCatalogSync;
+    case "category.sync":
+      return t.activityActionCategorySync;
     case "category.update":
       return t.activityActionCategoryUpdate;
+    case "category.reorder":
+      return t.activityActionCategoryReorder;
     case "category.image":
       return t.activityActionCategoryImage;
     case "settings.update":
@@ -121,9 +125,13 @@ function activityDetail(item, t, lang) {
     }
     case "catalog.sync":
       return `${Number(meta.products || 0).toLocaleString("en-US")} ${t.products} · ${Number(meta.categories || 0).toLocaleString("en-US")} ${t.categoriesCount}`;
+    case "category.sync":
+      return `${Number(meta.categories || 0).toLocaleString("en-US")} ${t.categoriesCount}`;
     case "category.update":
     case "category.image":
       return tName(meta.name, lang) || meta.categoryId || "";
+    case "category.reorder":
+      return `${Number(meta.count || 0).toLocaleString("en-US")} ${t.categoriesCount}`;
     case "settings.update":
       return `${t.categoryLayout} · ${meta.categoryLayout || "—"}`;
     case "enquiry.create":

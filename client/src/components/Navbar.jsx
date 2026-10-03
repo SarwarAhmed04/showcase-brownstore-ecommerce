@@ -13,15 +13,19 @@ import { useCatalog } from '../lib/catalogStore'
 import { useScrolled } from '../lib/hooks'
 import { useStore } from '../store'
 
-export function Wordmark({ compact = false }) {
+export function Wordmark({ compact = false, large = false }) {
   const { t } = useLang()
   return (
     <Link to="/" className="group flex items-center gap-2.5" aria-label={t.brand}>
-      <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md bg-gradient-to-br from-caramel-400 to-caramel-600 shadow-lg transition-transform duration-500 group-hover:-rotate-6">
+      <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md bg-gradient-to-br from-caramel-400/70 to-caramel-600/70 shadow-lg transition-transform duration-500 group-hover:-rotate-6">
         <Logo className="h-8 w-8" />
       </span>
       {!compact && (
-        <span className="block whitespace-nowrap font-display text-lg font-black tracking-tight leading-none">
+        <span
+          className={`block whitespace-nowrap font-display font-black tracking-tight leading-none ${
+            large ? "text-2xl md:text-3xl" : "text-lg"
+          }`}
+        >
           Brown<span className="gold-text"> Store</span>
         </span>
       )}
@@ -57,7 +61,7 @@ export default function Navbar() {
       onMouseLeave={() => setCatOpen(false)}
     >
       <div className="container-x flex h-[70px] items-center gap-4">
-        <Wordmark />
+        <Wordmark large />
 
         <nav className="ml-4 hidden items-center gap-1 lg:flex">
           {NAV_ITEMS.map((n) => (

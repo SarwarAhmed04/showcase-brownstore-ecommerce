@@ -19,6 +19,8 @@ export function CatalogProvider({ children }) {
   const { lang } = useLang();
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [layout, setLayout] = useState("mosaic");
+  const [categoryLimit, setCategoryLimit] = useState(0);
   const [previews, setPreviews] = useState({});
   const [total, setTotal] = useState(0);
   const [status, setStatus] = useState("loading");
@@ -36,6 +38,8 @@ export function CatalogProvider({ children }) {
         ]);
 
         const cats = (catRes.categories || []).map((c, i) => adaptCategory(c, lang, i));
+        setLayout(catRes.layout || "mosaic");
+        setCategoryLimit(Number(catRes.categoryLimit) || 0);
         const merged = new Map();
         for (const row of [...(list.products || []), ...(saved.products || [])]) {
           const item = adaptProduct(row, lang);
@@ -99,12 +103,14 @@ export function CatalogProvider({ children }) {
     () => ({
       products,
       categories,
+      layout,
+      categoryLimit,
       status,
       error,
       refresh: load,
       ...derived,
     }),
-    [products, categories, status, error, load, derived]
+    [products, categories, layout, categoryLimit, status, error, load, derived]
   );
 
   return <CatalogContext.Provider value={value}>{children}</CatalogContext.Provider>;

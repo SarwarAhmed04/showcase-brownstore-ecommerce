@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { Product } from "../models/Product.js";
-import { Category } from "../models/Category.js";
+import { Category, categoryListSort } from "../models/Category.js";
 import { Commission } from "../models/Commission.js";
 import { PlatformProduct } from "../models/PlatformProduct.js";
 import { publicProductFilter, isPubliclyVisible } from "../utils/productView.js";
@@ -132,9 +132,7 @@ partnersRouter.get("/:slug/products/:id", async (req, res) => {
 partnersRouter.get("/:slug/categories", async (req, res) => {
   try {
     const origin = requestOrigin(req);
-    const categories = await Category.find({ isActive: { $ne: false } }).sort({
-      createdAt: 1,
-    });
+    const categories = await Category.find({ isActive: { $ne: false } }).sort(categoryListSort);
     res.json({
       partner: req.partner.slug,
       categories: categories.map((doc) => {

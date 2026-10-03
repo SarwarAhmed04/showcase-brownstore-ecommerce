@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { Product } from "../models/Product.js";
-import { Category } from "../models/Category.js";
+import { Category, categoryListSort } from "../models/Category.js";
 import { CATEGORY_LAYOUTS, getSiteSettings } from "../models/SiteSettings.js";
 import { requireAdmin } from "../middleware/auth.js";
 import { isPrimaryAdmin, toAdminAccount, verifyApiKeyPin } from "../utils/adminUser.js";
@@ -34,11 +34,7 @@ import {
   sanitizeBannerLink,
   toAdminBanner,
 } from "../models/Banner.js";
-import {
-  fetchIbsherCategories,
-  fetchIbsherProducts,
-  mapIbsherProduct,
-} from "../services/ibsher.js";
+import { fetchIbsherCategories, mapIbsherProduct, streamIbsherCatalog } from "../services/ibsher.js";
 import { Commission, COMMISSION_SCOPES } from "../models/Commission.js";
 import { Partner } from "../models/Partner.js";
 import { PlatformProduct } from "../models/PlatformProduct.js";
@@ -333,14 +329,62 @@ adminRouter.patch("/products/:id", async (req, res) => {
   }
 });
 
-adminRouter.get("/categories", async (_req, res) => {
+adminRouter.put("/categories/order", async (req, res) => {
   try {
+    const requested = Array.isArray(req.body.ids) ? req.body.ids.map((id) => String(id)) : [];
+    const categories = await adminCategoryQuery();
+    const known = new Set(categories.map((category) => category.ibsherId));
+    const ordered = requested.filter((id) => known.has(id));
+    for (const category of categories) {
+      if (!ordered.includes(category.ibsherId)) ordered.push(category.ibsherId);
+    }
+    await Promise.all(
+      ordered.map((id, index) =>
+        Category.updateOne({ ibsherId: id }, { $set: { displayOrder: index + 1 } })
+      )
+    );
+    await logActivity(req, "category.reorder", { count: ordered.length });
+    const saved = await adminCategoryQuery();
+    res.json({ categories: saved.map(toAdminCategory) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to save category order" });
+  }
+});
+
+adminRouter.post("/categories/sync", async (req, res) => {
+  try {
+    const result = await syncCategoriesFromIbsher();
+    await logActivity(req, "category.sync", {
+      categories: result.categories,
+      removed: result.removed,
+    });
     const [categories, settings] = await Promise.all([
-      Category.find().sort({ createdAt: 1 }),
+      adminCategoryQuery(),
       getSiteSettings(),
     ]);
     res.json({
-      layout: settings.categoryLayout || "pills",
+      message: "Sync complete",
+      synced: result.categories,
+      removed: result.removed,
+      layout: settings.categoryLayout || "mosaic",
+      categoryLimit: Number(settings.categoryLimit) || 0,
+      categories: categories.map(toAdminCategory),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(502).json({ message: err.message || "Sync failed" });
+  }
+});
+
+adminRouter.get("/categories", async (_req, res) => {
+  try {
+    const [categories, settings] = await Promise.all([
+      adminCategoryQuery(),
+      getSiteSettings(),
+    ]);
+    res.json({
+      layout: settings.categoryLayout || "mosaic",
       categoryLimit: Number(settings.categoryLimit) || 0,
       layouts: CATEGORY_LAYOUTS,
       categories: categories.map(toAdminCategory),
@@ -538,30 +582,15 @@ adminRouter.patch("/banners/:slot", async (req, res) => {
   }
 });
 
-export async function syncFromIbsher() {
-  const [categories, products] = await Promise.all([
-    fetchIbsherCategories(),
-    fetchIbsherProducts(),
-  ]);
+let activeSync = null;
 
-  for (const cat of categories) {
-    await Category.updateOne(
-      { ibsherId: cat._id },
-      {
-        $set: {
-          ibsherId: cat._id,
-          name: cat.name,
-          images: cat.images || [],
-          isActive: cat.isActive !== false,
-        },
-      },
-      { upsert: true }
-    );
-  }
-
-  const ops = products.map((item) => {
+async function upsertProducts(items, syncedAt) {
+  const ops = [];
+  for (const item of items) {
     const mapped = mapIbsherProduct(item);
-    return {
+    if (!mapped.ibsherId) continue;
+    mapped.lastSyncedAt = syncedAt;
+    ops.push({
       updateOne: {
         filter: { ibsherId: mapped.ibsherId },
         update: {
@@ -572,17 +601,125 @@ export async function syncFromIbsher() {
         },
         upsert: true,
       },
-    };
-  });
+    });
+  }
 
   for (let i = 0; i < ops.length; i += 200) {
     await Product.bulkWrite(ops.slice(i, i + 200), { ordered: false });
   }
+}
+
+async function runCatalogSync() {
+  const syncedAt = new Date();
+  const seen = new Set();
+
+  const result = await streamIbsherCatalog(async (items) => {
+    const fresh = [];
+    for (const item of items) {
+      const id = String(item?._id || item?.id || "");
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      fresh.push(item);
+    }
+    if (fresh.length) await upsertProducts(fresh, syncedAt);
+  });
+
+  const categoryResult = await upsertRemoteCategories(result.categories);
+
+  const remoteTotal = result.remoteTotal || seen.size;
+  const slack = Math.max(50, Math.round(remoteTotal * 0.01));
+  if (!seen.size || seen.size + slack < remoteTotal) {
+    throw new Error(`Incomplete catalog sync (${seen.size} of ${remoteTotal})`);
+  }
+
+  const removed = await Product.deleteMany({
+    $or: [{ lastSyncedAt: { $lt: syncedAt } }, { lastSyncedAt: { $exists: false } }],
+  });
 
   return {
-    categories: categories.length,
-    products: products.length,
+    categories: categoryResult.categories,
+    products: seen.size,
+    remoteTotal,
+    removed: removed.deletedCount || 0,
+    source: result.source,
+    limited: result.limited,
   };
+}
+
+let categoryWrite = Promise.resolve();
+
+function withCategoryWrite(task) {
+  const run = categoryWrite.then(task, task);
+  categoryWrite = run.then(
+    () => {},
+    () => {}
+  );
+  return run;
+}
+
+function adminCategoryQuery() {
+  return Category.find({ isActive: { $ne: false } }).sort(categoryListSort);
+}
+
+async function upsertRemoteCategories(categories) {
+  return withCategoryWrite(async () => {
+    const existing = await Category.find().select("ibsherId displayOrder");
+    const known = new Set(existing.map((doc) => doc.ibsherId));
+    let nextOrder = existing.reduce((max, doc) => Math.max(max, Number(doc.displayOrder) || 0), 0);
+    const seen = new Set();
+    for (const cat of categories || []) {
+      const id = String(cat?._id || "");
+      if (!id || seen.has(id) || cat.isActive === false) continue;
+      seen.add(id);
+      const update = {
+        $set: {
+          ibsherId: id,
+          name: cat.name,
+          images: cat.images || [],
+          isActive: cat.isActive !== false,
+        },
+      };
+      if (!known.has(id)) {
+        nextOrder += 1;
+        update.$setOnInsert = { displayOrder: nextOrder };
+      }
+      await Category.updateOne({ ibsherId: id }, update, { upsert: true });
+    }
+
+    if (!seen.size) {
+      throw new Error("Category sync returned no categories");
+    }
+
+    const stale = await Category.find({ ibsherId: { $nin: [...seen] } }).select(
+      "ibsherId overrides"
+    );
+    for (const category of stale) {
+      removeLocalCategoryImage(category.overrides?.image);
+    }
+    if (stale.length) {
+      await Category.deleteMany({ _id: { $in: stale.map((category) => category._id) } });
+    }
+
+    return { categories: seen.size, removed: stale.length };
+  });
+}
+
+export function syncCategoriesFromIbsher() {
+  return upsertRemoteCategoriesFetch();
+}
+
+async function upsertRemoteCategoriesFetch() {
+  const categories = await fetchIbsherCategories();
+  return upsertRemoteCategories(categories);
+}
+
+export function syncFromIbsher() {
+  if (!activeSync) {
+    activeSync = runCatalogSync().finally(() => {
+      activeSync = null;
+    });
+  }
+  return activeSync;
 }
 
 adminRouter.post("/sync", async (req, res) => {

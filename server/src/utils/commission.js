@@ -3,6 +3,7 @@ import {
   ALL_TARGET_ID,
   COMMISSION_SCOPES,
 } from "../models/Commission.js";
+import { fetchIbsherVendors } from "../services/ibsher.js";
 
 export { ALL_TARGET_ID, COMMISSION_SCOPES };
 
@@ -63,8 +64,17 @@ function mapRows(rows) {
     }));
 }
 
+function vendorLabel(row, directory) {
+  const id = String(row._id || "");
+  const fromDirectory = directory.get(id);
+  if (fromDirectory) return fromDirectory;
+  if (typeof row.name === "string" && row.name.trim()) return row.name.trim();
+  const email = typeof row.email === "string" ? row.email.trim() : "";
+  return email;
+}
+
 export async function commissionTargets() {
-  const [categories, subcategories, collections, vendors] = await Promise.all([
+  const [categories, subcategories, collections, vendors, directory] = await Promise.all([
     Product.aggregate([
       { $match: { "category._id": { $exists: true, $ne: null } } },
       {
@@ -117,18 +127,27 @@ export async function commissionTargets() {
         $group: {
           _id: { $toString: "$createdBy._id" },
           name: { $first: "$createdBy.name" },
+          email: { $first: "$createdBy.email" },
           products: { $sum: 1 },
         },
       },
-      { $sort: { name: 1 } },
     ]),
+    fetchIbsherVendors().catch((err) => {
+      console.warn("Vendor names unavailable:", err.message);
+      return [];
+    }),
   ]);
+
+  const names = new Map(directory.map((vendor) => [vendor.id, vendor.name]));
+  const namedVendors = vendors
+    .map((row) => ({ ...row, name: vendorLabel(row, names) }))
+    .sort((a, b) => String(a.name || a._id).localeCompare(String(b.name || b._id), "en"));
 
   return {
     categories: mapRows(categories),
     subcategories: mapRows(subcategories),
     collections: mapRows(collections),
-    vendors: mapRows(vendors),
+    vendors: mapRows(namedVendors),
   };
 }
 

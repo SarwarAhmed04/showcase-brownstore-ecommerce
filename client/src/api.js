@@ -82,6 +82,12 @@ export const api = {
       body: JSON.stringify(body),
     }),
   sync: () => request("/api/admin/sync", { method: "POST" }),
+  syncCategories: () => request("/api/admin/categories/sync", { method: "POST" }),
+  reorderCategories: (ids) =>
+    request("/api/admin/categories/order", {
+      method: "PUT",
+      body: JSON.stringify({ ids }),
+    }),
   adminStats: () => request("/api/admin/stats"),
   adminCategories: () => request("/api/admin/categories"),
   patchCategory: (id, body) =>

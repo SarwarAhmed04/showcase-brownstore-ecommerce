@@ -6,7 +6,7 @@ import { imgUrl } from "../../lib/img";
 import { fileToJpegDataUrl } from "../../lib/imageUpload";
 import Spinner from "../../components/Spinner";
 
-function CategoryCard({ item, t, lang, onUpdated }) {
+function CategoryCard({ item, t, lang, onUpdated, position, total, onPosition, locked }) {
   const [name, setName] = useState({
     ku: item.overrides?.name?.ku || "",
     en: item.overrides?.name?.en || "",
@@ -90,6 +90,41 @@ function CategoryCard({ item, t, lang, onUpdated }) {
           <p className="mt-1 text-[11px] text-brown/40">
             {t.source}: {tName(item.sourceName, lang) || item.id}
           </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <label className="text-xs text-brown/50">
+              {t.displayOrder}
+              <select
+                value={position}
+                onChange={(event) => onPosition(Number(event.target.value))}
+                disabled={busy || locked}
+                className="ms-2 rounded-full border border-brown/10 bg-cream px-3 py-1.5 text-sm font-semibold text-brown"
+              >
+                {Array.from({ length: total }, (_, index) => (
+                  <option key={index + 1} value={index + 1}>
+                    {index + 1}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => onPosition(position - 1)}
+              disabled={busy || locked || position <= 1}
+              aria-label={t.moveEarlier}
+              className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-brown ring-1 ring-brown/10 disabled:opacity-40"
+            >
+              {t.moveEarlier}
+            </button>
+            <button
+              type="button"
+              onClick={() => onPosition(position + 1)}
+              disabled={busy || locked || position >= total}
+              aria-label={t.moveLater}
+              className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-brown ring-1 ring-brown/10 disabled:opacity-40"
+            >
+              {t.moveLater}
+            </button>
+          </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <label className="cursor-pointer rounded-full bg-brown px-3 py-1.5 text-xs font-semibold text-cream">
               {t.changeImage}
@@ -158,20 +193,45 @@ function CategoryCard({ item, t, lang, onUpdated }) {
 export default function AdminCategories() {
   const { t, lang } = useLang();
   const [limit, setLimit] = useState(0);
+  const [layout, setLayout] = useState("mosaic");
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [ordering, setOrdering] = useState(false);
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
     api
       .adminCategories()
       .then((data) => {
         setLimit(Number(data.categoryLimit) || 0);
+        setLayout(data.layout || "mosaic");
         setItems(data.categories || []);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
+
+  const layouts = [
+    ["mosaic", t.layoutMosaic],
+    ["circles", t.layoutCircles],
+    ["cards", t.layoutCards],
+    ["posters", t.layoutPosters],
+    ["rail", t.layoutRail],
+    ["pills", t.layoutPills],
+  ];
+
+  async function chooseLayout(next) {
+    const prev = layout;
+    setLayout(next);
+    try {
+      await api.patchSettings({ categoryLayout: next });
+    } catch (err) {
+      setLayout(prev);
+      setError(err.message);
+    }
+  }
 
   async function chooseLimit(next) {
     const prev = limit;
@@ -188,16 +248,86 @@ export default function AdminCategories() {
     setItems((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
   }
 
+  async function moveTo(from, to) {
+    if (ordering || from === to || to < 0 || to >= items.length) return;
+    const prev = items;
+    const next = [...items];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    setItems(next);
+    setOrdering(true);
+    setError("");
+    try {
+      const data = await api.reorderCategories(next.map((row) => row.id));
+      setItems(data.categories || next);
+    } catch (err) {
+      setItems(prev);
+      setError(err.message);
+    } finally {
+      setOrdering(false);
+    }
+  }
+
+  async function sync() {
+    setSyncing(true);
+    setMessage("");
+    setError("");
+    try {
+      const result = await api.syncCategories();
+      setLimit(Number(result.categoryLimit) || 0);
+      if (result.layout) setLayout(result.layout);
+      setItems(result.categories || []);
+      setMessage(`${Number(result.synced || 0).toLocaleString("en-US")} ${t.categoriesCount}`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   if (loading) return <Spinner label={t.loading} />;
 
   return (
     <div>
-      <div className="mb-6">
-        <h2 className="font-display text-3xl">{t.categoriesPage}</h2>
-        <p className="mt-1 text-sm text-brown/50">{t.customizeCategories}</p>
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display text-3xl">{t.categoriesPage}</h2>
+          <p className="mt-1 text-sm text-brown/50">{t.customizeCategories}</p>
+        </div>
+        <button
+          type="button"
+          onClick={sync}
+          disabled={syncing}
+          className="rounded-full bg-tan px-4 py-2 text-sm font-semibold text-brown disabled:opacity-60"
+        >
+          {syncing ? t.syncing : t.syncCategories}
+        </button>
       </div>
 
+      {message ? <p className="mb-3 text-sm text-brown/70">{message}</p> : null}
       {error ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
+
+      <section className="mb-8 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-brown/5">
+        <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
+          {t.categoryLayout}
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {layouts.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => chooseLayout(id)}
+              className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                layout === id
+                  ? "bg-brown text-cream"
+                  : "bg-cream text-brown ring-1 ring-brown/10"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </section>
 
       <section className="mb-8 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-brown/5">
         <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
@@ -226,8 +356,18 @@ export default function AdminCategories() {
       </section>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {items.map((item) => (
-          <CategoryCard key={item.id} item={item} t={t} lang={lang} onUpdated={onUpdated} />
+        {items.map((item, index) => (
+          <CategoryCard
+            key={item.id}
+            item={item}
+            t={t}
+            lang={lang}
+            onUpdated={onUpdated}
+            position={index + 1}
+            total={items.length}
+            locked={ordering}
+            onPosition={(next) => moveTo(index, next - 1)}
+          />
         ))}
       </div>
     </div>

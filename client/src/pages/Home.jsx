@@ -4,19 +4,40 @@ import { ArrowRight, Clock } from 'lucide-react'
 import Hero from '../components/Hero'
 import ProductRail from '../components/ProductRail'
 import CategoryTile from '../components/CategoryTile'
+import CategoryShowcase from '../components/CategoryShowcase'
 import { LogoLoop } from '../components/LogoLoop'
 import ProductCard from '../components/ProductCard'
 import { BannerSlider, BannerStrip } from '../components/HomeBanners'
 import { Reveal, SectionHead } from '../components/ui'
 import { useCatalog } from '../lib/catalogStore'
-import { imgUrl } from '../lib/img'
 import { useLang } from '../context/LangContext'
 import { api } from '../api'
 import { useEffect, useState } from 'react'
 
+function HomeCategories({ categories, layout, lang }) {
+  if (layout && layout !== "mosaic") {
+    const items = categories.map((category) => ({
+      id: category.id,
+      name: category.name,
+      image: category.cover,
+    }))
+    return <CategoryShowcase categories={items} layout={layout} lang={lang} />
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3 sm:gap-4">
+      {categories.map((category, index) => (
+        <Reveal key={category.slug} delay={(index % 3) * 70}>
+          <CategoryTile category={category} />
+        </Reveal>
+      ))}
+    </div>
+  )
+}
+
 export default function Home() {
-  const { categories, byCategory, brands, featured, live: products } = useCatalog()
-  const { t } = useLang()
+  const { categories, byCategory, brands, featured, live: products, layout, categoryLimit } = useCatalog()
+  const { t, lang } = useLang()
   const [banners, setBanners] = useState([])
   const [bannersReady, setBannersReady] = useState(false)
   const newest = [...products].sort((a, b) => String(b.id).localeCompare(String(a.id))).slice(0, 10)
@@ -66,18 +87,11 @@ export default function Home() {
           />
         </Reveal>
 
-        <div className="grid grid-cols-2 gap-3.5 sm:gap-4 lg:grid-cols-4">
-          {categories.slice(0, 2).map((c, i) => (
-            <Reveal key={c.slug} delay={i * 70} className="col-span-2 lg:row-span-2">
-              <CategoryTile category={c} large />
-            </Reveal>
-          ))}
-          {categories.slice(2).map((c, i) => (
-            <Reveal key={c.slug} delay={140 + i * 60}>
-              <CategoryTile category={c} />
-            </Reveal>
-          ))}
-        </div>
+        <HomeCategories
+          categories={categoryLimit > 0 ? categories.slice(0, categoryLimit) : categories}
+          layout={layout}
+          lang={lang}
+        />
       </section>
 
       <section className="container-x py-14">
@@ -106,40 +120,6 @@ export default function Home() {
       </section>
 
       <BannerStrip banner={bannerFour} />
-
-      <section className="container-x py-14">
-        <Reveal>
-          <div className="glass grid overflow-hidden rounded-panel lg:grid-cols-2">
-            <div className="relative min-h-[280px] lg:min-h-[440px]">
-              <img
-                src={imgUrl('photo-1495474472287-4d71bcdd2085', { w: 1000, h: 900 })}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                className="absolute inset-0 h-full w-full object-cover"
-              />
-              <div className="absolute inset-0 bg-gradient-to-r from-transparent to-[rgb(var(--bg)/.65)] lg:to-[rgb(var(--bg)/.9)]" />
-            </div>
-
-            <div className="flex flex-col justify-center p-8 sm:p-12 lg:p-14">
-              <div className="eyebrow mb-5">{t.editorialEyebrow}</div>
-              <h2 className="headline text-3xl sm:text-4xl lg:text-4xl">
-                {t.editorialTitle} <span className="gold-text">{t.editorialGold}</span>
-              </h2>
-              <p className="mt-5 text-base leading-relaxed text-foreground/75">
-                {t.editorialBody}
-              </p>
-              <div className="mt-8 flex flex-wrap gap-3">
-                <Button asChild variant="brand" size="lg">
-                  <Link to="/shop">
-                    {t.seeTheMachines} <ArrowRight />
-                  </Link>
-                </Button>
-              </div>
-            </div>
-          </div>
-        </Reveal>
-      </section>
 
       {categories.slice(0, 3).map((cat) => (
         <Reveal key={cat.slug}>

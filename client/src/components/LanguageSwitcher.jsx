@@ -19,20 +19,16 @@ const SHELL_MOTION = `width 0.4s ${EASE}, box-shadow 0.34s ease`;
 export default function LanguageSwitcher() {
   const { lang, setLang } = useLang();
   const [open, setOpen] = useState(false);
-  const [filled, setFilled] = useState(true);
   const wrapRef = useRef(null);
   const shellRef = useRef(null);
   const trackRef = useRef(null);
   const closeTimer = useRef(null);
-  const fillTimer = useRef(null);
   const measured = useRef(false);
+  const suppressHoverUntil = useRef(0);
   const current = langs.find((item) => item.id === lang) || langs[0];
 
   useEffect(() => {
-    return () => {
-      clearTimeout(closeTimer.current);
-      clearTimeout(fillTimer.current);
-    };
+    return () => clearTimeout(closeTimer.current);
   }, []);
 
   useEffect(() => {
@@ -78,22 +74,21 @@ export default function LanguageSwitcher() {
   }, [open, lang]);
 
   function show() {
+    if (performance.now() < suppressHoverUntil.current) return;
     clearTimeout(closeTimer.current);
-    clearTimeout(fillTimer.current);
-    setFilled(false);
     setOpen(true);
   }
 
   function close() {
     clearTimeout(closeTimer.current);
-    clearTimeout(fillTimer.current);
+    suppressHoverUntil.current = performance.now() + 420;
     setOpen(false);
-    fillTimer.current = setTimeout(() => setFilled(true), 400);
   }
 
   function hideSoon() {
+    suppressHoverUntil.current = performance.now() + 560;
     clearTimeout(closeTimer.current);
-    closeTimer.current = setTimeout(close, 80);
+    closeTimer.current = setTimeout(() => setOpen(false), 120);
   }
 
   function pick(id) {
@@ -118,30 +113,15 @@ export default function LanguageSwitcher() {
         ref={shellRef}
         className="absolute top-1/2 end-0 z-50 -translate-y-1/2 rounded-full"
         style={{
-          boxShadow: filled
-            ? "0 0 0 1px rgb(var(--stroke) / 0.2)"
-            : "0 0 0 1px rgb(var(--stroke) / 0.28)",
+          boxShadow: "0 0 0 1px rgb(var(--stroke) / 0.22)",
           transition: SHELL_MOTION,
         }}
       >
         <div className="glass-soft relative w-full overflow-hidden rounded-full">
-          <span
-            aria-hidden
-            className="pointer-events-none absolute inset-0 rounded-full bg-primary"
-            style={{
-              opacity: filled ? 1 : 0,
-              transition: "opacity 0.34s ease",
-            }}
-          />
           <div
             ref={trackRef}
             className="relative z-10 inline-grid w-full items-center"
-            style={{
-              gridTemplateColumns: langs.map(() => "0px").join(" "),
-              columnGap: "0px",
-              padding: "0px",
-              transition: SIZE_MOTION,
-            }}
+            style={{ transition: SIZE_MOTION }}
           >
             {langs.map((item) => {
               const active = item.id === lang;
@@ -155,13 +135,9 @@ export default function LanguageSwitcher() {
                     onClick={() => (active && !open ? show() : pick(item.id))}
                     className={`flex h-7 items-center justify-center whitespace-nowrap rounded-full px-3 text-xs font-semibold leading-none ${
                       active
-                        ? filled
-                          ? "text-primary-foreground"
-                          : "bg-primary text-primary-foreground"
-                        : "bg-transparent text-fg-mute hover:text-fg"
-                    } ${shown ? "opacity-100" : "opacity-0"} ${
-                      active ? "" : "transition-opacity duration-150 ease-out"
-                    }`}
+                        ? "bg-primary text-primary-foreground"
+                        : "text-fg-mute hover:text-fg"
+                    } ${shown ? "opacity-100" : "pointer-events-none opacity-0"}`}
                   >
                     {item.label}
                   </button>
