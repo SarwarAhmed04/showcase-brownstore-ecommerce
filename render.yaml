@@ -22,3 +22,9 @@ services:
         value: https://api.ibsher.com/api/v1/client
       - key: IBSHER_CDN
         value: https://cdn.ibsher.com
+      - key: IBSHER_ADMIN_API
+        value: https://api.ibsher.com/api/v1/admin
+      - key: IBSHER_ADMIN_EMAIL
+        sync: false
+      - key: IBSHER_ADMIN_PASSWORD
+        sync: false

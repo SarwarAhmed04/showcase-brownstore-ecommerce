@@ -86,8 +86,10 @@ export const translations = {
     sync: "ڕیفرێش کردنی بەرهەمەکان",
     syncCategories: "ڕیفرێش کردنی بەشەکان",
     syncing: "ڕیفرێش دەکرێت...",
+    syncComplete:
+      "هاوکاتکردن تەواو بوو: {synced} / {remote} بەرهەمی بڵاوکراوەی IBSHER بە Admin API هاوکات کران.",
     syncLimited:
-      "ئەمە تەنها کاتالۆگی گشتی ibsherە. بۆ هەموو بەرهەمە بڵاوکراوەکان، ئیمەیڵ و وشەی نهێنی ئەدمینی ibsher لە server/.env دابنێ.",
+      "هاوکاتکردنی سنووردار: زانیاری چوونەژوورەوەی Admin APIی IBSHER لەسەر سێرڤەر دانەنراوە.",
     save: "پاشەکەوت",
     saved: "پاشەکەوت کرا",
     source: "سەرچاوە",
@@ -596,8 +598,10 @@ export const translations = {
     sync: "Refresh Products",
     syncCategories: "Refresh Categories",
     syncing: "Refreshing...",
+    syncComplete:
+      "Sync complete: {synced} / {remote} published IBSHER products synced using Admin API.",
     syncLimited:
-      "This is only the public ibsher catalog. Add the ibsher admin email and password in server/.env to sync every published product.",
+      "Limited sync: IBSHER Admin API credentials are not configured on the server.",
     save: "Save",
     saved: "Saved",
     source: "Source",
@@ -1096,8 +1100,10 @@ export const translations = {
     sync: "تحديث المنتجات",
     syncCategories: "تحديث الأقسام",
     syncing: "جاري التحديث...",
+    syncComplete:
+      "اكتملت المزامنة: {synced} / {remote} منتجاً منشوراً من IBSHER تمت مزامنتها باستخدام Admin API.",
     syncLimited:
-      "هذا كتالوج ibsher العام فقط. لجلب كل المنتجات المنشورة ضع بريد وكلمة مرور أدمن ibsher في server/.env.",
+      "مزامنة محدودة: بيانات اعتماد IBSHER Admin API غير مهيأة على الخادم.",
     save: "حفظ",
     saved: "تم الحفظ",
     source: "المصدر",

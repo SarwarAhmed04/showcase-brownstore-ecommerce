@@ -187,6 +187,7 @@ export default function AdminProducts() {
   const page = Math.max(1, Number(params.get("page") || 1));
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState("");
+  const [limitedSync, setLimitedSync] = useState(false);
   const [data, setData] = useState({
     products: [],
     pagination: { pages: 1, total: 0 },
@@ -209,6 +210,19 @@ export default function AdminProducts() {
     availability,
     limit: 20,
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .syncStatus()
+      .then((status) => {
+        if (!cancelled) setLimitedSync(Boolean(status.limited || status.source === "client"));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -248,8 +262,17 @@ export default function AdminProducts() {
     setMessage("");
     try {
       const result = await api.sync();
-      const count = Number(result.products || 0).toLocaleString("en-US");
-      setMessage(result.limited ? `${count} ${t.products}. ${t.syncLimited}` : `${count} ${t.products}`);
+      const synced = Number(result.uniqueProducts ?? result.products ?? 0).toLocaleString("en-US");
+      const remote = Number(result.remoteTotal || result.uniqueProducts || result.products || 0).toLocaleString(
+        "en-US"
+      );
+      const limited = Boolean(result.limited || result.source === "client");
+      setLimitedSync(limited);
+      setMessage(
+        limited
+          ? t.syncLimited
+          : t.syncComplete.replace("{synced}", synced).replace("{remote}", remote)
+      );
       const refreshed = await api.adminProducts(query);
       setData(refreshed);
     } catch (err) {
@@ -280,7 +303,18 @@ export default function AdminProducts() {
         </button>
       </div>
 
-      {message ? <p className="mb-3 text-sm text-brown/70">{message}</p> : null}
+      {limitedSync && message !== t.syncLimited ? (
+        <p className="mb-3 text-sm font-medium text-[#9a3412]">{t.syncLimited}</p>
+      ) : null}
+      {message ? (
+        <p
+          className={`mb-3 text-sm ${
+            message === t.syncLimited ? "font-medium text-[#9a3412]" : "text-brown/70"
+          }`}
+        >
+          {message}
+        </p>
+      ) : null}
 
       <ProductFilters
         t={t}

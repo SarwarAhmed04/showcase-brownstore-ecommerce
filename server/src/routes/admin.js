@@ -34,7 +34,12 @@ import {
   sanitizeBannerLink,
   toAdminBanner,
 } from "../models/Banner.js";
-import { fetchIbsherCategories, mapIbsherProduct, streamIbsherCatalog } from "../services/ibsher.js";
+import {
+  catalogSyncMeta,
+  fetchIbsherCategories,
+  mapIbsherProduct,
+  streamIbsherCatalog,
+} from "../services/ibsher.js";
 import { Commission, COMMISSION_SCOPES } from "../models/Commission.js";
 import { Partner } from "../models/Partner.js";
 import { PlatformProduct } from "../models/PlatformProduct.js";
@@ -590,6 +595,7 @@ async function upsertProducts(items, syncedAt) {
     const mapped = mapIbsherProduct(item);
     if (!mapped.ibsherId) continue;
     mapped.lastSyncedAt = syncedAt;
+    delete mapped.overrides;
     ops.push({
       updateOne: {
         filter: { ibsherId: mapped.ibsherId },
@@ -604,46 +610,135 @@ async function upsertProducts(items, syncedAt) {
     });
   }
 
+  let inserted = 0;
+  let updated = 0;
   for (let i = 0; i < ops.length; i += 200) {
-    await Product.bulkWrite(ops.slice(i, i + 200), { ordered: false });
+    const write = await Product.bulkWrite(ops.slice(i, i + 200), { ordered: false });
+    inserted += write.upsertedCount || 0;
+    updated += write.modifiedCount || 0;
   }
+  return { inserted, updated };
+}
+
+function publishedProductId(item) {
+  const status = String(item?.status || "").trim().toLowerCase();
+  if (status && status !== "published") return "";
+  return String(item?._id || item?.id || "").trim();
+}
+
+function logCatalogSync(summary, aborted = "") {
+  console.log(`IBSHER sync source: ${summary.source}`);
+  console.log(`IBSHER status filter: ${summary.statusFilter || "none"}`);
+  console.log(`Remote total: ${summary.remoteTotal}`);
+  console.log(`Total pages: ${summary.totalPages}`);
+  console.log(`Received rows: ${summary.received}`);
+  console.log(`Unique product IDs: ${summary.uniqueProducts}`);
+  console.log(`Inserted: ${summary.inserted}`);
+  console.log(`Updated: ${summary.updated}`);
+  console.log(`Removed: ${summary.removed}`);
+  console.log(`BrownStore total after sync: ${summary.localTotalAfterSync}`);
+  if (summary.limited) {
+    console.warn("Limited sync: IBSHER Admin API credentials are not configured on the server.");
+  }
+  if (aborted) console.error(`Catalog sync aborted: ${aborted}`);
 }
 
 async function runCatalogSync() {
   const syncedAt = new Date();
   const seen = new Set();
+  let inserted = 0;
+  let updated = 0;
+  let receivedRows = 0;
+  let pageMeta = { totalPages: 0, remoteTotal: 0 };
 
-  const result = await streamIbsherCatalog(async (items) => {
-    const fresh = [];
-    for (const item of items) {
-      const id = String(item?._id || item?.id || "");
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      fresh.push(item);
-    }
-    if (fresh.length) await upsertProducts(fresh, syncedAt);
-  });
-
-  const categoryResult = await upsertRemoteCategories(result.categories);
-
-  const remoteTotal = result.remoteTotal || seen.size;
-  const slack = Math.max(50, Math.round(remoteTotal * 0.01));
-  if (!seen.size || seen.size + slack < remoteTotal) {
-    throw new Error(`Incomplete catalog sync (${seen.size} of ${remoteTotal})`);
+  let result;
+  try {
+    result = await streamIbsherCatalog(async (items, meta) => {
+      if (meta) pageMeta = meta;
+      receivedRows += Array.isArray(items) ? items.length : 0;
+      const fresh = [];
+      for (const item of items) {
+        const id = publishedProductId(item);
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        fresh.push(item);
+      }
+      if (!fresh.length) return;
+      const write = await upsertProducts(fresh, syncedAt);
+      inserted += write.inserted;
+      updated += write.updated;
+    });
+  } catch (err) {
+    const reason = String(err.message || "Catalog sync failed");
+    const aborted = reason.includes("Stale products were kept")
+      ? reason
+      : `${reason} Stale products were kept.`;
+    const meta = catalogSyncMeta();
+    logCatalogSync(
+      {
+        source: meta.source,
+        limited: meta.limited,
+        statusFilter: meta.statusFilter,
+        remoteTotal: Number(pageMeta.remoteTotal) || 0,
+        totalPages: Number(pageMeta.totalPages) || 0,
+        received: receivedRows,
+        uniqueProducts: seen.size,
+        inserted,
+        updated,
+        removed: 0,
+        localTotalAfterSync: await Product.countDocuments(),
+      },
+      aborted
+    );
+    throw new Error(aborted);
   }
 
+  const uniqueProducts = seen.size;
+  const remoteTotal = Number(result.remoteTotal) || 0;
+  const report = {
+    source: result.source,
+    limited: Boolean(result.limited),
+    statusFilter: result.statusFilter || null,
+    adminCatalogConfigured: Boolean(result.adminCatalogConfigured),
+    remoteTotal,
+    received: Number(result.received) || 0,
+    uniqueProducts,
+    products: uniqueProducts,
+    totalPages: Number(result.totalPages) || 0,
+    pagesCompleted: Number(result.pagesCompleted) || 0,
+    inserted,
+    updated,
+  };
+
+  const incomplete =
+    !report.totalPages || report.pagesCompleted !== report.totalPages
+      ? `Incomplete catalog sync: fetched ${report.pagesCompleted} of ${report.totalPages} pages. Stale products were kept.`
+      : !uniqueProducts
+        ? "Incomplete catalog sync: no products received. Stale products were kept."
+        : remoteTotal > 0 && uniqueProducts < remoteTotal
+          ? `Incomplete catalog sync (${uniqueProducts} unique of ${remoteTotal} remote). Stale products were kept.`
+          : "";
+
+  if (incomplete) {
+    report.removed = 0;
+    report.localTotalAfterSync = await Product.countDocuments();
+    report.categories = 0;
+    logCatalogSync(report, incomplete);
+    throw new Error(incomplete);
+  }
+
+  const categoryResult = await upsertRemoteCategories(result.categories);
   const removed = await Product.deleteMany({
     $or: [{ lastSyncedAt: { $lt: syncedAt } }, { lastSyncedAt: { $exists: false } }],
   });
-
-  return {
+  const summary = {
+    ...report,
     categories: categoryResult.categories,
-    products: seen.size,
-    remoteTotal,
     removed: removed.deletedCount || 0,
-    source: result.source,
-    limited: result.limited,
+    localTotalAfterSync: await Product.countDocuments(),
   };
+  logCatalogSync(summary);
+  return summary;
 }
 
 let categoryWrite = Promise.resolve();
@@ -722,17 +817,30 @@ export function syncFromIbsher() {
   return activeSync;
 }
 
+adminRouter.get("/sync/status", (_req, res) => {
+  res.json(catalogSyncMeta());
+});
+
 adminRouter.post("/sync", async (req, res) => {
   try {
     const result = await syncFromIbsher();
     await logActivity(req, "catalog.sync", {
-      products: result.products,
+      products: result.uniqueProducts,
       categories: result.categories,
+      source: result.source,
+      remoteTotal: result.remoteTotal,
+      limited: result.limited,
     });
-    res.json({ message: "Sync complete", ...result });
+    res.json({
+      message: result.limited
+        ? "Limited sync: IBSHER Admin API credentials are not configured on the server."
+        : "Sync complete",
+      ...result,
+    });
   } catch (err) {
-    console.error(err);
-    res.status(502).json({ message: err.message || "Sync failed" });
+    console.error("Catalog sync failed:", err.message);
+    const meta = catalogSyncMeta();
+    res.status(502).json({ message: err.message || "Sync failed", ...meta });
   }
 });
 

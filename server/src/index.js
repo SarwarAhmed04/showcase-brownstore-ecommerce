@@ -140,18 +140,7 @@ async function start() {
   }
 
   const refreshCatalog = () => {
-    syncFromIbsher()
-      .then((result) => {
-        console.log(
-          `Catalog sync (${result.source}): ${result.products} products, remote ${result.remoteTotal}, removed ${result.removed}`
-        );
-        if (result.limited) {
-          console.warn(
-            "Public ibsher catalog is smaller than the admin published count. Set IBSHER_ADMIN_EMAIL and IBSHER_ADMIN_PASSWORD to sync every published product."
-          );
-        }
-      })
-      .catch((err) => console.error("Catalog sync failed:", err.message));
+    syncFromIbsher().catch((err) => console.error("Catalog sync failed:", err.message));
   };
 
   refreshCatalog();

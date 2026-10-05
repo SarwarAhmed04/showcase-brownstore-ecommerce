@@ -35,6 +35,26 @@ export function adminCatalogConfigured() {
   );
 }
 
+export function catalogSyncMeta() {
+  const configured = adminCatalogConfigured();
+  return {
+    adminCatalogConfigured: configured,
+    source: configured ? "admin" : "client",
+    limited: !configured,
+    statusFilter: configured ? "published" : null,
+  };
+}
+
+function redactSecret(message) {
+  const secrets = [
+    String(process.env.IBSHER_ADMIN_EMAIL || "").trim(),
+    String(process.env.IBSHER_ADMIN_PASSWORD || ""),
+  ].filter((value) => value.length >= 4);
+  let text = String(message || "");
+  for (const secret of secrets) text = text.split(secret).join("[redacted]");
+  return text;
+}
+
 function listFrom(json) {
   const products = Array.isArray(json?.products) ? json.products : [];
   const product = Array.isArray(json?.product) ? json.product : [];
@@ -93,7 +113,7 @@ async function loginAdmin(jar) {
   jar.absorb(res);
   const body = await res.json().catch(() => ({}));
   if (!res.ok || body.success === false) {
-    throw new Error(body.message || "ibsher admin login failed");
+    throw new Error(redactSecret(body.message || "ibsher admin login failed"));
   }
   if (!jar.header()) {
     throw new Error("ibsher admin login did not return a session");
@@ -110,43 +130,87 @@ function pageUrl(base, page, params) {
   return `${base}?${query}`;
 }
 
+export function catalogTotals(first) {
+  const pagination =
+    first?.pagination && typeof first.pagination === "object" ? first.pagination : first || {};
+  const remoteTotal =
+    Number(
+      pagination.totalProducts ??
+        pagination.total ??
+        first?.totalProducts ??
+        first?.total
+    ) || 0;
+  const reportedPages = Number(pagination.totalPages ?? first?.totalPages) || 0;
+  const derivedPages = remoteTotal > 0 ? Math.ceil(remoteTotal / PAGE_LIMIT) : 0;
+  const totalPages = Math.max(1, reportedPages, derivedPages, 1);
+  return { remoteTotal, totalPages };
+}
+
+function missingPages(completed, totalPages) {
+  const missing = [];
+  for (let page = 1; page <= totalPages; page += 1) {
+    if (!completed.has(page)) missing.push(page);
+  }
+  return missing;
+}
+
 async function streamPages(base, jar, params, onPage) {
   const first = await requestJson(pageUrl(base, 1, params), jar);
-  const remoteTotal = Number(first.pagination?.totalProducts ?? first.pagination?.total) || 0;
-  const totalPages = Math.max(1, Number(first.pagination?.totalPages) || 1);
+  const { remoteTotal, totalPages } = catalogTotals(first);
   if (totalPages > 5000) {
     throw new Error(`Catalog page count looks wrong (${totalPages})`);
   }
+  if (!remoteTotal && totalPages === 1 && listFrom(first).length >= PAGE_LIMIT) {
+    throw new Error("Incomplete catalog sync: remote total was missing. Stale products were kept.");
+  }
 
-  let received = listFrom(first).length;
-  await onPage(listFrom(first), { page: 1, totalPages, remoteTotal });
+  const completed = new Set();
+  let received = 0;
 
-  let next = 2;
-  async function worker() {
-    while (next <= totalPages) {
-      const page = next;
-      next += 1;
-      const json = await requestJson(pageUrl(base, page, params), jar);
-      const batch = listFrom(json);
-      received += batch.length;
-      await onPage(batch, { page, totalPages, remoteTotal });
-      if (page % 25 === 0 || page === totalPages) {
-        console.log(`ibsher catalog page ${page}/${totalPages}`);
-      }
+  async function consume(page, json) {
+    const batch = listFrom(json);
+    received += batch.length;
+    completed.add(page);
+    await onPage(batch, { page, totalPages, remoteTotal });
+    if (page % 25 === 0 || page === totalPages) {
+      console.log(`ibsher catalog page ${page}/${totalPages}`);
     }
   }
 
-  const workers = Array.from({ length: Math.min(CONCURRENCY, Math.max(0, totalPages - 1)) }, () =>
-    worker()
+  await consume(1, first);
+
+  const pending = [];
+  for (let page = 2; page <= totalPages; page += 1) pending.push(page);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < pending.length) {
+      const page = pending[cursor];
+      cursor += 1;
+      const json = await requestJson(pageUrl(base, page, params), jar);
+      await consume(page, json);
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(CONCURRENCY, pending.length) },
+    () => worker()
   );
   await Promise.all(workers);
-  return { remoteTotal, received, totalPages };
+
+  const missing = missingPages(completed, totalPages);
+  if (missing.length) {
+    throw new Error(
+      `Incomplete catalog sync: missed ${missing.length} page(s) (${missing.slice(0, 12).join(", ")}). Stale products were kept.`
+    );
+  }
+
+  return { remoteTotal, received, totalPages, pagesCompleted: completed.size };
 }
 
 async function collectCategories(base, jar) {
   const first = await requestJson(pageUrl(base, 1, {}), jar);
   const items = [...categoriesFrom(first)];
-  const totalPages = Math.max(1, Number(first.pagination?.totalPages) || 1);
+  const { totalPages } = catalogTotals(first);
   for (let page = 2; page <= totalPages; page += 1) {
     const json = await requestJson(pageUrl(base, page, {}), jar);
     items.push(...categoriesFrom(json));
@@ -206,12 +270,12 @@ export async function streamIbsherCatalog(onProducts) {
       { status: "published" },
       onProducts
     );
-    return { ...pages, categories, source: "admin", limited: false };
+    return { ...pages, categories, ...catalogSyncMeta(), source: "admin", limited: false, statusFilter: "published" };
   }
 
   const pages = await streamPages(`${CLIENT_API()}/product`, null, {}, onProducts);
   const categories = await collectCategories(`${CLIENT_API()}/category`, null);
-  return { ...pages, categories, source: "client", limited: true };
+  return { ...pages, categories, ...catalogSyncMeta(), source: "client", limited: true, statusFilter: null };
 }
 
 export function mapIbsherProduct(p) {
