@@ -832,9 +832,7 @@ adminRouter.post("/sync", async (req, res) => {
       limited: result.limited,
     });
     res.json({
-      message: result.limited
-        ? "Limited sync: IBSHER Admin API credentials are not configured on the server."
-        : "Sync complete",
+      message: "Sync complete",
       ...result,
     });
   } catch (err) {

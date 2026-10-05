@@ -82,7 +82,6 @@ export const api = {
       body: JSON.stringify(body),
     }),
   sync: () => request("/api/admin/sync", { method: "POST" }),
-  syncStatus: () => request("/api/admin/sync/status"),
   syncCategories: () => request("/api/admin/categories/sync", { method: "POST" }),
   reorderCategories: (ids) =>
     request("/api/admin/categories/order", {

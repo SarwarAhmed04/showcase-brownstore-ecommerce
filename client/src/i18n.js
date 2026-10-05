@@ -86,10 +86,7 @@ export const translations = {
     sync: "ڕیفرێش کردنی بەرهەمەکان",
     syncCategories: "ڕیفرێش کردنی بەشەکان",
     syncing: "ڕیفرێش دەکرێت...",
-    syncComplete:
-      "هاوکاتکردن تەواو بوو: {synced} / {remote} بەرهەمی بڵاوکراوەی IBSHER بە Admin API هاوکات کران.",
-    syncLimited:
-      "هاوکاتکردنی سنووردار: زانیاری چوونەژوورەوەی Admin APIی IBSHER لەسەر سێرڤەر دانەنراوە.",
+    syncComplete: "هاوکاتکردن تەواو بوو: {synced} / {remote} بەرهەم.",
     save: "پاشەکەوت",
     saved: "پاشەکەوت کرا",
     source: "سەرچاوە",
@@ -598,10 +595,7 @@ export const translations = {
     sync: "Refresh Products",
     syncCategories: "Refresh Categories",
     syncing: "Refreshing...",
-    syncComplete:
-      "Sync complete: {synced} / {remote} published IBSHER products synced using Admin API.",
-    syncLimited:
-      "Limited sync: IBSHER Admin API credentials are not configured on the server.",
+    syncComplete: "Sync complete: {synced} / {remote} products.",
     save: "Save",
     saved: "Saved",
     source: "Source",
@@ -1100,10 +1094,7 @@ export const translations = {
     sync: "تحديث المنتجات",
     syncCategories: "تحديث الأقسام",
     syncing: "جاري التحديث...",
-    syncComplete:
-      "اكتملت المزامنة: {synced} / {remote} منتجاً منشوراً من IBSHER تمت مزامنتها باستخدام Admin API.",
-    syncLimited:
-      "مزامنة محدودة: بيانات اعتماد IBSHER Admin API غير مهيأة على الخادم.",
+    syncComplete: "اكتملت المزامنة: {synced} / {remote} منتجاً.",
     save: "حفظ",
     saved: "تم الحفظ",
     source: "المصدر",
