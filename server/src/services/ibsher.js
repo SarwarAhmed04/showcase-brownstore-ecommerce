@@ -3,6 +3,8 @@ const ADMIN_API = () => process.env.IBSHER_ADMIN_API || "https://api.ibsher.com/
 const PAGE_LIMIT = 100;
 const CONCURRENCY = 4;
 
+export const BROWNSTORE_PRODUCTS_PATH = "/product/brownstore/products";
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -36,12 +38,11 @@ export function adminCatalogConfigured() {
 }
 
 export function catalogSyncMeta() {
-  const configured = adminCatalogConfigured();
   return {
-    adminCatalogConfigured: configured,
-    source: configured ? "admin" : "client",
-    limited: !configured,
-    statusFilter: configured ? "published" : null,
+    endpoint: BROWNSTORE_PRODUCTS_PATH,
+    source: "brownstore",
+    limited: false,
+    statusFilter: null,
   };
 }
 
@@ -122,27 +123,44 @@ async function loginAdmin(jar) {
 
 function pageUrl(base, page, params) {
   const query = new URLSearchParams();
-  query.set("limit", String(PAGE_LIMIT));
   query.set("page", String(page));
+  query.set("limit", String(PAGE_LIMIT));
   for (const [key, value] of Object.entries(params)) {
     if (value != null && value !== "") query.set(key, String(value));
   }
   return `${base}?${query}`;
 }
 
+function readCount(...values) {
+  for (const value of values) {
+    if (value == null || value === "") continue;
+    const count = Number(value);
+    if (Number.isFinite(count) && count >= 0) return count;
+  }
+  return 0;
+}
+
+export function brownstoreProductsUrl() {
+  const base = String(CLIENT_API()).replace(/\/+$/, "");
+  return `${base}${BROWNSTORE_PRODUCTS_PATH}`;
+}
+
 export function catalogTotals(first) {
-  const pagination =
-    first?.pagination && typeof first.pagination === "object" ? first.pagination : first || {};
-  const remoteTotal =
-    Number(
-      pagination.totalProducts ??
-        pagination.total ??
-        first?.totalProducts ??
-        first?.total
-    ) || 0;
-  const reportedPages = Number(pagination.totalPages ?? first?.totalPages) || 0;
-  const derivedPages = remoteTotal > 0 ? Math.ceil(remoteTotal / PAGE_LIMIT) : 0;
-  const totalPages = Math.max(1, reportedPages, derivedPages, 1);
+  const root = first && typeof first === "object" ? first : {};
+  const nested =
+    root.pagination && typeof root.pagination === "object" && !Array.isArray(root.pagination)
+      ? root.pagination
+      : null;
+  const remoteTotal = readCount(
+    nested?.totalProducts,
+    root.totalProducts,
+    nested?.total,
+    root.total
+  );
+  const reportedPages = readCount(nested?.totalPages, root.totalPages);
+  const pageSize = readCount(nested?.limit, root.limit) || PAGE_LIMIT;
+  const derivedPages = remoteTotal > 0 ? Math.ceil(remoteTotal / pageSize) : 0;
+  const totalPages = Math.max(1, reportedPages, derivedPages);
   return { remoteTotal, totalPages };
 }
 
@@ -254,28 +272,19 @@ export async function fetchIbsherCategories() {
 }
 
 export async function streamIbsherCatalog(onProducts) {
-  if (adminCatalogConfigured()) {
-    const jar = new CookieJar();
-    await loginAdmin(jar);
-    let categories = [];
-    try {
-      categories = await collectCategories(`${ADMIN_API()}/category`, jar);
-    } catch (err) {
-      console.warn("Admin categories unavailable:", err.message);
-      categories = await collectCategories(`${CLIENT_API()}/category`, null);
-    }
-    const pages = await streamPages(
-      `${ADMIN_API()}/product`,
-      jar,
-      { status: "published" },
-      onProducts
-    );
-    return { ...pages, categories, ...catalogSyncMeta(), source: "admin", limited: false, statusFilter: "published" };
+  const url = brownstoreProductsUrl();
+  if (!url.endsWith(BROWNSTORE_PRODUCTS_PATH)) {
+    throw new Error("BrownStore product sync URL is not the dedicated IBSHER endpoint.");
   }
 
-  const pages = await streamPages(`${CLIENT_API()}/product`, null, {}, onProducts);
-  const categories = await collectCategories(`${CLIENT_API()}/category`, null);
-  return { ...pages, categories, ...catalogSyncMeta(), source: "client", limited: true, statusFilter: null };
+  console.log(`BrownStore IBSHER sync endpoint: ${BROWNSTORE_PRODUCTS_PATH}`);
+  const pages = await streamPages(url, null, {}, onProducts);
+  const categories = await fetchIbsherCategories();
+  return {
+    ...pages,
+    categories,
+    ...catalogSyncMeta(),
+  };
 }
 
 export function mapIbsherProduct(p) {

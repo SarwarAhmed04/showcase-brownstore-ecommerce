@@ -35,6 +35,7 @@ import {
   toAdminBanner,
 } from "../models/Banner.js";
 import {
+  BROWNSTORE_PRODUCTS_PATH,
   catalogSyncMeta,
   fetchIbsherCategories,
   mapIbsherProduct,
@@ -620,32 +621,48 @@ async function upsertProducts(items, syncedAt) {
   return { inserted, updated };
 }
 
-function publishedProductId(item) {
-  const status = String(item?.status || "").trim().toLowerCase();
-  if (status && status !== "published") return "";
+function ibsherProductId(item) {
   return String(item?._id || item?.id || "").trim();
 }
 
+function syncDiagnostics(summary) {
+  return {
+    endpoint: summary.endpoint || BROWNSTORE_PRODUCTS_PATH,
+    source: "brownstore",
+    limited: false,
+    statusFilter: null,
+    remoteTotal: Number(summary.remoteTotal) || 0,
+    received: Number(summary.received) || 0,
+    uniqueProducts: Number(summary.uniqueProducts) || 0,
+    totalPages: Number(summary.totalPages) || 0,
+    localTotalAfterSync: Number(summary.localTotalAfterSync) || 0,
+  };
+}
+
+function abortSync(message, summary) {
+  const err = new Error(message);
+  err.diagnostics = syncDiagnostics(summary);
+  return err;
+}
+
 function logCatalogSync(summary, aborted = "") {
-  console.log(`IBSHER sync source: ${summary.source}`);
-  console.log(`IBSHER status filter: ${summary.statusFilter || "none"}`);
-  console.log(`Remote total: ${summary.remoteTotal}`);
-  console.log(`Total pages: ${summary.totalPages}`);
-  console.log(`Received rows: ${summary.received}`);
-  console.log(`Unique product IDs: ${summary.uniqueProducts}`);
+  const diagnostics = syncDiagnostics(summary);
+  console.log(`BrownStore IBSHER sync endpoint: ${diagnostics.endpoint}`);
+  console.log(`Remote total: ${diagnostics.remoteTotal}`);
+  console.log(`Pages fetched: ${Number(summary.pagesCompleted) || 0}`);
+  console.log(`Products received: ${diagnostics.received}`);
+  console.log(`Unique products: ${diagnostics.uniqueProducts}`);
+  console.log(`Local total after sync: ${diagnostics.localTotalAfterSync}`);
   console.log(`Inserted: ${summary.inserted}`);
   console.log(`Updated: ${summary.updated}`);
   console.log(`Removed: ${summary.removed}`);
-  console.log(`BrownStore total after sync: ${summary.localTotalAfterSync}`);
-  if (summary.limited) {
-    console.warn("Limited sync: IBSHER Admin API credentials are not configured on the server.");
-  }
   if (aborted) console.error(`Catalog sync aborted: ${aborted}`);
 }
 
 async function runCatalogSync() {
   const syncedAt = new Date();
   const seen = new Set();
+  const pagesFetched = new Set();
   let inserted = 0;
   let updated = 0;
   let receivedRows = 0;
@@ -654,11 +671,12 @@ async function runCatalogSync() {
   let result;
   try {
     result = await streamIbsherCatalog(async (items, meta) => {
+      if (meta?.page) pagesFetched.add(meta.page);
       if (meta) pageMeta = meta;
       receivedRows += Array.isArray(items) ? items.length : 0;
       const fresh = [];
       for (const item of items) {
-        const id = publishedProductId(item);
+        const id = ibsherProductId(item);
         if (!id || seen.has(id)) continue;
         seen.add(id);
         fresh.push(item);
@@ -673,33 +691,29 @@ async function runCatalogSync() {
     const aborted = reason.includes("Stale products were kept")
       ? reason
       : `${reason} Stale products were kept.`;
-    const meta = catalogSyncMeta();
-    logCatalogSync(
-      {
-        source: meta.source,
-        limited: meta.limited,
-        statusFilter: meta.statusFilter,
-        remoteTotal: Number(pageMeta.remoteTotal) || 0,
-        totalPages: Number(pageMeta.totalPages) || 0,
-        received: receivedRows,
-        uniqueProducts: seen.size,
-        inserted,
-        updated,
-        removed: 0,
-        localTotalAfterSync: await Product.countDocuments(),
-      },
-      aborted
-    );
-    throw new Error(aborted);
+    const summary = {
+      endpoint: BROWNSTORE_PRODUCTS_PATH,
+      remoteTotal: Number(pageMeta.remoteTotal) || 0,
+      totalPages: Number(pageMeta.totalPages) || 0,
+      pagesCompleted: pagesFetched.size,
+      received: receivedRows,
+      uniqueProducts: seen.size,
+      inserted,
+      updated,
+      removed: 0,
+      localTotalAfterSync: await Product.countDocuments(),
+    };
+    logCatalogSync(summary, aborted);
+    throw abortSync(aborted, summary);
   }
 
   const uniqueProducts = seen.size;
   const remoteTotal = Number(result.remoteTotal) || 0;
   const report = {
     source: result.source,
-    limited: Boolean(result.limited),
-    statusFilter: result.statusFilter || null,
-    adminCatalogConfigured: Boolean(result.adminCatalogConfigured),
+    limited: false,
+    statusFilter: null,
+    endpoint: result.endpoint || BROWNSTORE_PRODUCTS_PATH,
     remoteTotal,
     received: Number(result.received) || 0,
     uniqueProducts,
@@ -713,10 +727,10 @@ async function runCatalogSync() {
   const incomplete =
     !report.totalPages || report.pagesCompleted !== report.totalPages
       ? `Incomplete catalog sync: fetched ${report.pagesCompleted} of ${report.totalPages} pages. Stale products were kept.`
-      : !uniqueProducts
-        ? "Incomplete catalog sync: no products received. Stale products were kept."
-        : remoteTotal > 0 && uniqueProducts < remoteTotal
-          ? `Incomplete catalog sync (${uniqueProducts} unique of ${remoteTotal} remote). Stale products were kept.`
+      : remoteTotal !== uniqueProducts
+        ? `Incomplete catalog sync (${uniqueProducts} unique of ${remoteTotal} remote). Stale products were kept.`
+        : !uniqueProducts
+          ? "Incomplete catalog sync: no products received. Stale products were kept."
           : "";
 
   if (incomplete) {
@@ -724,7 +738,7 @@ async function runCatalogSync() {
     report.localTotalAfterSync = await Product.countDocuments();
     report.categories = 0;
     logCatalogSync(report, incomplete);
-    throw new Error(incomplete);
+    throw abortSync(incomplete, report);
   }
 
   const categoryResult = await upsertRemoteCategories(result.categories);
@@ -838,7 +852,11 @@ adminRouter.post("/sync", async (req, res) => {
   } catch (err) {
     console.error("Catalog sync failed:", err.message);
     const meta = catalogSyncMeta();
-    res.status(502).json({ message: err.message || "Sync failed", ...meta });
+    res.status(502).json({
+      message: err.message || "Sync failed",
+      ...meta,
+      ...(err.diagnostics || {}),
+    });
   }
 });
 
