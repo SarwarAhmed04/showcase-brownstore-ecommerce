@@ -9,6 +9,7 @@ import { imgUrl } from "../../lib/img";
 import Spinner from "../../components/Spinner";
 import AdminModal from "../../components/admin/AdminModal";
 import ProductEditor, { formatGrouped } from "../../components/admin/ProductEditor";
+import PlatformCategoryMapping from "./PlatformCategoryMapping";
 
 const SCOPES = ["all", "category", "subcategory", "collection", "brand", "vendor"];
 const CONTROL =
@@ -1169,18 +1170,23 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         </AdminModal>
       ) : null}
 
-      <div className="mb-6 grid grid-cols-2 gap-1 rounded-full bg-white p-1 shadow-sm ring-1 ring-brown/5 sm:grid-cols-4">
+      <div
+        className={`mb-6 grid grid-cols-2 gap-1 rounded-full bg-white p-1 shadow-sm ring-1 ring-brown/5 ${
+          partnerSlug === "miswag" ? "sm:grid-cols-3 lg:grid-cols-5" : "sm:grid-cols-4"
+        }`}
+      >
         {[
           { id: "products", label: t.products },
           { id: "customized", label: t.customizedProducts, count: partner.customizedCount || 0 },
           { id: "excel", label: t.excelTab },
           { id: "api", label: t.partnerApi },
+          ...(partnerSlug === "miswag" ? [{ id: "mapping", label: t.categoryMapping }] : []),
         ].map((item) => (
           <button
             key={item.id}
             type="button"
             onClick={() => setTab(item.id)}
-            className={`rounded-full px-2 py-2.5 text-xs font-semibold transition sm:px-4 sm:text-sm ${
+            className={`rounded-full px-2 py-2.5 text-center text-xs font-semibold leading-tight transition sm:px-4 sm:text-sm ${
               tab === item.id ? "bg-brown text-cream" : "text-brown/55 hover:text-brown"
             }`}
           >
@@ -1192,6 +1198,10 @@ function PartnerCommission({ partnerSlug, t, lang }) {
 
       {error && !editOpen ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
       {message ? <p className="mb-4 text-sm text-brown/70">{message}</p> : null}
+
+      {tab === "mapping" && partnerSlug === "miswag" ? (
+        <PlatformCategoryMapping t={t} lang={lang} />
+      ) : null}
 
       {tab === "api" ? (
       <section className="mb-6 min-w-0 overflow-hidden rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">

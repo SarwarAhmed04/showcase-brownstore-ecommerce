@@ -202,6 +202,35 @@ export const api = {
       `/api/admin/platforms/${encodeURIComponent(slug)}/products/${encodeURIComponent(id)}`,
       { method: "DELETE" }
     ),
+  miswagHealth: () => request("/api/admin/platforms/miswag/category-mapping/health"),
+  syncMiswagCategories: () =>
+    request("/api/admin/platforms/miswag/category-mapping/categories/sync", { method: "POST" }),
+  miswagExternalCategories: (q = "") => {
+    const qs = q ? `?q=${encodeURIComponent(q)}` : "";
+    return request(`/api/admin/platforms/miswag/category-mapping/categories${qs}`);
+  },
+  miswagMappingSummary: () => request("/api/admin/platforms/miswag/category-mapping/summary"),
+  miswagMappings: (status = "") => {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+    return request(`/api/admin/platforms/miswag/category-mapping${qs}`);
+  },
+  runMiswagAutoMapping: () =>
+    request("/api/admin/platforms/miswag/category-mapping/auto", { method: "POST" }),
+  selectMiswagMapping: (collectionId, externalCategoryId) =>
+    request(`/api/admin/platforms/miswag/category-mapping/${encodeURIComponent(collectionId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ externalCategoryId }),
+    }),
+  verifyMiswagMapping: (collectionId) =>
+    request(
+      `/api/admin/platforms/miswag/category-mapping/${encodeURIComponent(collectionId)}/verify`,
+      { method: "POST" }
+    ),
+  rerunMiswagMapping: (collectionId) =>
+    request(
+      `/api/admin/platforms/miswag/category-mapping/${encodeURIComponent(collectionId)}/rerun`,
+      { method: "POST" }
+    ),
   createEnquiry: (body) =>
     request("/api/enquiries", {
       method: "POST",

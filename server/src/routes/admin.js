@@ -74,9 +74,12 @@ import {
   partnerDisplayName,
   toAdminActivity,
 } from "../utils/activity.js";
+import { registerMiswagMappingRoutes } from "./miswagMapping.js";
+import { mapNewCollections } from "../services/platformCategoryMapping.js";
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
+registerMiswagMappingRoutes(adminRouter);
 
 adminRouter.get("/stats", async (_req, res) => {
   try {
@@ -753,6 +756,16 @@ async function runCatalogSync() {
     removed: removed.deletedCount || 0,
     localTotalAfterSync: await Product.countDocuments(),
   };
+  try {
+    summary.miswagCategoryMappings = await mapNewCollections("miswag");
+    if (summary.miswagCategoryMappings?.created) {
+      console.log(
+        `Miswag category mappings created for new collections: ${summary.miswagCategoryMappings.created}`
+      );
+    }
+  } catch (err) {
+    console.error("Miswag new-collection mapping failed:", err.message);
+  }
   logCatalogSync(summary);
   return summary;
 }
