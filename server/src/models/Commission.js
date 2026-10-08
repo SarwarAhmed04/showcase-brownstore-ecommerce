@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-export const COMMISSION_SCOPES = ["all", "category", "subcategory", "collection", "vendor"];
+export const COMMISSION_SCOPES = ["all", "category", "subcategory", "collection", "brand", "vendor"];
 export const ALL_TARGET_ID = "*";
 
 const localized = { en: String, ar: String, ku: String };

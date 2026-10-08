@@ -10,7 +10,7 @@ import Spinner from "../../components/Spinner";
 import AdminModal from "../../components/admin/AdminModal";
 import ProductEditor, { formatGrouped } from "../../components/admin/ProductEditor";
 
-const SCOPES = ["all", "category", "subcategory", "collection", "vendor"];
+const SCOPES = ["all", "category", "subcategory", "collection", "brand", "vendor"];
 const CONTROL =
   "rounded-full border border-brown/10 bg-cream px-4 py-2.5 text-sm font-semibold text-brown outline-none ring-tan/40 focus:ring-2";
 const SELECT = `w-full ${CONTROL}`;
@@ -25,6 +25,7 @@ function scopeLabel(t, scope) {
   if (scope === "all") return t.allCommission;
   if (scope === "subcategory") return t.subCategory;
   if (scope === "collection") return t.collection;
+  if (scope === "brand") return t.productBrand;
   if (scope === "vendor") return t.vendor;
   return t.category;
 }
@@ -658,6 +659,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     categories: [],
     subcategories: [],
     collections: [],
+    brands: [],
     vendors: [],
   });
   const [commissions, setCommissions] = useState([]);
@@ -665,6 +667,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   const [categoryId, setCategoryId] = useState("");
   const [subCategoryId, setSubCategoryId] = useState("");
   const [collectionId, setCollectionId] = useState("");
+  const [brandId, setBrandId] = useState("");
   const [vendorId, setVendorId] = useState("");
   const [percentage, setPercentage] = useState("");
   const [loading, setLoading] = useState(true);
@@ -682,6 +685,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     pagination: { page: 1, pages: 1, total: 0 },
   });
   const [productQ, setProductQ] = useState("");
+  const [productPage, setProductPage] = useState(1);
   const [customQ, setCustomQ] = useState("");
   const [customPage, setCustomPage] = useState(1);
   const [editing, setEditing] = useState(null);
@@ -717,19 +721,52 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     [targets.collections, categoryId, subCategoryId]
   );
 
+  const preview = useMemo(() => {
+    if (scope === "category" && categoryId) return { category: categoryId };
+    if (scope === "subcategory" && subCategoryId) return { subCategory: subCategoryId };
+    if (scope === "collection" && collectionId) return { collection: collectionId };
+    if (scope === "brand" && brandId) return { brand: brandId };
+    if (scope === "vendor" && vendorId) return { vendor: vendorId };
+    return {};
+  }, [scope, categoryId, subCategoryId, collectionId, brandId, vendorId]);
+  const previewKey = JSON.stringify(preview);
+  const productListKey = `${partnerSlug}|${productQ}|${previewKey}`;
+  const [seenProductListKey, setSeenProductListKey] = useState(productListKey);
+  if (productListKey !== seenProductListKey) {
+    setSeenProductListKey(productListKey);
+    setProductPage(1);
+  }
+
   function loadDetail() {
     return api.adminPlatform(partnerSlug).then((detail) => {
       const next = detail.platform || detail.partner || null;
       setPartner(next);
       setCommissions(detail.commissions || []);
       setTargets(
-        detail.targets || { categories: [], subcategories: [], collections: [], vendors: [] }
+        detail.targets || {
+          categories: [],
+          subcategories: [],
+          collections: [],
+          brands: [],
+          vendors: [],
+        }
       );
     });
   }
 
   function loadProducts() {
-    return api.adminPlatformProducts(partnerSlug, { q: productQ, limit: 20 }).then(setProducts);
+    return api
+      .adminPlatformProducts(partnerSlug, {
+        q: productQ,
+        limit: 20,
+        page: productPage,
+        ...preview,
+      })
+      .then((data) => {
+        setProducts(data);
+        const pages = Number(data.pagination?.pages) || 1;
+        setProductPage((current) => (current > pages ? pages : current));
+      });
   }
 
   function loadCustomized() {
@@ -778,6 +815,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     setCustomPage(1);
     setCustomQ("");
     setProductQ("");
+    setProductPage(1);
     setTab("products");
     setExcelColumns([]);
     setExcelSaved(false);
@@ -789,11 +827,28 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   }, [partnerSlug]);
 
   useEffect(() => {
+    let ignore = false;
     const id = setTimeout(() => {
-      loadProducts().catch(() => {});
+      api
+        .adminPlatformProducts(partnerSlug, {
+          q: productQ,
+          limit: 20,
+          page: productPage,
+          ...preview,
+        })
+        .then((data) => {
+          if (ignore) return;
+          setProducts(data);
+          const pages = Number(data.pagination?.pages) || 1;
+          setProductPage((current) => (current > pages ? pages : current));
+        })
+        .catch(() => {});
     }, 220);
-    return () => clearTimeout(id);
-  }, [partnerSlug, productQ]);
+    return () => {
+      ignore = true;
+      clearTimeout(id);
+    };
+  }, [partnerSlug, productQ, productPage, previewKey]);
 
   useEffect(() => {
     const id = setTimeout(() => {
@@ -825,6 +880,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     setCategoryId("");
     setSubCategoryId("");
     setCollectionId("");
+    setBrandId("");
     setVendorId("");
     setPercentage("");
   }
@@ -840,6 +896,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           : ""
     );
     setCollectionId(rule.scope === "collection" ? rule.targetId : "");
+    setBrandId(rule.scope === "brand" ? rule.targetId : "");
     setVendorId(rule.scope === "vendor" ? rule.targetId : "");
     setPercentage(String(rule.percentage));
   }
@@ -848,6 +905,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     if (scope === "all") return "*";
     if (scope === "category") return categoryId;
     if (scope === "subcategory") return subCategoryId;
+    if (scope === "brand") return brandId;
     if (scope === "vendor") return vendorId;
     return collectionId;
   }
@@ -860,11 +918,13 @@ function PartnerCommission({ partnerSlug, t, lang }) {
       setError(
         scope === "vendor"
           ? t.selectVendor
-          : scope === "collection"
-            ? t.selectCollection
-            : scope === "subcategory"
-              ? t.selectSubCategory
-              : t.selectCategory
+          : scope === "brand"
+            ? t.selectBrand
+            : scope === "collection"
+              ? t.selectCollection
+              : scope === "subcategory"
+                ? t.selectSubCategory
+                : t.selectCategory
       );
       return;
     }
@@ -1470,6 +1530,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                         setCategoryId("");
                         setSubCategoryId("");
                         setCollectionId("");
+                        setBrandId("");
                         setVendorId("");
                       }}
                       className={`rounded-full px-3 py-2 text-[11px] font-semibold sm:px-4 sm:text-xs ${
@@ -1521,6 +1582,24 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                 >
                   <option value="">{t.selectVendor}</option>
                   {(targets.vendors || []).map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {optionLabel(item, lang)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : scope === "brand" ? (
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-brown/50">
+                  {t.productBrand}
+                </label>
+                <select
+                  value={brandId}
+                  onChange={(e) => setBrandId(e.target.value)}
+                  className={`${SELECT} max-w-xl`}
+                >
+                  <option value="">{t.selectBrand}</option>
+                  {(targets.brands || []).map((item) => (
                     <option key={item.id} value={item.id}>
                       {optionLabel(item, lang)}
                     </option>
@@ -1670,6 +1749,14 @@ function PartnerCommission({ partnerSlug, t, lang }) {
               {t.products}
             </p>
             <p className="mt-1 text-sm text-brown/50">{t.platformProductsHint}</p>
+            {Object.keys(preview).length ? (
+              <p className="mt-1 text-sm font-semibold text-brown">
+                {t.commissionPreviewCount.replace(
+                  "{count}",
+                  Number(products.pagination?.total || 0).toLocaleString("en-US")
+                )}
+              </p>
+            ) : null}
           </div>
           <input
             value={productQ}
@@ -1678,18 +1765,45 @@ function PartnerCommission({ partnerSlug, t, lang }) {
             className="rounded-full border border-brown/10 bg-cream px-4 py-2 text-sm"
           />
         </div>
-        <div className="mt-5 divide-y divide-brown/5">
-          {(products.products || []).map((item) => (
-            <PlatformProductRow
-              key={item.id}
-              item={item}
-              t={t}
-              lang={lang}
-              showCustomized
-              onEdit={() => openPlatformProduct(item)}
-            />
-          ))}
-        </div>
+        {(products.products || []).length ? (
+          <div className="mt-5 divide-y divide-brown/5">
+            {(products.products || []).map((item) => (
+              <PlatformProductRow
+                key={item.id}
+                item={item}
+                t={t}
+                lang={lang}
+                showCustomized
+                onEdit={() => openPlatformProduct(item)}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="mt-8 text-sm text-brown/45">{t.noProducts}</p>
+        )}
+        {Object.keys(preview).length && products.pagination?.pages > 1 ? (
+          <div className="mt-4 flex justify-center gap-2">
+            {Array.from({ length: products.pagination.pages }, (_, i) => i + 1)
+              .filter(
+                (n) =>
+                  n === 1 ||
+                  n === products.pagination.pages ||
+                  Math.abs(n - productPage) <= 2
+              )
+              .map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setProductPage(n)}
+                  className={`h-9 min-w-9 rounded-full ${
+                    n === productPage ? "bg-brown text-cream" : "bg-cream"
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+          </div>
+        ) : null}
       </section>
       </>
       ) : null}

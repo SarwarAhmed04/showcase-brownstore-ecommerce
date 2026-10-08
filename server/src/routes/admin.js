@@ -179,16 +179,18 @@ function adminProductFilter(query) {
       ],
     });
   }
-  if (brand) {
+  const matchId = (path, id) => {
+    const value = String(id || "").trim();
+    if (!value) return;
     and.push({
-      $expr: { $eq: [{ $toString: { $ifNull: ["$brand._id", ""] } }, brand] },
+      $expr: { $eq: [{ $toString: { $ifNull: [`$${path}`, ""] } }, value] },
     });
-  }
-  if (category) {
-    and.push({
-      $expr: { $eq: [{ $toString: { $ifNull: ["$category._id", ""] } }, category] },
-    });
-  }
+  };
+  matchId("brand._id", brand);
+  matchId("category._id", category);
+  matchId("subCategory._id", query.subCategory);
+  matchId("collectionName._id", query.collection);
+  matchId("createdBy._id", query.vendor);
   if (availability === "out") and.push({ "overrides.outOfStock": true });
   if (availability === "in") and.push({ "overrides.outOfStock": { $ne: true } });
 

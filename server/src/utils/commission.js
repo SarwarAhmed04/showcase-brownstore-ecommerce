@@ -14,9 +14,10 @@ export const ALL_TARGET_NAME = {
 };
 
 const SCOPE_RANK = {
-  vendor: 4,
-  collection: 3,
-  subcategory: 2,
+  vendor: 5,
+  collection: 4,
+  subcategory: 3,
+  brand: 2,
   category: 1,
   all: 0,
 };
@@ -74,7 +75,7 @@ function vendorLabel(row, directory) {
 }
 
 export async function commissionTargets() {
-  const [categories, subcategories, collections, vendors, directory] = await Promise.all([
+  const [categories, subcategories, collections, brands, vendors, directory] = await Promise.all([
     Product.aggregate([
       { $match: { "category._id": { $exists: true, $ne: null } } },
       {
@@ -122,6 +123,17 @@ export async function commissionTargets() {
       { $sort: { "name.en": 1, "name.ku": 1 } },
     ]),
     Product.aggregate([
+      { $match: { "brand._id": { $exists: true, $ne: null } } },
+      {
+        $group: {
+          _id: { $toString: "$brand._id" },
+          name: { $first: "$brand.name" },
+          products: { $sum: 1 },
+        },
+      },
+      { $sort: { "name.en": 1, "name.ku": 1 } },
+    ]),
+    Product.aggregate([
       { $match: { "createdBy._id": { $exists: true, $ne: null } } },
       {
         $group: {
@@ -147,6 +159,7 @@ export async function commissionTargets() {
     categories: mapRows(categories),
     subcategories: mapRows(subcategories),
     collections: mapRows(collections),
+    brands: mapRows(brands),
     vendors: mapRows(namedVendors),
   };
 }
@@ -162,7 +175,9 @@ export function findTarget(targets, scope, targetId) {
         ? targets.subcategories
         : scope === "vendor"
           ? targets.vendors
-          : targets.collections;
+          : scope === "brand"
+            ? targets.brands
+            : targets.collections;
   return list.find((item) => item.id === String(targetId)) || null;
 }
 
@@ -183,6 +198,7 @@ export function winningCommission(product, rules) {
   const raw = typeof product?.toObject === "function" ? product.toObject() : product;
   const collectionId = entityId(raw.collectionName);
   const subCategoryId = entityId(raw.subCategory);
+  const brandId = entityId(raw.brand);
   const categoryId = entityId(raw.category);
   const vendorId = entityId(raw.createdBy);
 
@@ -196,6 +212,7 @@ export function winningCommission(product, rules) {
     if (rule.scope === "vendor" && vendorId && rule.targetId === vendorId) return rule;
     if (rule.scope === "collection" && collectionId && rule.targetId === collectionId) return rule;
     if (rule.scope === "subcategory" && subCategoryId && rule.targetId === subCategoryId) return rule;
+    if (rule.scope === "brand" && brandId && rule.targetId === brandId) return rule;
     if (rule.scope === "category" && categoryId && rule.targetId === categoryId) return rule;
     if (rule.scope === "all") return rule;
   }
@@ -219,6 +236,7 @@ export function commissionMatchFilter(rules) {
     category: [],
     subcategory: [],
     collection: [],
+    brand: [],
     vendor: [],
   };
   for (const rule of active) {
@@ -239,6 +257,7 @@ export function commissionMatchFilter(rules) {
   push("category._id", buckets.category);
   push("subCategory._id", buckets.subcategory);
   push("collectionName._id", buckets.collection);
+  push("brand._id", buckets.brand);
   push("createdBy._id", buckets.vendor);
   return or.length ? { $or: or } : null;
 }
