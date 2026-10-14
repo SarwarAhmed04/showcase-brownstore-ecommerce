@@ -199,19 +199,13 @@ function productRow(product, rules, extra) {
   if (!resolved) return null;
   const rule = winningCommission(product, rules);
   if (!rule) return null;
-  const preview = partnerPricePreview(product, rules, extra);
+  const preview = partnerPricePreview(product, rules);
   const rate = Number(rule.percentage);
   const safeRate = Number.isFinite(rate) ? rate : 0;
-  const listPrice = Number(resolved.price) || 0;
-  const discountPrice = Number(resolved.discountPrice) || 0;
-  const commissionedPrice = preview.customPrice
-    ? preview.price
-    : applyCommissionRate(listPrice, safeRate);
-  const commissionedDiscount = preview.customPrice
-    ? discountPrice
-    : discountPrice > 0
-      ? applyCommissionRate(discountPrice, safeRate)
-      : 0;
+  const store = toResolvedProduct(product);
+  const discountPrice = Number(store?.discountPrice) || 0;
+  const commissionedPrice = preview.price;
+  const commissionedDiscount = discountPrice > 0 ? applyCommissionRate(discountPrice, safeRate) : 0;
   const keywords = Array.isArray(resolved.keyword) ? resolved.keyword.filter(Boolean).join(", ") : "";
   return {
     cells: {
@@ -226,7 +220,7 @@ function productRow(product, rules, extra) {
       price: commissionedPrice,
       discountPrice: commissionedDiscount,
       commission: safeRate,
-      platformPrice: preview.customPrice ? preview.price : applyCommissionRate(preview.storePrice, safeRate),
+      platformPrice: preview.price,
       availability: resolved.outOfStock ? "Out of stock" : "In stock",
       status: resolved.isActive === false ? "Inactive" : "Active",
       brandKu: locText(resolved.brand, "ku"),

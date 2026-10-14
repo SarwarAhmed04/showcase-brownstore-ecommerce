@@ -635,3 +635,105 @@ export async function verifyCollectionMapping(partner, collectionId) {
   await existing.save();
   return toRow(collection, existing.toObject());
 }
+
+const MISWAG = "miswag";
+
+/** Compatibility aliases for /api/admin/miswag routes and catalog hooks. */
+export async function mapNewMiswagCollections() {
+  return mapNewCollections(MISWAG);
+}
+
+export async function mapAllCollections() {
+  return runAutoMapping(MISWAG);
+}
+
+export async function mapOneCollection(collectionId) {
+  return rerunCollectionMapping(MISWAG, collectionId);
+}
+
+export async function mappingSummary() {
+  const state = await categoryMappingState(MISWAG);
+  const miswagCategories = await PlatformCategory.countDocuments({ partner: MISWAG });
+  return {
+    collections: state.summary.totalCollections,
+    mapped: state.summary.mapped,
+    autoMapped: state.summary.autoMapped,
+    verified: state.summary.verified,
+    needsReview: state.summary.needsReview,
+    unmapped: state.summary.unmapped,
+    miswagCategories,
+    lastCategorySync: state.summary.lastSyncedAt,
+    diagnostics: null,
+  };
+}
+
+export async function listMappings({ status = "", q = "", page = 1, limit = 25 } = {}) {
+  const state = await categoryMappingState(MISWAG, { status });
+  const query = String(q || "").trim().toLowerCase();
+  const rows = (state.mappings || []).filter((row) => {
+    if (!query) return true;
+    const blob = [
+      row.hierarchy,
+      row.brownCollectionName,
+      row.brownSubCategoryName,
+      row.brownCategoryName,
+      row.externalCategoryName,
+      row.externalPath,
+      row.externalCategoryId,
+    ]
+      .join(" ")
+      .toLowerCase();
+    return blob.includes(query);
+  });
+  const size = Math.min(Math.max(Number(limit) || 25, 1), 100);
+  const current = Math.max(Number(page) || 1, 1);
+  const start = (current - 1) * size;
+  return {
+    mappings: rows.slice(start, start + size),
+    pagination: {
+      page: current,
+      limit: size,
+      total: rows.length,
+      pages: Math.max(1, Math.ceil(rows.length / size)),
+    },
+    diagnostics: null,
+  };
+}
+
+export async function assignMapping(collectionId, externalCategoryId) {
+  const externalId = String(externalCategoryId || "").trim();
+  if (!externalId) {
+    const collection = await requireCollection(collectionId);
+    const doc = await PlatformCategoryMapping.findOneAndUpdate(
+      { partner: MISWAG, brownCollectionId: collection.id },
+      {
+        $set: {
+          partner: MISWAG,
+          ...brownFields(collection),
+          externalCategoryId: "",
+          externalCategoryName: "",
+          externalPath: "",
+          confidence: 0,
+          status: "unmapped",
+          matchMethod: "manual",
+          verifiedAt: null,
+          verifiedBy: "",
+        },
+      },
+      { upsert: true, new: true }
+    );
+    return toRow(collection, doc.toObject());
+  }
+  return selectCollectionMapping(MISWAG, collectionId, externalId);
+}
+
+export async function verifyMapping(collectionId, userLabel = "") {
+  const row = await verifyCollectionMapping(MISWAG, collectionId);
+  if (userLabel) {
+    await PlatformCategoryMapping.updateOne(
+      { partner: MISWAG, brownCollectionId: String(collectionId) },
+      { $set: { verifiedBy: String(userLabel || "") } }
+    );
+  }
+  return row;
+}

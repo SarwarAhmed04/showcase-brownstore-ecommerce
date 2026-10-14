@@ -60,6 +60,8 @@ import {
   uniquePartnerSlug,
 } from "../utils/partnerAuth.js";
 import { partnerPricePreview } from "../utils/partnerCatalog.js";
+import { assignIncomingVariationBarcodes } from "../services/miswagBarcodes.js";
+import { scheduleMiswagPriceReconciliation, scheduleMiswagPriceSync } from "../services/miswagSync.js";
 import {
   buildCommissionWorkbook,
   countCommissionProducts,
@@ -67,6 +69,7 @@ import {
   savedExcelOrder,
 } from "../utils/commissionExcel.js";
 import { Activity } from "../models/Activity.js";
+import { mapNewMiswagCollections } from "../services/platformCategoryMapping.js";
 import {
   activityFilter,
   localizedName,
@@ -333,6 +336,9 @@ adminRouter.patch("/products/:id", async (req, res) => {
         changes,
       });
     }
+    if (changes.some((change) => change.field === "price" || change.field === "discountPrice")) {
+      scheduleMiswagPriceSync([product._id]);
+    }
     res.json({ product: toAdminProduct(product) });
   } catch (err) {
     console.error(err);
@@ -595,26 +601,46 @@ adminRouter.patch("/banners/:slot", async (req, res) => {
 
 let activeSync = null;
 
-async function upsertProducts(items, syncedAt) {
-  const ops = [];
+function variantIdsOf(product) {
+  return new Set(
+    (product?.variants || [])
+      .map((variant) => String(variant?._id || variant?.id || "").trim())
+      .filter(Boolean)
+  );
+}
+
+export async function upsertProducts(items, syncedAt) {
+  const mappedItems = [];
   for (const item of items) {
     const mapped = mapIbsherProduct(item);
     if (!mapped.ibsherId) continue;
     mapped.lastSyncedAt = syncedAt;
     delete mapped.overrides;
-    ops.push({
-      updateOne: {
-        filter: { ibsherId: mapped.ibsherId },
-        update: {
-          $set: mapped,
-          $setOnInsert: {
-            overrides: emptyOverrides(),
-          },
-        },
-        upsert: true,
-      },
-    });
+    mappedItems.push(mapped);
   }
+
+  let knownVariants = null;
+  try {
+    const existing = await Product.find({ ibsherId: { $in: mappedItems.map((item) => item.ibsherId) } })
+      .select("ibsherId variants")
+      .lean();
+    knownVariants = new Map(existing.map((doc) => [doc.ibsherId, variantIdsOf(doc)]));
+  } catch (err) {
+    console.warn("Miswag barcode baseline skipped:", err.message);
+  }
+
+  const ops = mappedItems.map((mapped) => ({
+    updateOne: {
+      filter: { ibsherId: mapped.ibsherId },
+      update: {
+        $set: mapped,
+        $setOnInsert: {
+          overrides: emptyOverrides(),
+        },
+      },
+      upsert: true,
+    },
+  }));
 
   let inserted = 0;
   let updated = 0;
@@ -622,6 +648,17 @@ async function upsertProducts(items, syncedAt) {
     const write = await Product.bulkWrite(ops.slice(i, i + 200), { ordered: false });
     inserted += write.upsertedCount || 0;
     updated += write.modifiedCount || 0;
+  }
+
+  if (knownVariants) {
+    try {
+      const barcodes = await assignIncomingVariationBarcodes(mappedItems, knownVariants);
+      if (barcodes.failed) {
+        console.warn(`Miswag barcode assignment failed for ${barcodes.failed} new variation(s). Catalog sync continued.`);
+      }
+    } catch (err) {
+      console.warn("Miswag barcode assignment skipped:", err.message);
+    }
   }
   return { inserted, updated };
 }
@@ -767,6 +804,16 @@ async function runCatalogSync() {
     console.error("Miswag new-collection mapping failed:", err.message);
   }
   logCatalogSync(summary);
+  try {
+    // Suggestions only. This does not send products to Miswag.
+    const mapped = await mapNewMiswagCollections();
+    if (mapped?.created) {
+      console.log(`Miswag mappings created for ${mapped.created} new collections`);
+    }
+  } catch (err) {
+    console.warn("Miswag new-collection mapping skipped:", err.message);
+  }
+  scheduleMiswagPriceReconciliation();
   return summary;
 }
 
@@ -1238,11 +1285,25 @@ adminRouter.patch("/platforms/:slug/products/:id", async (req, res) => {
     if (!partner) return;
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ message: "Product not found" });
+    if (
+      "price" in req.body ||
+      "discountPrice" in req.body ||
+      (Array.isArray(req.body?.reset) &&
+        req.body.reset.some((key) => key === "price" || key === "discountPrice"))
+    ) {
+      return res.status(410).json({
+        message: "Per-product platform prices have been removed. Use the selling price and commission rules.",
+      });
+    }
     const existing = await PlatformProduct.findOne({
       partner: partner.slug,
       product: product._id,
     });
+    const hadPlatformPrice =
+      existing?.overrides?.price != null || existing?.overrides?.discountPrice != null;
     const next = mergeOverridePatch(existing?.overrides || {}, req.body);
+    next.price = null;
+    next.discountPrice = null;
     const row = await PlatformProduct.findOneAndUpdate(
       { partner: partner.slug, product: product._id },
       { $set: { partner: partner.slug, product: product._id, overrides: next } },
@@ -1255,6 +1316,7 @@ adminRouter.patch("/platforms/:slug/products/:id", async (req, res) => {
       productId: product._id.toString(),
       name: localizedName(product.name),
     });
+    if (partner.slug === "miswag" && hadPlatformPrice) scheduleMiswagPriceSync([product._id]);
     res.json({
       product: toPlatformProductDto(product, row.overrides || {}, rules),
     });
@@ -1274,6 +1336,7 @@ adminRouter.delete("/platforms/:slug/products/:id", async (req, res) => {
     if (!product) return res.status(404).json({ message: "Product not found" });
     await PlatformProduct.deleteOne({ partner: partner.slug, product: product._id });
     const rules = await Commission.find({ partner: partner.slug, isActive: { $ne: false } });
+    if (partner.slug === "miswag") scheduleMiswagPriceSync([product._id]);
     res.json({ product: toPlatformProductDto(product, {}, rules) });
   } catch (err) {
     console.error(err);
@@ -1433,6 +1496,7 @@ adminRouter.post("/commissions", async (req, res) => {
       isActive: item.isActive !== false,
     });
 
+    if (partner.slug === "miswag") scheduleMiswagPriceReconciliation();
     res.json({ commission: toAdminCommission(item) });
   } catch (err) {
     console.error(err);
@@ -1465,6 +1529,7 @@ adminRouter.patch("/commissions/:id", async (req, res) => {
       percentage: item.percentage,
       isActive: item.isActive !== false,
     });
+    if (item.partner === "miswag") scheduleMiswagPriceReconciliation();
     res.json({ commission: toAdminCommission(item) });
   } catch (err) {
     console.error(err);
@@ -1487,6 +1552,7 @@ adminRouter.delete("/commissions/:id", async (req, res) => {
     };
     await item.deleteOne();
     await logActivity(req, "commission.delete", snapshot);
+    if (snapshot.partner === "miswag") scheduleMiswagPriceReconciliation();
     res.json({ ok: true });
   } catch (err) {
     console.error(err);

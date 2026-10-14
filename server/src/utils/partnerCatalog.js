@@ -1,6 +1,5 @@
 import { toResolvedProduct } from "./productView.js";
 import { applyCommissionRate, resolveCommissionRate } from "./commission.js";
-import { snapshotOverrides } from "./overrides.js";
 
 const PRICE_KEYS = new Set(["price", "discountPrice", "sellingPrice", "overrides"]);
 
@@ -60,15 +59,17 @@ function collectImages(variants, fallback, origin) {
   return urls;
 }
 
+function withoutPlatformPrice(overrides) {
+  if (!overrides || typeof overrides !== "object") return overrides || null;
+  return { ...overrides, price: null, discountPrice: null };
+}
+
 export function toPartnerProduct(doc, rules, origin, platformOverrides) {
-  const pub = toResolvedProduct(doc, platformOverrides);
+  const pub = toResolvedProduct(doc, withoutPlatformPrice(platformOverrides));
   if (!pub) return null;
-  const snap = snapshotOverrides(platformOverrides);
-  const customPrice = snap.price != null;
-  const rate = customPrice ? 0 : resolveCommissionRate(doc, rules);
-  const price = customPrice
-    ? Number(pub.sellingPrice) || 0
-    : applyCommissionRate(pub.sellingPrice, rate);
+  const store = toResolvedProduct(doc);
+  const rate = resolveCommissionRate(doc, rules);
+  const price = applyCommissionRate(store?.sellingPrice, rate);
   const variants = stripPrices(pub.variants || [], origin);
   const images = collectImages(variants, pub.image, origin);
 
@@ -89,20 +90,15 @@ export function toPartnerProduct(doc, rules, origin, platformOverrides) {
   };
 }
 
-export function partnerPricePreview(doc, rules, platformOverrides) {
-  const pub = toResolvedProduct(doc, platformOverrides);
-  if (!pub) return { storePrice: 0, rate: 0, price: 0, customPrice: false };
-  const snap = snapshotOverrides(platformOverrides);
-  const customPrice = snap.price != null;
-  const rate = customPrice ? 0 : resolveCommissionRate(doc, rules);
+export function partnerPricePreview(doc, rules) {
   const store = toResolvedProduct(doc);
-  const storePrice = Number(store?.sellingPrice) || 0;
+  if (!store) return { storePrice: 0, rate: 0, price: 0, customPrice: false };
+  const storePrice = Number(store.sellingPrice) || 0;
+  const rate = resolveCommissionRate(doc, rules);
   return {
     storePrice,
     rate,
-    customPrice,
-    price: customPrice
-      ? Number(pub.sellingPrice) || 0
-      : applyCommissionRate(storePrice, rate),
+    customPrice: false,
+    price: applyCommissionRate(storePrice, rate),
   };
 }

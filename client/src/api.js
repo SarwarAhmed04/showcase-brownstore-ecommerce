@@ -266,4 +266,65 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
+  miswagSellerHealth: () => request("/api/admin/miswag/health"),
+  miswagSyncCategories: () => request("/api/admin/miswag/categories/sync", { method: "POST" }),
+  miswagImportCategories: (body) =>
+    request("/api/admin/miswag/categories/import", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  miswagSearchCategories: (q) =>
+    request(`/api/admin/miswag/categories/search?q=${encodeURIComponent(q || "")}`),
+  miswagSellerMappingSummary: () => request("/api/admin/miswag/mapping/summary"),
+  miswagSellerMappings: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.fromEntries(Object.entries(params).filter(([, value]) => value !== "" && value != null))
+    );
+    const suffix = qs.toString();
+    return request(`/api/admin/miswag/mapping${suffix ? `?${suffix}` : ""}`);
+  },
+  miswagRunMapping: () => request("/api/admin/miswag/mapping/run", { method: "POST" }),
+  miswagRunCollectionMapping: (collectionId) =>
+    request(`/api/admin/miswag/mapping/${encodeURIComponent(collectionId)}/run`, { method: "POST" }),
+  miswagAssignMapping: (collectionId, body) =>
+    request(`/api/admin/miswag/mapping/${encodeURIComponent(collectionId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  miswagSellerVerifyMapping: (collectionId) =>
+    request(`/api/admin/miswag/mapping/${encodeURIComponent(collectionId)}/verify`, { method: "POST" }),
+  miswagDiagnostics: () => request("/api/admin/miswag/diagnostics"),
+  miswagSyncSummary: () => request("/api/admin/miswag/sync/summary"),
+  miswagProducts: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.fromEntries(Object.entries(params).filter(([, value]) => value !== "" && value != null))
+    );
+    const suffix = qs.toString();
+    return request(`/api/admin/miswag/products${suffix ? `?${suffix}` : ""}`);
+  },
+  miswagPreviewProduct: (id) => request(`/api/admin/miswag/products/${encodeURIComponent(id)}/preview`),
+  miswagTestSync: (id) =>
+    request(`/api/admin/miswag/products/${encodeURIComponent(id)}/test-sync`, { method: "POST" }),
+  miswagSyncPrice: (id) =>
+    request(`/api/admin/miswag/products/${encodeURIComponent(id)}/price`, { method: "POST" }),
+  miswagSyncStock: (id) =>
+    request(`/api/admin/miswag/products/${encodeURIComponent(id)}/stock`, { method: "POST" }),
+  miswagSyncSelected: (productIds) =>
+    request("/api/admin/miswag/products/sync", {
+      method: "POST",
+      body: JSON.stringify({ productIds }),
+    }),
+  miswagSyncEligible: () =>
+    request("/api/admin/miswag/products/sync-eligible", {
+      method: "POST",
+      body: JSON.stringify({ confirm: true }),
+    }),
+  miswagRetryFailed: () => request("/api/admin/miswag/products/retry-failed", { method: "POST" }),
+  miswagPublishSelected: (productIds) =>
+    request("/api/admin/miswag/products/publish", {
+      method: "POST",
+      body: JSON.stringify({ productIds }),
+    }),
+  miswagPublishReady: () => request("/api/admin/miswag/products/publish-ready", { method: "POST" }),
+  miswagJob: (jobId) => request(`/api/admin/miswag/jobs/${encodeURIComponent(jobId)}`),
 };
