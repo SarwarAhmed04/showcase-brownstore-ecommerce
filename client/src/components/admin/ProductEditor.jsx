@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { tName } from "../../i18n";
 import { useEscape, useScrollLock } from "../../lib/hooks";
 
@@ -102,17 +102,14 @@ function jsonEqual(a, b) {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
-export function buildOverridePatch(product, form, { priceMode = "custom" } = {}) {
+export function buildOverridePatch(product, form, { includePrice = true } = {}) {
   const source = product.source || {};
   const patch = {};
 
   if (form.sku !== (source.sku || source.itemCode || "")) patch.sku = form.sku || null;
   else patch.sku = null;
 
-  if (priceMode === "percent") {
-    patch.price = null;
-    patch.discountPrice = null;
-  } else {
+  if (includePrice) {
     const price = parseGrouped(form.price);
     const discount = parseGrouped(form.discountPrice);
     const sourcePrice = Number(source.sellingPrice ?? source.price ?? 0);
@@ -183,21 +180,13 @@ export default function ProductEditor({
 }) {
   const source = product?.source || {};
   const [form, setForm] = useState(() => formFromProduct(product));
-  const [priceMode, setPriceMode] = useState(product?.customPrice ? "custom" : mode === "platform" ? "percent" : "custom");
 
   useScrollLock(true);
   useEscape(onClose);
 
   useEffect(() => {
     setForm(formFromProduct(product));
-    setPriceMode(product?.customPrice ? "custom" : mode === "platform" ? "percent" : "custom");
-  }, [product, mode]);
-
-  const previewPrice = useMemo(() => {
-    if (mode !== "platform") return null;
-    if (priceMode === "custom") return parseGrouped(form.price);
-    return Number(product.platformPrice || product.storePrice || 0);
-  }, [mode, priceMode, form.price, product]);
+  }, [product]);
 
   if (!product) return null;
 
@@ -230,25 +219,10 @@ export default function ProductEditor({
         <div className="flex-1 space-y-6 overflow-y-auto px-5 py-5">
           {mode === "platform" ? (
             <section className="rounded-3xl bg-white p-4 ring-1 ring-brown/5">
-              <p className={LABEL}>{t.platformPriceMode}</p>
-              <div className="mt-2 grid grid-cols-2 gap-2 rounded-full bg-cream p-1">
-                {["percent", "custom"].map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    onClick={() => setPriceMode(item)}
-                    className={`rounded-full px-3 py-2 text-xs font-semibold ${
-                      priceMode === item ? "bg-brown text-cream" : "text-brown/60"
-                    }`}
-                  >
-                    {item === "percent" ? t.usePercent : t.customPrice}
-                  </button>
-                ))}
-              </div>
-              <p className="mt-3 text-sm text-brown/55">
+              <p className="text-sm text-brown/55">
                 {t.storePrice}: {formatGrouped(product.storePrice || source.sellingPrice || source.price || 0)} ·{" "}
                 {t.commissionPercentage}: {Number(product.commissionRate || 0)}% · {t.platformPrice}:{" "}
-                {formatGrouped(previewPrice || 0)}
+                {formatGrouped(product.platformPrice || product.storePrice || 0)}
               </p>
             </section>
           ) : null}
@@ -290,7 +264,7 @@ export default function ProductEditor({
                 className={INPUT}
               />
             </div>
-            {(mode === "store" || priceMode === "custom") && (
+            {mode === "store" ? (
               <>
                 <div>
                   <label className={LABEL}>{t.price}</label>
@@ -311,7 +285,7 @@ export default function ProductEditor({
                   />
                 </div>
               </>
-            )}
+            ) : null}
             <div>
               <label className={LABEL}>{t.availability}</label>
               <select
@@ -486,7 +460,7 @@ export default function ProductEditor({
             <button
               type="button"
               disabled={busy}
-              onClick={() => onSave(buildOverridePatch(product, form, { priceMode }))}
+              onClick={() => onSave(buildOverridePatch(product, form, { includePrice: mode !== "platform" }))}
               className="ms-auto rounded-full bg-brown px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
             >
               {t.save}

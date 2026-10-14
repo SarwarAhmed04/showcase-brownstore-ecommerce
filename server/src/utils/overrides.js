@@ -259,6 +259,7 @@ export function snapshotOverrides(overrides = {}) {
 export function hasCustomOverrides(overrides = {}) {
   const snap = snapshotOverrides(overrides);
   return PATCH_KEYS.some((key) => {
+    if (key === "price" || key === "discountPrice") return false;
     if (key === "outOfStock") return snap.outOfStock === true;
     const value = snap[key];
     if (value == null) return false;
