@@ -6,17 +6,20 @@ import { PlatformProductSync } from "../models/PlatformProductSync.js";
 import { Product } from "../models/Product.js";
 import { partnerPricePreview } from "../utils/partnerCatalog.js";
 import { normalizeBrandName, resolveMiswagBrands } from "./miswagBrands.js";
+import { toResolvedProduct } from "../utils/productView.js";
 import {
   MiswagError,
   MISWAG_PARTNER,
   createOrUpdateItem,
+  getItem,
+  getItemVariation,
   getJob,
   listItemVariations,
   publishItems,
   updatePrice,
   updateSizeStock,
 } from "./miswag.js";
-import { loadAssignedBarcodes } from "./miswagBarcodes.js";
+import { ensureMiswagVariationBarcode, loadAssignedBarcodes } from "./miswagBarcodes.js";
 import {
   buildMiswagPayload,
   fingerprintPayload,
@@ -326,6 +329,156 @@ export async function previewProduct(productId) {
     payload: built.payload,
     errors: built.errors,
     warnings: built.warnings,
+  };
+}
+
+/**
+ * Link an already-existing Miswag item into PlatformProductSync bookkeeping.
+ * Read-only against Miswag (get item / variations). Never bulk-creates or publishes.
+ */
+export async function adoptExistingMiswagProduct(productId, { externalId = "", confirm = false } = {}) {
+  const expectedExternalId = String(externalId || "").trim();
+  if (!expectedExternalId) {
+    throw new MiswagError("externalId is required to adopt an existing Miswag item.", { status: 400 });
+  }
+  if (confirm !== true) {
+    throw new MiswagError("Set confirm=true to adopt an existing Miswag item into local sync bookkeeping.", {
+      status: 400,
+    });
+  }
+
+  const doc = await findProduct(productId);
+  const resolved = toResolvedProduct(doc);
+  const computedExternalId = miswagItemExternalId(resolved);
+  if (computedExternalId !== expectedExternalId) {
+    throw new MiswagError(
+      `BrownStore external id ${computedExternalId || "(empty)"} does not match ${expectedExternalId}.`,
+      { status: 409 }
+    );
+  }
+
+  const [existingByProduct, existingByExternal] = await Promise.all([
+    PlatformProductSync.findOne({ partner: MISWAG_PARTNER, product: doc._id }).lean(),
+    PlatformProductSync.findOne({ partner: MISWAG_PARTNER, externalId: expectedExternalId }).lean(),
+  ]);
+  if (existingByExternal && String(existingByExternal.product) !== String(doc._id)) {
+    throw new MiswagError("That Miswag external_id is already linked to a different BrownStore product.", {
+      status: 409,
+    });
+  }
+  if (existingByProduct?.externalId && existingByProduct.externalId !== expectedExternalId) {
+    throw new MiswagError("This BrownStore product is already linked to a different Miswag external_id.", {
+      status: 409,
+    });
+  }
+
+  const itemRes = await getItem(expectedExternalId);
+  const item = itemRes?.data?.item;
+  if (!item) {
+    throw new MiswagError("Miswag item was not found for that external_id.", { status: 404 });
+  }
+
+  const remoteCode = String(item.item_code || "").trim();
+  const localCode = String(resolved.itemCode || resolved.sku || doc.itemCode || doc.sku || "").trim();
+  if (remoteCode && localCode && remoteCode !== localCode) {
+    throw new MiswagError(`Miswag item_code ${remoteCode} does not match BrownStore ${localCode}.`, {
+      status: 409,
+    });
+  }
+
+  const remotePrice = Math.round(Number(item.price));
+  if (!Number.isFinite(remotePrice) || remotePrice < 0) {
+    throw new MiswagError("Miswag item price is missing or invalid.", { status: 502 });
+  }
+
+  const varsRes = await listItemVariations(expectedExternalId);
+  const variations = Array.isArray(varsRes?.data?.variations) ? varsRes.data.variations : [];
+  const variationSummaries = [];
+  for (const variation of variations) {
+    const variationExternalId = String(variation.id || variation.external_id || "").trim();
+    let sizes = Array.isArray(variation.sizes) ? variation.sizes : [];
+    if (!sizes.length && variationExternalId) {
+      try {
+        const detail = await getItemVariation(expectedExternalId, variationExternalId);
+        sizes = Array.isArray(detail?.data?.variation?.sizes) ? detail.data.variation.sizes : [];
+      } catch {
+        sizes = [];
+      }
+    }
+    variationSummaries.push({
+      externalId: variationExternalId,
+      barcode: String(variation.barcode || "").trim(),
+      sizes: sizes.map((size) => ({
+        externalId: String(size.id || size.external_id || "").trim(),
+        quantity: Number(size.quantity) || 0,
+        barcode: size.barcode == null ? null : String(size.barcode),
+      })),
+    });
+  }
+
+  const now = new Date();
+  const beforeStatus = existingByProduct?.status || null;
+  const sync = await saveSync(doc._id, {
+    status: "synced",
+    externalId: expectedExternalId,
+    externalProductId: String(item.id || expectedExternalId),
+    lastSyncedPrice: remotePrice,
+    lastSuccessfulSyncAt: existingByProduct?.lastSuccessfulSyncAt || now,
+    lastSyncedAt: now,
+    lastError: "",
+    priceSyncError: "",
+    asyncJobId: "",
+    asyncJobStatus: "",
+  });
+
+  const barcodeState = [];
+  for (const variant of resolved.variants || doc.variants || []) {
+    const variantId = String(variant?._id || variant?.id || "").trim();
+    if (!variantId) continue;
+    try {
+      const assigned = await ensureMiswagVariationBarcode({
+        ibsherId: doc.ibsherId || "",
+        variantId,
+        explicitBarcode: "",
+      });
+      barcodeState.push({
+        variantId,
+        barcode: assigned.barcode,
+        created: assigned.created,
+        source: assigned.source,
+      });
+    } catch (err) {
+      barcodeState.push({
+        variantId,
+        error: err.message || "barcode bookkeeping skipped",
+      });
+    }
+  }
+
+  return {
+    adopted: true,
+    created: !existingByProduct,
+    updated: Boolean(existingByProduct),
+    beforeStatus,
+    product: {
+      id: String(doc._id),
+      ibsherId: doc.ibsherId || "",
+      itemCode: localCode,
+      name: resolved.name || doc.name,
+    },
+    sync,
+    remote: {
+      externalId: expectedExternalId,
+      itemId: String(item.id || ""),
+      itemCode: remoteCode,
+      price: remotePrice,
+      currency: item.currency || "IQD",
+      active: item.active === true,
+      brand: item.brand || null,
+      category: item.category || null,
+      variations: variationSummaries,
+    },
+    barcodeState,
   };
 }
 

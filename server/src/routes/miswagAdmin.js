@@ -17,6 +17,7 @@ import {
   verifyMapping,
 } from "../services/platformCategoryMapping.js";
 import {
+  adoptExistingMiswagProduct,
   listSyncProducts,
   pollJob,
   previewProduct,
@@ -217,6 +218,20 @@ miswagAdminRouter.get("/products/:id/preview", async (req, res) => {
 miswagAdminRouter.post("/products/:id/test-sync", async (req, res) => {
   try {
     res.json(await syncProduct(req.params.id, "full"));
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+// Read Miswag item and upsert local PlatformProductSync only. Never bulk-creates or publishes.
+miswagAdminRouter.post("/products/:id/adopt-existing", async (req, res) => {
+  try {
+    res.json(
+      await adoptExistingMiswagProduct(req.params.id, {
+        externalId: req.body?.externalId,
+        confirm: req.body?.confirm === true,
+      })
+    );
   } catch (err) {
     fail(res, err);
   }
