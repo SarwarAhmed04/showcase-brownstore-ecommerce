@@ -181,11 +181,24 @@ export function findTarget(targets, scope, targetId) {
   return list.find((item) => item.id === String(targetId)) || null;
 }
 
+export const PLATFORM_PRICE_STEP = 250;
+
+// Final platform prices move up to the next 250 IQD. An exact multiple stays as it is.
+export function roundUpPlatformPrice(price) {
+  const value = Number(price);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const units = value / PLATFORM_PRICE_STEP;
+  const nearest = Math.round(units);
+  if (Math.abs(value - nearest * PLATFORM_PRICE_STEP) < 1e-6) return nearest * PLATFORM_PRICE_STEP;
+  return Math.ceil(units - 1e-9) * PLATFORM_PRICE_STEP;
+}
+
 export function applyCommissionRate(price, percentage) {
   const base = Number(price) || 0;
   const rate = Number(percentage);
   const safeRate = Number.isFinite(rate) ? rate : 0;
-  return Math.max(0, Math.round(base * (1 + safeRate / 100)));
+  const raw = Math.max(0, base * (1 + safeRate / 100));
+  return roundUpPlatformPrice(raw);
 }
 
 function entityId(value) {
