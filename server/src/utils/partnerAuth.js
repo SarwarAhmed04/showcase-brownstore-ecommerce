@@ -100,6 +100,7 @@ export function toAdminPartner(doc, req, extra = {}) {
     name: raw.name,
     image: raw.image || "",
     isActive: raw.isActive !== false,
+    fixed: PARTNER_SLUGS.includes(slug),
     hasApiKey: Boolean(raw.apiKeyHash),
     canRevealApiKey: Boolean(raw.apiKeyRevealable),
     apiKeyPrefix: raw.apiKeyPrefix || "",

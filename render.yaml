@@ -28,13 +28,5 @@ services:
         sync: false
       - key: IBSHER_ADMIN_PASSWORD
         sync: false
-      - key: MISWAG_BASE_URL
-        value: https://seller-api.miswag.com
-      - key: MISWAG_API_KEY
-        sync: false
-      - key: MISWAG_API_SECRET
-        sync: false
-      - key: MISWAG_AUTO_SYNC
-        value: "false"
       - key: MEDIA_PUBLIC_ORIGIN
         sync: false

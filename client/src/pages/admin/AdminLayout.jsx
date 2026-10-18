@@ -19,6 +19,9 @@ import { useLang } from "../../context/LangContext";
 import AdminBrand from "../../components/AdminBrand";
 import LanguageSwitcher from "../../components/LanguageSwitcher";
 import Spinner from "../../components/Spinner";
+import PlatformSidebar from "../../components/admin/platform/PlatformSidebar";
+import { PlatformNavProvider, usePlatformNav } from "../../components/admin/platform/platformNav";
+import { AdminThemeToggle } from "../../adminTheme";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -100,14 +103,26 @@ function ProductSearch() {
 }
 
 export default function AdminLayout() {
+  return (
+    <PlatformNavProvider>
+      <AdminShell />
+    </PlatformNavProvider>
+  );
+}
+
+function AdminShell() {
   const { t } = useLang();
   const { user, ready, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const { nav } = usePlatformNav();
   const [open, setOpen] = useState(false);
+  const [platformOpen, setPlatformOpen] = useState(false);
+  const platformSlug = location.pathname.match(/^\/admin\/(?:platforms|commissions)\/([^/]+)$/)?.[1] || "";
 
   useEffect(() => {
     setOpen(false);
+    setPlatformOpen(false);
   }, [location.pathname]);
 
   if (!ready) return <Spinner label={t.loading} />;
@@ -131,7 +146,7 @@ export default function AdminLayout() {
   const itemClass = ({ isActive }) =>
     `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
       isActive
-        ? "bg-white text-brown shadow-[0_1px_2px_rgb(61_35_23/0.06)]"
+        ? "admin-selected bg-white text-brown shadow-[0_1px_2px_rgb(61_35_23/0.06)]"
         : "text-brown/50 hover:bg-brown/[0.04] hover:text-brown"
     }`;
 
@@ -217,18 +232,42 @@ export default function AdminLayout() {
         </div>
       </aside>
 
-      <div className="min-w-0 lg:ms-[15.5rem]">
+      {platformSlug ? (
+        <PlatformSidebar
+          nav={nav}
+          t={t}
+          mobileOpen={platformOpen}
+          onClose={() => setPlatformOpen(false)}
+        />
+      ) : null}
+
+      <div className={`min-w-0 ${platformSlug ? "lg:ms-[30rem]" : "lg:ms-[15.5rem]"}`}>
         <header className="sticky top-0 z-30 flex h-16 items-center gap-3 bg-[#faf4ec]/90 px-5 backdrop-blur-md md:px-8">
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
               className="rounded-xl p-2 text-brown lg:hidden hover:bg-brown/[0.06]"
-              onClick={() => setOpen((v) => !v)}
+              onClick={() => {
+                setPlatformOpen(false);
+                setOpen((value) => !value);
+              }}
               aria-label={t.menu}
             >
               {open ? <X className="h-5 w-5" strokeWidth={1.8} /> : <Menu className="h-5 w-5" strokeWidth={1.8} />}
             </button>
-            <h1 className="font-display text-lg text-brown/80 md:text-xl">
+            {platformSlug ? (
+              <button
+                type="button"
+                className="max-w-[9rem] truncate rounded-xl bg-white px-3 py-2 text-sm font-semibold text-brown ring-1 ring-brown/10 lg:hidden"
+                onClick={() => {
+                  setOpen(false);
+                  setPlatformOpen((value) => !value);
+                }}
+              >
+                {nav?.partner?.name || platformSlug}
+              </button>
+            ) : null}
+            <h1 className={`font-display text-lg text-brown/80 md:text-xl ${platformSlug ? "hidden sm:block" : ""}`}>
               {t.adminHeader}
             </h1>
           </div>
@@ -238,6 +277,7 @@ export default function AdminLayout() {
             <div className="min-w-0 flex-1" />
           )}
           <div className="flex shrink-0 items-center gap-2">
+            <AdminThemeToggle />
             <LanguageSwitcher />
           </div>
         </header>

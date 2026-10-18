@@ -12,6 +12,7 @@ import Search from "./pages/Search";
 import Saved from "./pages/Saved";
 import Contact from "./pages/Contact";
 import NotFound from "./pages/NotFound";
+import { AdminThemeRoot } from "./adminTheme";
 import AdminLogin from "./pages/admin/Login";
 import AdminLayout from "./pages/admin/AdminLayout";
 import AdminDashboard from "./pages/admin/Dashboard";
@@ -42,6 +43,7 @@ export default function App() {
                   <Route path="/contact" element={<Contact />} />
                   <Route path="*" element={<NotFound />} />
                 </Route>
+                <Route element={<AdminThemeRoot />}>
                 <Route path="/admin/login" element={<AdminLogin />} />
                 <Route path="/admin" element={<AdminLayout />}>
                   <Route index element={<AdminDashboard />} />
@@ -54,6 +56,7 @@ export default function App() {
                   <Route path="activity" element={<AdminActivity />} />
                   <Route path="banners" element={<AdminBanners />} />
                   <Route path="accounts" element={<AdminAccounts />} />
+                </Route>
                 </Route>
               </Routes>
             </BrowserRouter>

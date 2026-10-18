@@ -4,6 +4,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useLang } from "../../context/LangContext";
 import AdminBrand from "../../components/AdminBrand";
 import LanguageSwitcher from "../../components/LanguageSwitcher";
+import { AdminThemeToggle } from "../../adminTheme";
 
 export default function AdminLogin() {
   const { t } = useLang();
@@ -34,7 +35,10 @@ export default function AdminLogin() {
     <div data-theme="cream" className="flex min-h-svh flex-col bg-[#faf4ec] text-brown">
       <div className="flex items-center justify-between px-6 py-5">
         <AdminBrand />
-        <LanguageSwitcher />
+        <div className="flex items-center gap-2">
+          <AdminThemeToggle />
+          <LanguageSwitcher />
+        </div>
       </div>
       <div className="mx-auto flex w-full max-w-md flex-1 items-center px-4 pb-16">
         <form

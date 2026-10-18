@@ -4,6 +4,7 @@ export const PARTNER_DEFS = [
   { slug: "miswag", name: "Miswag", image: "/partners/miswag.png" },
   { slug: "gini", name: "Gini", image: "/partners/gini.png" },
   { slug: "elryan", name: "Elryan", image: "/partners/elryan.png" },
+  { slug: "ibazzar", name: "Ibazzar", image: "/partners/ibazzar.png" },
 ];
 
 export const PARTNER_SLUGS = PARTNER_DEFS.map((item) => item.slug);

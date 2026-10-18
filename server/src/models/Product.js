@@ -36,6 +36,10 @@ const productSchema = new mongoose.Schema(
 );
 
 productSchema.index({ "category._id": 1 });
+productSchema.index({ "subCategory._id": 1 });
+productSchema.index({ "collectionName._id": 1 });
+productSchema.index({ "brand._id": 1 });
+productSchema.index({ "createdBy._id": 1 });
 productSchema.index({ isActive: 1, status: 1 });
 
 export const Product = mongoose.model("Product", productSchema);

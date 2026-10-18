@@ -74,94 +74,106 @@ function vendorLabel(row, directory) {
   return email;
 }
 
+const CATALOG_PIPELINES = {
+  category: [
+    { $match: { "category._id": { $exists: true, $ne: null } } },
+    {
+      $group: {
+        _id: { $toString: "$category._id" },
+        name: { $first: "$category.name" },
+        products: { $sum: 1 },
+      },
+    },
+    { $sort: { "name.en": 1, "name.ku": 1 } },
+  ],
+  subcategory: [
+    { $match: { "subCategory._id": { $exists: true, $ne: null } } },
+    {
+      $group: {
+        _id: { $toString: "$subCategory._id" },
+        name: { $first: "$subCategory.name" },
+        categoryId: {
+          $first: {
+            $toString: { $ifNull: ["$subCategory.category", "$category._id"] },
+          },
+        },
+        products: { $sum: 1 },
+      },
+    },
+    { $sort: { "name.en": 1, "name.ku": 1 } },
+  ],
+  collection: [
+    { $match: { "collectionName._id": { $exists: true, $ne: null } } },
+    {
+      $group: {
+        _id: { $toString: "$collectionName._id" },
+        name: { $first: "$collectionName.name" },
+        subCategoryId: {
+          $first: {
+            $toString: {
+              $ifNull: ["$collectionName.subCategory", "$subCategory._id"],
+            },
+          },
+        },
+        categoryId: { $first: { $toString: { $ifNull: ["$category._id", ""] } } },
+        products: { $sum: 1 },
+      },
+    },
+    { $sort: { "name.en": 1, "name.ku": 1 } },
+  ],
+  brand: [
+    { $match: { "brand._id": { $exists: true, $ne: null } } },
+    {
+      $group: {
+        _id: { $toString: "$brand._id" },
+        name: { $first: "$brand.name" },
+        products: { $sum: 1 },
+      },
+    },
+    { $sort: { "name.en": 1, "name.ku": 1 } },
+  ],
+  vendor: [
+    { $match: { "createdBy._id": { $exists: true, $ne: null } } },
+    {
+      $group: {
+        _id: { $toString: "$createdBy._id" },
+        name: { $first: "$createdBy.name" },
+        email: { $first: "$createdBy.email" },
+        products: { $sum: 1 },
+      },
+    },
+  ],
+};
+
+export async function catalogGroups(scope) {
+  if (scope === "vendor") {
+    const [vendors, directory] = await Promise.all([
+      Product.aggregate(CATALOG_PIPELINES.vendor),
+      fetchIbsherVendors().catch((err) => {
+        console.warn("Vendor names unavailable:", err.message);
+        return [];
+      }),
+    ]);
+    const names = new Map(directory.map((vendor) => [vendor.id, vendor.name]));
+    const namedVendors = vendors
+      .map((row) => ({ ...row, name: vendorLabel(row, names) }))
+      .sort((a, b) => String(a.name || a._id).localeCompare(String(b.name || b._id), "en"));
+    return mapRows(namedVendors);
+  }
+  const pipeline = CATALOG_PIPELINES[scope];
+  if (!pipeline) return [];
+  return mapRows(await Product.aggregate(pipeline));
+}
+
 export async function commissionTargets() {
-  const [categories, subcategories, collections, brands, vendors, directory] = await Promise.all([
-    Product.aggregate([
-      { $match: { "category._id": { $exists: true, $ne: null } } },
-      {
-        $group: {
-          _id: { $toString: "$category._id" },
-          name: { $first: "$category.name" },
-          products: { $sum: 1 },
-        },
-      },
-      { $sort: { "name.en": 1, "name.ku": 1 } },
-    ]),
-    Product.aggregate([
-      { $match: { "subCategory._id": { $exists: true, $ne: null } } },
-      {
-        $group: {
-          _id: { $toString: "$subCategory._id" },
-          name: { $first: "$subCategory.name" },
-          categoryId: {
-            $first: {
-              $toString: { $ifNull: ["$subCategory.category", "$category._id"] },
-            },
-          },
-          products: { $sum: 1 },
-        },
-      },
-      { $sort: { "name.en": 1, "name.ku": 1 } },
-    ]),
-    Product.aggregate([
-      { $match: { "collectionName._id": { $exists: true, $ne: null } } },
-      {
-        $group: {
-          _id: { $toString: "$collectionName._id" },
-          name: { $first: "$collectionName.name" },
-          subCategoryId: {
-            $first: {
-              $toString: {
-                $ifNull: ["$collectionName.subCategory", "$subCategory._id"],
-              },
-            },
-          },
-          categoryId: { $first: { $toString: { $ifNull: ["$category._id", ""] } } },
-          products: { $sum: 1 },
-        },
-      },
-      { $sort: { "name.en": 1, "name.ku": 1 } },
-    ]),
-    Product.aggregate([
-      { $match: { "brand._id": { $exists: true, $ne: null } } },
-      {
-        $group: {
-          _id: { $toString: "$brand._id" },
-          name: { $first: "$brand.name" },
-          products: { $sum: 1 },
-        },
-      },
-      { $sort: { "name.en": 1, "name.ku": 1 } },
-    ]),
-    Product.aggregate([
-      { $match: { "createdBy._id": { $exists: true, $ne: null } } },
-      {
-        $group: {
-          _id: { $toString: "$createdBy._id" },
-          name: { $first: "$createdBy.name" },
-          email: { $first: "$createdBy.email" },
-          products: { $sum: 1 },
-        },
-      },
-    ]),
-    fetchIbsherVendors().catch((err) => {
-      console.warn("Vendor names unavailable:", err.message);
-      return [];
-    }),
+  const [categories, subcategories, collections, brands, vendors] = await Promise.all([
+    catalogGroups("category"),
+    catalogGroups("subcategory"),
+    catalogGroups("collection"),
+    catalogGroups("brand"),
+    catalogGroups("vendor"),
   ]);
-
-  const names = new Map(directory.map((vendor) => [vendor.id, vendor.name]));
-  const namedVendors = vendors
-    .map((row) => ({ ...row, name: vendorLabel(row, names) }))
-    .sort((a, b) => String(a.name || a._id).localeCompare(String(b.name || b._id), "en"));
-
-  return {
-    categories: mapRows(categories),
-    subcategories: mapRows(subcategories),
-    collections: mapRows(collections),
-    brands: mapRows(brands),
-    vendors: mapRows(namedVendors),
-  };
+  return { categories, subcategories, collections, brands, vendors };
 }
 
 export function findTarget(targets, scope, targetId) {

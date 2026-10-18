@@ -42,7 +42,7 @@ import {
   streamIbsherCatalog,
 } from "../services/ibsher.js";
 import { Commission, COMMISSION_SCOPES } from "../models/Commission.js";
-import { Partner } from "../models/Partner.js";
+import { Partner, PARTNER_SLUGS } from "../models/Partner.js";
 import { PlatformProduct } from "../models/PlatformProduct.js";
 import {
   ALL_TARGET_ID,
@@ -57,19 +57,15 @@ import {
   generateApiKey,
   isPartnerSlug,
   toAdminPartner,
-  uniquePartnerSlug,
 } from "../utils/partnerAuth.js";
 import { partnerPricePreview } from "../utils/partnerCatalog.js";
-import { assignIncomingVariationBarcodes } from "../services/miswagBarcodes.js";
-import { scheduleMiswagPriceReconciliation, scheduleMiswagPriceSync } from "../services/miswagSync.js";
 import {
   buildCommissionWorkbook,
-  countCommissionProducts,
   excelColumnList,
   savedExcelOrder,
 } from "../utils/commissionExcel.js";
+import { giniExcelColumns, giniExportForPartner } from "../utils/platformExcel/gini.js";
 import { Activity } from "../models/Activity.js";
-import { mapNewMiswagCollections } from "../services/platformCategoryMapping.js";
 import {
   activityFilter,
   localizedName,
@@ -77,12 +73,24 @@ import {
   partnerDisplayName,
   toAdminActivity,
 } from "../utils/activity.js";
-import { registerMiswagMappingRoutes } from "./miswagMapping.js";
-import { mapNewCollections } from "../services/platformCategoryMapping.js";
+import { platformManagementRouter } from "./platformManagement.js";
+import {
+  applyAvailability,
+  combineFilters,
+  eligibilityMongoFilter,
+  evaluatePlatformEligibility,
+  loadEligibilityContext,
+  taxonomyValuesForProduct,
+  platformDashboard,
+  productEligibility,
+} from "../utils/platformTaxonomy.js";
+import { eligibilityBucket } from "../utils/platformEligibility.js";
+import { runTaxonomyCheck } from "../utils/taxonomyNotices.js";
+import { PlatformTaxonomyNotice } from "../models/PlatformTaxonomyNotice.js";
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
-registerMiswagMappingRoutes(adminRouter);
+adminRouter.use(platformManagementRouter);
 
 adminRouter.get("/stats", async (_req, res) => {
   try {
@@ -335,9 +343,6 @@ adminRouter.patch("/products/:id", async (req, res) => {
         sku: after.sku || product.itemCode || "",
         changes,
       });
-    }
-    if (changes.some((change) => change.field === "price" || change.field === "discountPrice")) {
-      scheduleMiswagPriceSync([product._id]);
     }
     res.json({ product: toAdminProduct(product) });
   } catch (err) {
@@ -601,14 +606,6 @@ adminRouter.patch("/banners/:slot", async (req, res) => {
 
 let activeSync = null;
 
-function variantIdsOf(product) {
-  return new Set(
-    (product?.variants || [])
-      .map((variant) => String(variant?._id || variant?.id || "").trim())
-      .filter(Boolean)
-  );
-}
-
 export async function upsertProducts(items, syncedAt) {
   const mappedItems = [];
   for (const item of items) {
@@ -617,16 +614,6 @@ export async function upsertProducts(items, syncedAt) {
     mapped.lastSyncedAt = syncedAt;
     delete mapped.overrides;
     mappedItems.push(mapped);
-  }
-
-  let knownVariants = null;
-  try {
-    const existing = await Product.find({ ibsherId: { $in: mappedItems.map((item) => item.ibsherId) } })
-      .select("ibsherId variants")
-      .lean();
-    knownVariants = new Map(existing.map((doc) => [doc.ibsherId, variantIdsOf(doc)]));
-  } catch (err) {
-    console.warn("Miswag barcode baseline skipped:", err.message);
   }
 
   const ops = mappedItems.map((mapped) => ({
@@ -650,16 +637,6 @@ export async function upsertProducts(items, syncedAt) {
     updated += write.modifiedCount || 0;
   }
 
-  if (knownVariants) {
-    try {
-      const barcodes = await assignIncomingVariationBarcodes(mappedItems, knownVariants);
-      if (barcodes.failed) {
-        console.warn(`Miswag barcode assignment failed for ${barcodes.failed} new variation(s). Catalog sync continued.`);
-      }
-    } catch (err) {
-      console.warn("Miswag barcode assignment skipped:", err.message);
-    }
-  }
   return { inserted, updated };
 }
 
@@ -793,27 +770,8 @@ async function runCatalogSync() {
     removed: removed.deletedCount || 0,
     localTotalAfterSync: await Product.countDocuments(),
   };
-  try {
-    summary.miswagCategoryMappings = await mapNewCollections("miswag");
-    if (summary.miswagCategoryMappings?.created) {
-      console.log(
-        `Miswag category mappings created for new collections: ${summary.miswagCategoryMappings.created}`
-      );
-    }
-  } catch (err) {
-    console.error("Miswag new-collection mapping failed:", err.message);
-  }
   logCatalogSync(summary);
-  try {
-    // Suggestions only. This does not send products to Miswag.
-    const mapped = await mapNewMiswagCollections();
-    if (mapped?.created) {
-      console.log(`Miswag mappings created for ${mapped.created} new collections`);
-    }
-  } catch (err) {
-    console.warn("Miswag new-collection mapping skipped:", err.message);
-  }
-  scheduleMiswagPriceReconciliation();
+  await runTaxonomyCheck();
   return summary;
 }
 
@@ -964,9 +922,13 @@ function customizedProductMatches(product, overrides, q) {
 }
 
 async function partnerCounts() {
-  const [ruleCounts, customRows] = await Promise.all([
+  const [ruleCounts, customRows, noticeRows] = await Promise.all([
     Commission.aggregate([{ $group: { _id: "$partner", rules: { $sum: 1 } } }]),
     PlatformProduct.find({}, { partner: 1, overrides: 1 }).lean(),
+    PlatformTaxonomyNotice.aggregate([
+      { $match: { status: "open" } },
+      { $group: { _id: "$partner", count: { $sum: 1 } } },
+    ]),
   ]);
   const customized = {};
   for (const row of customRows) {
@@ -976,6 +938,7 @@ async function partnerCounts() {
   return {
     rules: Object.fromEntries(ruleCounts.map((row) => [row._id, row.rules])),
     customized,
+    taxonomyNotices: Object.fromEntries(noticeRows.map((row) => [row._id, row.count])),
   };
 }
 
@@ -983,6 +946,7 @@ function withPartnerCounts(doc, req, counts) {
   return toAdminPartner(doc, req, {
     rulesCount: counts.rules[doc.slug] || 0,
     customizedCount: counts.customized[doc.slug] || 0,
+    taxonomyNotices: counts.taxonomyNotices?.[doc.slug] || 0,
   });
 }
 
@@ -1001,14 +965,23 @@ adminRouter.get("/partners", async (req, res) => {
   }
 });
 
+function orderedPlatforms(partners) {
+  const bySlug = new Map(partners.map((doc) => [doc.slug, doc]));
+  const fixed = PARTNER_SLUGS.map((slug) => bySlug.get(slug)).filter(Boolean);
+  const unknown = partners.filter((doc) => !PARTNER_SLUGS.includes(doc.slug));
+  return { fixed, unknown };
+}
+
 adminRouter.get("/platforms", async (req, res) => {
   try {
     const [partners, counts] = await Promise.all([
-      Partner.find().sort({ createdAt: 1, name: 1 }),
+      Partner.find().sort({ name: 1 }),
       partnerCounts(),
     ]);
+    const { fixed, unknown } = orderedPlatforms(partners);
     res.json({
-      platforms: partners.map((doc) => withPartnerCounts(doc, req, counts)),
+      platforms: fixed.map((doc) => withPartnerCounts(doc, req, counts)),
+      unknownPlatforms: unknown.map((doc) => withPartnerCounts(doc, req, counts)),
     });
   } catch (err) {
     console.error(err);
@@ -1016,32 +989,10 @@ adminRouter.get("/platforms", async (req, res) => {
   }
 });
 
-adminRouter.post("/platforms", async (req, res) => {
-  try {
-    const name = String(req.body.name || req.body.title || "").trim();
-    if (!name) {
-      return res.status(400).json({ message: "Name is required" });
-    }
-    const slug = await uniquePartnerSlug(name);
-    let image = "";
-    if (req.body.image) {
-      image = savePartnerImageFile(slug, req.body.image);
-    }
-    const partner = await Partner.create({
-      slug,
-      name,
-      image,
-      isActive: true,
-    });
-    await logActivity(req, "platform.create", {
-      partner: partner.slug,
-      partnerName: partner.name,
-    });
-    res.status(201).json({ platform: toAdminPartner(partner, req) });
-  } catch (err) {
-    console.error(err);
-    res.status(err.status || 500).json({ message: err.message || "Failed to create platform" });
-  }
+adminRouter.post("/platforms", (_req, res) => {
+  res.status(403).json({
+    message: "Platforms are defined in code and cannot be created from admin.",
+  });
 });
 
 adminRouter.patch("/platforms/:slug", async (req, res) => {
@@ -1075,25 +1026,10 @@ adminRouter.patch("/platforms/:slug", async (req, res) => {
   }
 });
 
-adminRouter.delete("/platforms/:slug", async (req, res) => {
-  try {
-    const partner = await loadPartnerOr404(req.params.slug, res);
-    if (!partner) return;
-    removeLocalPartnerImage(partner.image);
-    await Promise.all([
-      Commission.deleteMany({ partner: partner.slug }),
-      PlatformProduct.deleteMany({ partner: partner.slug }),
-      partner.deleteOne(),
-    ]);
-    await logActivity(req, "platform.delete", {
-      partner: partner.slug,
-      partnerName: partner.name,
-    });
-    res.json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Failed to delete platform" });
-  }
+adminRouter.delete("/platforms/:slug", (_req, res) => {
+  res.status(403).json({
+    message: "Platforms cannot be deleted from admin.",
+  });
 });
 
 adminRouter.get("/platforms/:slug", async (req, res) => {
@@ -1149,15 +1085,34 @@ adminRouter.get("/platforms/:slug/excel", async (req, res) => {
   try {
     const partner = await loadPartnerOr404(req.params.slug, res);
     if (!partner) return;
-    const rules = await Commission.find({ partner: partner.slug, isActive: { $ne: false } });
     const lang = ["ku", "en", "ar"].includes(String(req.query.lang)) ? String(req.query.lang) : "en";
+    if (partner.slug === "gini") {
+      if (String(req.query.meta || "") === "1") {
+        const { report } = await giniExportForPartner(partner, { workbook: false });
+        return res.json({
+          total: report.exportRows,
+          columns: giniExcelColumns(),
+          gini: report,
+        });
+      }
+      const { workbook } = await giniExportForPartner(partner);
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader("Content-Disposition", 'attachment; filename="Gini_BrownStore.xlsx"');
+      await workbook.xlsx.write(res);
+      return res.end();
+    }
     if (String(req.query.meta || "") === "1") {
-      const total = await countCommissionProducts(rules);
+      const summary = await platformDashboard(partner);
       return res.json({
-        total,
+        total: summary.exportReady,
         columns: excelColumnList(partner.excelColumns, partner.excelColumnsSet),
+        summary,
       });
     }
+    const rules = await Commission.find({ partner: partner.slug, isActive: { $ne: false } });
     const { workbook } = await buildCommissionWorkbook(partner, rules, lang);
     const filename = `${partner.slug}-commission.xlsx`;
     res.setHeader(
@@ -1173,13 +1128,38 @@ adminRouter.get("/platforms/:slug/excel", async (req, res) => {
   }
 });
 
+function decoratePlatformProduct(product, overrides, rules, context) {
+  return {
+    ...toPlatformProductDto(product, overrides, rules),
+    platformActive: !context.inactive.product.has(String(product._id)),
+    eligibility: evaluatePlatformEligibility(product, context),
+    taxonomy: taxonomyValuesForProduct(product, context),
+  };
+}
+
+function matchesEligibilityList(product, context, mode) {
+  const normalized = String(mode || "all").trim().toLowerCase();
+  if (!normalized || normalized === "all") return true;
+  const result = evaluatePlatformEligibility(product, context);
+  if (normalized === "ready") return result.eligible;
+  if (normalized === "blocked") return !result.eligible;
+  if (normalized === "unmapped" || normalized === "missing_setup") {
+    return eligibilityBucket(result) === "missing_setup";
+  }
+  return true;
+}
+
 adminRouter.get("/platforms/:slug/products", async (req, res) => {
   try {
     const partner = await loadPartnerOr404(req.params.slug, res);
     if (!partner) return;
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
-    const filter = adminProductFilter(req.query);
+    const context = await loadEligibilityContext(partner.slug);
+    const filter = combineFilters(
+      adminProductFilter(req.query),
+      eligibilityMongoFilter(context, req.query.eligibility)
+    );
     const [facets, rules] = await Promise.all([
       productFacets(),
       Commission.find({ partner: partner.slug, isActive: { $ne: false } }),
@@ -1208,6 +1188,7 @@ adminRouter.get("/platforms/:slug/products", async (req, res) => {
           const item = matchedMap.get(String(row.product));
           if (!item) return null;
           if (q && !customizedProductMatches(item, row.overrides || {}, q)) return null;
+          if (!matchesEligibilityList(item, context, req.query.eligibility)) return null;
           return { item, overrides: row.overrides || {} };
         })
         .filter(Boolean);
@@ -1216,7 +1197,7 @@ adminRouter.get("/platforms/:slug/products", async (req, res) => {
       return res.json({
         platform: toAdminPartner(partner, req),
         products: pageItems.map(({ item, overrides }) =>
-          toPlatformProductDto(item, overrides, rules)
+          decoratePlatformProduct(item, overrides, rules, context)
         ),
         pagination: {
           page,
@@ -1242,7 +1223,9 @@ adminRouter.get("/platforms/:slug/products", async (req, res) => {
     const map = new Map(rows.map((row) => [String(row.product), row.overrides || {}]));
     res.json({
       platform: toAdminPartner(partner, req),
-      products: items.map((item) => toPlatformProductDto(item, map.get(String(item._id)) || {}, rules)),
+      products: items.map((item) =>
+        decoratePlatformProduct(item, map.get(String(item._id)) || {}, rules, context)
+      ),
       pagination: {
         page,
         limit,
@@ -1265,13 +1248,17 @@ adminRouter.get("/platforms/:slug/products/:id", async (req, res) => {
       (await Product.findById(req.params.id).catch(() => null)) ||
       (await Product.findOne({ ibsherId: req.params.id }));
     if (!product) return res.status(404).json({ message: "Product not found" });
-    const [row, rules] = await Promise.all([
+    const [row, rules, extra] = await Promise.all([
       PlatformProduct.findOne({ partner: partner.slug, product: product._id }),
       Commission.find({ partner: partner.slug, isActive: { $ne: false } }),
+      productEligibility(partner.slug, product),
     ]);
     res.json({
       platform: toAdminPartner(partner, req),
-      product: toPlatformProductDto(product, row?.overrides || {}, rules),
+      product: {
+        ...toPlatformProductDto(product, row?.overrides || {}, rules),
+        ...extra,
+      },
     });
   } catch (err) {
     console.error(err);
@@ -1295,12 +1282,18 @@ adminRouter.patch("/platforms/:slug/products/:id", async (req, res) => {
         message: "Per-product platform prices have been removed. Use the selling price and commission rules.",
       });
     }
+    if ("platformActive" in req.body) {
+      await applyAvailability({
+        partner: partner.slug,
+        scope: "product",
+        targetIds: [String(product._id)],
+        isActive: req.body.platformActive !== false,
+      });
+    }
     const existing = await PlatformProduct.findOne({
       partner: partner.slug,
       product: product._id,
     });
-    const hadPlatformPrice =
-      existing?.overrides?.price != null || existing?.overrides?.discountPrice != null;
     const next = mergeOverridePatch(existing?.overrides || {}, req.body);
     next.price = null;
     next.discountPrice = null;
@@ -1309,16 +1302,21 @@ adminRouter.patch("/platforms/:slug/products/:id", async (req, res) => {
       { $set: { partner: partner.slug, product: product._id, overrides: next } },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
-    const rules = await Commission.find({ partner: partner.slug, isActive: { $ne: false } });
+    const [rules, extra] = await Promise.all([
+      Commission.find({ partner: partner.slug, isActive: { $ne: false } }),
+      productEligibility(partner.slug, product),
+    ]);
     await logActivity(req, "platform.product", {
       partner: partner.slug,
       partnerName: partner.name,
       productId: product._id.toString(),
       name: localizedName(product.name),
     });
-    if (partner.slug === "miswag" && hadPlatformPrice) scheduleMiswagPriceSync([product._id]);
     res.json({
-      product: toPlatformProductDto(product, row.overrides || {}, rules),
+      product: {
+        ...toPlatformProductDto(product, row.overrides || {}, rules),
+        ...extra,
+      },
     });
   } catch (err) {
     console.error(err);
@@ -1335,9 +1333,16 @@ adminRouter.delete("/platforms/:slug/products/:id", async (req, res) => {
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ message: "Product not found" });
     await PlatformProduct.deleteOne({ partner: partner.slug, product: product._id });
-    const rules = await Commission.find({ partner: partner.slug, isActive: { $ne: false } });
-    if (partner.slug === "miswag") scheduleMiswagPriceSync([product._id]);
-    res.json({ product: toPlatformProductDto(product, {}, rules) });
+    const [rules, extra] = await Promise.all([
+      Commission.find({ partner: partner.slug, isActive: { $ne: false } }),
+      productEligibility(partner.slug, product),
+    ]);
+    res.json({
+      product: {
+        ...toPlatformProductDto(product, {}, rules),
+        ...extra,
+      },
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to reset platform product" });
@@ -1496,7 +1501,6 @@ adminRouter.post("/commissions", async (req, res) => {
       isActive: item.isActive !== false,
     });
 
-    if (partner.slug === "miswag") scheduleMiswagPriceReconciliation();
     res.json({ commission: toAdminCommission(item) });
   } catch (err) {
     console.error(err);
@@ -1529,7 +1533,6 @@ adminRouter.patch("/commissions/:id", async (req, res) => {
       percentage: item.percentage,
       isActive: item.isActive !== false,
     });
-    if (item.partner === "miswag") scheduleMiswagPriceReconciliation();
     res.json({ commission: toAdminCommission(item) });
   } catch (err) {
     console.error(err);
@@ -1552,7 +1555,6 @@ adminRouter.delete("/commissions/:id", async (req, res) => {
     };
     await item.deleteOne();
     await logActivity(req, "commission.delete", snapshot);
-    if (snapshot.partner === "miswag") scheduleMiswagPriceReconciliation();
     res.json({ ok: true });
   } catch (err) {
     console.error(err);

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --max-old-space-size=4096 --watch src/index.js",
     "start": "node src/index.js",
-    "test": "node --test src/platformPrice.test.js"
+    "test": "node --test src/platformPrice.test.js src/platformManagement.test.js src/taxonomyNotices.test.js src/giniExport.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

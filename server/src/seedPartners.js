@@ -40,4 +40,14 @@ export async function seedPartners() {
     });
     console.log(`Seeded partner store: ${def.name}`);
   }
+
+  const fixed = new Set(PARTNER_DEFS.map((item) => item.slug));
+  const unknown = await Partner.find({ slug: { $nin: [...fixed] } }).select("slug name").lean();
+  if (unknown.length) {
+    console.log(
+      `Unregistered platforms kept (not deleted): ${unknown
+        .map((item) => `${item.slug} (${item.name})`)
+        .join(", ")}`
+    );
+  }
 }

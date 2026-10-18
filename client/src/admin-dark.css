@@ -1,0 +1,237 @@
+/* Admin-only dark theme. These rules apply only while html.admin-dark is set.
+   Light mode keeps the existing Tailwind classes and is not restyled here. */
+
+html.admin-dark {
+  color-scheme: dark;
+  --bg: 9 9 9;
+  --bg-2: 20 20 20;
+  --surface: 28 28 28;
+  --surface-a: 0.94;
+  --stroke: 255 255 255;
+  --stroke-a: 0.12;
+  --text: 245 245 245;
+  --text-dim: 212 212 216;
+  --text-mute: 161 161 170;
+  --background: 9 9 9;
+  --foreground: 245 245 245;
+  --card: 28 28 28;
+  --card-foreground: 245 245 245;
+  --popover: 23 23 23;
+  --popover-foreground: 245 245 245;
+  --muted: 32 32 32;
+  --muted-foreground: 161 161 170;
+  --secondary: 32 32 32;
+  --secondary-foreground: 245 245 245;
+  --accent-surface: 38 38 38;
+  --accent-surface-foreground: 245 245 245;
+  --border: 64 64 64;
+  --input: 38 38 38;
+  background: #090909;
+  accent-color: #d2a679;
+}
+
+html.admin-dark body {
+  background: #090909;
+  color: #f5f5f5;
+}
+
+html.admin-dark ::selection {
+  background: rgb(210 166 121 / 0.35);
+  color: #fff;
+}
+
+html.admin-dark ::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.2);
+  background-clip: content-box;
+}
+
+html.admin-dark ::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 0.32);
+  background-clip: content-box;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html.admin-theme-switching,
+  html.admin-theme-switching body,
+  html.admin-theme-switching [data-theme],
+  html.admin-theme-switching aside,
+  html.admin-theme-switching header {
+    transition: background-color 0.22s ease, color 0.22s ease, border-color 0.22s ease;
+  }
+}
+
+/* Page and sidebars stay near-black. Cards lift to a neutral gray. */
+html.admin-dark .bg-\[\#faf4ec\],
+html.admin-dark .bg-\[\#faf4ec\]\/90 {
+  background-color: #090909;
+}
+
+html.admin-dark .admin-logo-mark {
+  background-color: #faf4ec;
+}
+
+html.admin-dark .bg-\[\#faf4ec\]\/90 {
+  background-color: rgb(9 9 9 / 0.92);
+}
+
+html.admin-dark .bg-\[\#f3ebe0\] {
+  background-color: #050505;
+}
+
+html.admin-dark .bg-\[\#f3f3f3\] {
+  background-color: #262626;
+}
+
+html.admin-dark .bg-white {
+  background-color: #1c1c1c;
+}
+
+html.admin-dark .bg-white\/70 {
+  background-color: rgb(28 28 28 / 0.86);
+}
+
+html.admin-dark .bg-cream {
+  background-color: #141414;
+}
+
+html.admin-dark .bg-cream\/60 {
+  background-color: #161616;
+}
+
+/* White packshots use multiply so they sit on the light page.
+   On a black surface that turns the photo black, so the frame stays light. */
+html.admin-dark :has(> .mix-blend-multiply) {
+  background-color: #f3efe8;
+}
+
+html.admin-dark .hover\:bg-white:hover {
+  background-color: #2a2a2a;
+}
+
+html.admin-dark .bg-brown\/10,
+html.admin-dark .bg-brown\/\[0\.03\] {
+  background-color: rgb(255 255 255 / 0.06);
+}
+
+html.admin-dark .bg-brown\/25,
+html.admin-dark .bg-brown\/40,
+html.admin-dark .bg-brown\/50,
+html.admin-dark .bg-brown\/55 {
+  background-color: rgb(0 0 0 / 0.62);
+}
+
+html.admin-dark .hover\:bg-brown\/\[0\.04\]:hover,
+html.admin-dark .hover\:bg-brown\/\[0\.06\]:hover {
+  background-color: rgb(255 255 255 / 0.06);
+}
+
+html.admin-dark .text-brown {
+  color: #f5f5f5;
+}
+
+html.admin-dark .text-brown\/80 {
+  color: #e4e4e7;
+}
+
+html.admin-dark .text-brown\/70 {
+  color: #d4d4d8;
+}
+
+html.admin-dark .text-brown\/60,
+html.admin-dark .text-brown\/55,
+html.admin-dark .text-brown\/50 {
+  color: #a1a1aa;
+}
+
+html.admin-dark .text-brown\/45,
+html.admin-dark .text-brown\/40,
+html.admin-dark .text-brown\/35,
+html.admin-dark .text-brown\/30 {
+  color: #71717a;
+}
+
+html.admin-dark .hover\:text-brown:hover,
+html.admin-dark .group:hover .group-hover\:text-brown {
+  color: #ffffff;
+}
+
+html.admin-dark .placeholder\:text-brown\/35::placeholder {
+  color: #71717a;
+}
+
+/* Gold buttons keep dark text. Brown buttons already use cream text. */
+html.admin-dark .bg-tan.text-brown {
+  color: #24160f;
+}
+
+html.admin-dark .border-brown\/5,
+html.admin-dark .border-brown\/10,
+html.admin-dark .border-brown\/15,
+html.admin-dark .border-brown\/\[0\.06\] {
+  border-color: rgb(255 255 255 / 0.1);
+}
+
+html.admin-dark .hover\:border-brown\/30:hover {
+  border-color: rgb(255 255 255 / 0.22);
+}
+
+html.admin-dark .divide-brown\/5 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgb(255 255 255 / 0.08);
+}
+
+html.admin-dark .ring-brown,
+html.admin-dark .ring-brown\/5,
+html.admin-dark .ring-brown\/10,
+html.admin-dark .ring-brown\/15,
+html.admin-dark .ring-brown\/\[0\.04\],
+html.admin-dark .ring-brown\/\[0\.06\] {
+  --tw-ring-color: rgb(255 255 255 / 0.1);
+}
+
+html.admin-dark .admin-logo-mark {
+  --tw-ring-color: rgb(61 35 23 / 0.1);
+}
+
+html.admin-dark .admin-selected {
+  background-color: #3d2317;
+  color: #fdf8f2;
+  box-shadow: none;
+}
+
+html.admin-dark .bg-emerald-50 {
+  background-color: rgb(6 78 59 / 0.55);
+}
+
+html.admin-dark .text-emerald-800 {
+  color: #a7f3d0;
+}
+
+html.admin-dark .bg-amber-50 {
+  background-color: rgb(120 53 15 / 0.5);
+}
+
+html.admin-dark .text-amber-800,
+html.admin-dark .text-amber-900 {
+  color: #fcd34d;
+}
+
+html.admin-dark .text-amber-950 {
+  color: #fde68a;
+}
+
+html.admin-dark .bg-red-50 {
+  background-color: rgb(127 29 29 / 0.5);
+}
+
+html.admin-dark .text-red-700,
+html.admin-dark .text-red-800 {
+  color: #fecaca;
+}
+
+html.admin-dark input:-webkit-autofill,
+html.admin-dark textarea:-webkit-autofill,
+html.admin-dark select:-webkit-autofill {
+  -webkit-text-fill-color: #f5f5f5;
+  caret-color: #f5f5f5;
+  box-shadow: 0 0 0 1000px #141414 inset;
+}

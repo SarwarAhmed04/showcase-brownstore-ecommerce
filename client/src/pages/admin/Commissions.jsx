@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { GripVertical, Pencil, Plus, X } from "lucide-react";
+import { GripVertical, X } from "lucide-react";
 import { api } from "../../api";
 import { useAuth } from "../../context/AuthContext";
 import { useLang } from "../../context/LangContext";
@@ -8,9 +8,12 @@ import { tName } from "../../i18n";
 import { imgUrl } from "../../lib/img";
 import Spinner from "../../components/Spinner";
 import AdminModal from "../../components/admin/AdminModal";
-import MiswagSync from "../../components/admin/MiswagSync";
 import ProductEditor, { formatGrouped } from "../../components/admin/ProductEditor";
-import PlatformCategoryMapping from "./PlatformCategoryMapping";
+import AvailabilityPanel from "../../components/admin/platform/AvailabilityPanel";
+import CategorySetupPanel from "../../components/admin/platform/CategorySetupPanel";
+import PlatformOverview from "../../components/admin/platform/PlatformOverview";
+import { reasonLabel, StatusBadge } from "../../components/admin/platform/platformUi";
+import { usePlatformNav } from "../../components/admin/platform/platformNav";
 
 const SCOPES = ["all", "category", "subcategory", "collection", "brand", "vendor"];
 const CONTROL =
@@ -56,7 +59,8 @@ function readFile(file) {
 }
 
 function PartnerLogo({ image, name, className = "h-14 w-14" }) {
-  if (!image) {
+  const [failed, setFailed] = useState(false);
+  if (!image || failed) {
     return (
       <div
         className={`flex items-center justify-center rounded-2xl bg-brown text-lg font-display text-cream ${className}`}
@@ -69,139 +73,112 @@ function PartnerLogo({ image, name, className = "h-14 w-14" }) {
     <img
       src={imgUrl(image)}
       alt={name || ""}
+      onError={() => setFailed(true)}
       className={`rounded-2xl bg-white object-cover ring-1 ring-brown/10 ${className}`}
     />
   );
 }
 
-function PartnerCards({ t }) {
-  const [partners, setPartners] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [name, setName] = useState("");
-  const [image, setImage] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
+function ImageDropField({ image, name, t, onImage, onError }) {
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef(null);
 
-  function load() {
-    return api.adminPlatforms().then((data) => setPartners(data.platforms || data.partners || []));
+  async function applyFile(file) {
+    if (!file || !file.type.startsWith("image/")) return;
+    try {
+      onImage(await readFile(file));
+    } catch (err) {
+      onError?.(err.message);
+    }
   }
 
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => inputRef.current?.click()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          inputRef.current?.click();
+        }
+      }}
+      onDragEnter={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDragging(true);
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = "copy";
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!e.currentTarget.contains(e.relatedTarget)) setDragging(false);
+      }}
+      onDrop={async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDragging(false);
+        await applyFile(e.dataTransfer.files?.[0]);
+      }}
+      className={`mt-4 flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed px-3 py-3 transition ${
+        dragging
+          ? "border-tan bg-tan/10 ring-2 ring-tan/30"
+          : "border-brown/15 bg-cream/60 hover:border-brown/30"
+      }`}
+    >
+      <PartnerLogo image={image} name={name} className="h-14 w-14 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-brown">
+          {image ? t.platformImageReady : t.platformImage}
+        </p>
+        <p className="mt-0.5 text-xs text-brown/45">{t.platformImageDrop}</p>
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          await applyFile(file);
+        }}
+      />
+    </div>
+  );
+}
+
+function PartnerCards({ t }) {
+  const [partners, setPartners] = useState([]);
+  const [unknown, setUnknown] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
   useEffect(() => {
-    load()
+    api
+      .adminPlatforms()
+      .then((data) => {
+        setPartners(data.platforms || data.partners || []);
+        setUnknown(data.unknownPlatforms || []);
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
-
-  function closeCreate() {
-    if (busy) return;
-    setCreateOpen(false);
-    setName("");
-    setImage("");
-  }
-
-  async function onCreate(event) {
-    event.preventDefault();
-    if (!name.trim()) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api.createPlatform({ name: name.trim(), image });
-      setName("");
-      setImage("");
-      setCreateOpen(false);
-      await load();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   if (loading) return <Spinner label={t.loading} />;
 
   return (
     <div>
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h2 className="font-display text-3xl">{t.platforms}</h2>
-          <p className="mt-1 text-sm text-brown/50">{t.platformsHint}</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            setError("");
-            setCreateOpen(true);
-          }}
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-brown text-cream shadow-sm transition hover:bg-brown/90"
-          aria-label={t.addPlatform}
-        >
-          <Plus className="h-5 w-5" strokeWidth={2.2} />
-        </button>
+      <div className="mb-6">
+        <h2 className="font-display text-3xl">{t.platforms}</h2>
+        <p className="mt-1 max-w-2xl text-sm text-brown/50">{t.platformsHint}</p>
       </div>
-      {error && !createOpen ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
-
-      {createOpen ? (
-        <AdminModal onClose={closeCreate}>
-          <form
-            className="mx-auto w-full max-w-md rounded-3xl bg-white p-6 shadow-xl ring-1 ring-brown/10"
-            onSubmit={onCreate}
-          >
-            <h3 className="font-display text-2xl">{t.addPlatform}</h3>
-            {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
-            <label className="mt-5 mb-1 block text-xs font-semibold text-brown/50">
-              {t.platformName}
-            </label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className={SELECT}
-              placeholder="ibazzar"
-              autoFocus
-              required
-            />
-            <div className="mt-4 flex items-center gap-3">
-              <PartnerLogo image={image} name={name} className="h-14 w-14" />
-              <label className="cursor-pointer rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown">
-                {image ? t.platformImageReady : t.platformImage}
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = "";
-                    if (!file) return;
-                    try {
-                      setImage(await readFile(file));
-                    } catch (err) {
-                      setError(err.message);
-                    }
-                  }}
-                />
-              </label>
-            </div>
-            <div className="mt-6 flex gap-2">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={closeCreate}
-                className="flex-1 rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown"
-              >
-                {t.cancel}
-              </button>
-              <button
-                type="submit"
-                disabled={busy || !name.trim()}
-                className="flex-1 rounded-full bg-brown px-4 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
-              >
-                {t.addPlatform}
-              </button>
-            </div>
-          </form>
-        </AdminModal>
-      ) : null}
-
+      {error ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {partners.map((partner) => (
           <Link
@@ -210,7 +187,14 @@ function PartnerCards({ t }) {
             className="group rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5 transition hover:-translate-y-0.5 hover:shadow-md"
           >
             <PartnerLogo image={partner.image} name={partner.name} className="h-16 w-16" />
-            <h3 className="mt-4 font-display text-2xl">{partner.name}</h3>
+            <div className="mt-4 flex items-start justify-between gap-3">
+              <h3 className="font-display text-2xl">{partner.name}</h3>
+              {Number(partner.taxonomyNotices) > 0 ? (
+                <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-900">
+                  {Number(partner.taxonomyNotices).toLocaleString("en-US")}
+                </span>
+              ) : null}
+            </div>
             <p className="mt-1 text-sm text-brown/50">
               {partner.rulesCount || 0} {t.partnerRules}
             </p>
@@ -220,11 +204,38 @@ function PartnerCards({ t }) {
           </Link>
         ))}
       </div>
+      {unknown.length ? (
+        <section className="mt-8 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
+          <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
+            {t.unknownPlatforms}
+          </p>
+          <p className="mt-2 text-sm text-brown/55">{t.unknownPlatformsHint}</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {unknown.map((partner) => (
+              <Link
+                key={partner.slug}
+                to={`/admin/platforms/${partner.slug}`}
+                className="rounded-2xl bg-cream px-4 py-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-display text-xl">{partner.name}</p>
+                  <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-900">
+                    {t.legacyPlatform}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-brown/45">{partner.slug}</p>
+              </Link>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
 
-function PlatformProductRow({ item, t, lang, onEdit }) {
+function PlatformProductRow({ item, t, lang, busy, onEdit, onToggle }) {
+  const eligible = item.eligibility ? item.eligibility.eligible : item.platformActive !== false;
+  const reasons = item.eligibility?.reasons || [];
   return (
     <div className="flex items-center gap-3 py-3">
       <img
@@ -233,11 +244,32 @@ function PlatformProductRow({ item, t, lang, onEdit }) {
         className="h-12 w-12 rounded-xl bg-cream object-cover"
       />
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium">{tName(item.name, lang)}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="truncate font-medium">{tName(item.name, lang)}</p>
+          <StatusBadge kind={eligible ? "ready" : "blocked"} t={t} />
+          <StatusBadge kind={item.platformActive === false ? "inactive" : "active"} t={t} />
+        </div>
         <p className="text-xs text-brown/45">
           {item.sku || "—"} · {formatGrouped(item.platformPrice || item.sellingPrice || 0)}
         </p>
+        {!eligible && reasons.length ? (
+          <p className="mt-1 text-xs text-red-800">
+            {reasons.map((reason) => reasonLabel(t, reason)).join(" · ")}
+          </p>
+        ) : null}
       </div>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onToggle}
+        className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold disabled:opacity-50 ${
+          item.platformActive === false
+            ? "bg-brown/10 text-brown/55"
+            : "bg-emerald-50 text-emerald-800"
+        }`}
+      >
+        {item.platformActive === false ? t.commissionInactive : t.commissionActive}
+      </button>
       <button
         type="button"
         onClick={onEdit}
@@ -306,6 +338,9 @@ const DEFAULT_EXCEL_COLUMNS = [
   "brandKu",
   "brandEn",
   "brandAr",
+  "platformCategoryId",
+  "platformCategoryName",
+  "platformCategoryPath",
   "warrantyKu",
   "warrantyEn",
   "warrantyAr",
@@ -513,6 +548,7 @@ function ExcelColumnOrder({ columns, onReorder, onRemove, removeLabel }) {
 
 function PartnerCommission({ partnerSlug, t, lang }) {
   const { user } = useAuth();
+  const { setNav } = usePlatformNav();
   const isPrimary = Boolean(user?.isPrimary);
   const [partner, setPartner] = useState(null);
   const [targets, setTargets] = useState({
@@ -548,8 +584,24 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   const [editOpen, setEditOpen] = useState(false);
   const [editName, setEditName] = useState("");
   const [editImage, setEditImage] = useState("");
-  const [tab, setTab] = useState("products");
+  const [tab, setTab] = useState("overview");
+  const [noticeCount, setNoticeCount] = useState(0);
+
+  useEffect(() => {
+    let ignore = false;
+    api
+      .platformDashboard(partnerSlug)
+      .then((data) => {
+        if (!ignore) setNoticeCount(Number(data.newTaxonomyAlerts) || 0);
+      })
+      .catch(() => {});
+    return () => {
+      ignore = true;
+    };
+  }, [partnerSlug]);
+  const [eligibility, setEligibility] = useState("all");
   const [excelTotal, setExcelTotal] = useState(null);
+  const [excelGini, setExcelGini] = useState(null);
   const [excelColumns, setExcelColumns] = useState([]);
   const [excelSaved, setExcelSaved] = useState(false);
   const [columnToDelete, setColumnToDelete] = useState(null);
@@ -583,7 +635,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     return {};
   }, [scope, categoryId, subCategoryId, collectionId, brandId, vendorId]);
   const previewKey = JSON.stringify(preview);
-  const productListKey = `${partnerSlug}|${productQ}|${previewKey}`;
+  const productListKey = `${partnerSlug}|${productQ}|${previewKey}|${eligibility}`;
   const [seenProductListKey, setSeenProductListKey] = useState(productListKey);
   if (productListKey !== seenProductListKey) {
     setSeenProductListKey(productListKey);
@@ -613,6 +665,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         q: productQ,
         limit: 20,
         page: productPage,
+        eligibility,
         ...preview,
       })
       .then((data) => {
@@ -643,7 +696,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     setMessage("");
     setProductQ("");
     setProductPage(1);
-    setTab("products");
+    setTab("overview");
     setExcelColumns([]);
     setExcelSaved(false);
     setColumnToDelete(null);
@@ -661,6 +714,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           q: productQ,
           limit: 20,
           page: productPage,
+          eligibility,
           ...preview,
         })
         .then((data) => {
@@ -675,18 +729,20 @@ function PartnerCommission({ partnerSlug, t, lang }) {
       ignore = true;
       clearTimeout(id);
     };
-  }, [partnerSlug, productQ, productPage, previewKey]);
+  }, [partnerSlug, productQ, productPage, previewKey, eligibility]);
 
   useEffect(() => {
     if (tab !== "excel") return undefined;
     let ignore = false;
     setExcelTotal(null);
+    setExcelGini(null);
     api
       .platformExcelMeta(partnerSlug)
       .then((data) => {
         if (ignore) return;
         setExcelTotal(Number(data.total) || 0);
         setExcelColumns(data.columns || []);
+        setExcelGini(data.gini || null);
       })
       .catch(() => {
         if (!ignore) setExcelTotal(0);
@@ -852,6 +908,24 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     }
   }
 
+  const openPlatformEditor = useCallback(() => {
+    setError("");
+    setEditName(partner?.name || "");
+    setEditImage(partner?.image || "");
+    setEditOpen(true);
+  }, [partner]);
+
+  useEffect(() => {
+    if (!partner) {
+      setNav(null);
+      return undefined;
+    }
+    setNav({ partner, tab, setTab, onEdit: openPlatformEditor, noticeCount });
+    return undefined;
+  }, [partner, tab, setNav, openPlatformEditor, noticeCount]);
+
+  useEffect(() => () => setNav(null), [setNav]);
+
   if (loading) return <Spinner label={t.loading} />;
   if (!partner) {
     return <p className="text-sm text-red-700">{error || t.noCommissions}</p>;
@@ -861,33 +935,6 @@ function PartnerCommission({ partnerSlug, t, lang }) {
 
   return (
     <div className="min-w-0">
-      <Link
-        to="/admin/platforms"
-        className="text-sm font-semibold text-brown/50 hover:text-brown"
-      >
-        ← {t.backToPlatforms}
-      </Link>
-      <div className="mt-3 mb-6 flex w-full min-w-0 items-center gap-4">
-        <PartnerLogo image={partner.image} name={partner.name} className="h-16 w-16" />
-        <div className="min-w-0 flex-1">
-          <h2 className="font-display text-3xl">{partner.name}</h2>
-          <p className="mt-1 text-sm text-brown/50">{t.commissionSignHint}</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            setError("");
-            setEditName(partner.name || "");
-            setEditImage(partner.image || "");
-            setEditOpen(true);
-          }}
-          className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-white text-brown shadow-sm ring-1 ring-brown/10 transition hover:bg-cream"
-          aria-label={t.editPlatform}
-        >
-          <Pencil className="h-5 w-5" strokeWidth={2} />
-        </button>
-      </div>
-
       {editOpen ? (
         <AdminModal
           onClose={() => {
@@ -929,27 +976,13 @@ function PartnerCommission({ partnerSlug, t, lang }) {
               autoFocus
               required
             />
-            <div className="mt-4 flex items-center gap-3">
-              <PartnerLogo image={editImage} name={editName} className="h-14 w-14" />
-              <label className="cursor-pointer rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-brown">
-                {editImage ? t.platformImageReady : t.platformImage}
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = "";
-                    if (!file) return;
-                    try {
-                      setEditImage(await readFile(file));
-                    } catch (err) {
-                      setError(err.message);
-                    }
-                  }}
-                />
-              </label>
-            </div>
+            <ImageDropField
+              image={editImage}
+              name={editName}
+              t={t}
+              onImage={setEditImage}
+              onError={setError}
+            />
             <div className="mt-6 flex gap-2">
               <button
                 type="button"
@@ -967,68 +1000,18 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                 {t.save}
               </button>
             </div>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={async () => {
-                if (!window.confirm(t.deletePlatformConfirm)) return;
-                setBusy(true);
-                try {
-                  await api.deletePlatform(partnerSlug);
-                  window.location.assign("/admin/platforms");
-                } catch (err) {
-                  setError(err.message);
-                  setBusy(false);
-                }
-              }}
-              className="mt-3 w-full rounded-full bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-800"
-            >
-              {t.deletePlatform}
-            </button>
           </form>
         </AdminModal>
       ) : null}
 
-      <div
-        className={`mb-6 grid grid-cols-2 gap-1 rounded-full bg-white p-1 shadow-sm ring-1 ring-brown/5 ${
-          partnerSlug === "miswag" ? "sm:grid-cols-3 lg:grid-cols-5" : "grid-cols-2 sm:grid-cols-3"
-        }`}
-      >
-        {[
-          { id: "products", label: t.products },
-          { id: "excel", label: t.excelTab },
-          { id: "api", label: t.partnerApi },
-          ...(partnerSlug === "miswag"
-            ? [
-                { id: "mapping", label: t.categoryMapping || t.miswagMappingTab },
-                { id: "sync", label: t.miswagSyncTab },
-              ]
-            : []),
-        ].map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setTab(item.id)}
-            className={`rounded-full px-2 py-2.5 text-center text-xs font-semibold leading-tight transition sm:px-4 sm:text-sm ${
-              tab === item.id ? "bg-brown text-cream" : "text-brown/55 hover:text-brown"
-            }`}
-          >
-            {item.label}
-            {item.count ? ` (${item.count})` : ""}
-          </button>
-        ))}
-      </div>
+      {partner.fixed === false ? (
+        <p className="mb-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          {t.unknownPlatformsHint}
+        </p>
+      ) : null}
 
       {error && !editOpen ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
       {message ? <p className="mb-4 text-sm text-brown/70">{message}</p> : null}
-
-      {tab === "mapping" && partnerSlug === "miswag" ? (
-        <PlatformCategoryMapping t={t} lang={lang} />
-      ) : null}
-
-      {tab === "sync" && partnerSlug === "miswag" ? (
-        <MiswagSync t={t} lang={lang} />
-      ) : null}
 
       {tab === "api" ? (
       <section className="mb-6 min-w-0 overflow-hidden rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
@@ -1275,8 +1258,43 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
             {t.excelTab}
           </p>
-          <p className="mt-2 max-w-xl text-sm text-brown/50">{t.excelHint}</p>
-          {excelTotal != null ? (
+          <p className="mt-2 max-w-xl text-sm text-brown/50">{excelGini ? t.giniTemplateNote : t.excelHint}</p>
+          {excelGini ? (
+            <div className="mt-5 grid gap-2 text-sm sm:grid-cols-2">
+              <p>{t.giniTotal}: {Number(excelGini.totalProducts || 0).toLocaleString("en-US")}</p>
+              <p>{t.giniEligible}: {Number(excelGini.eligible || 0).toLocaleString("en-US")}</p>
+              <p>{t.giniInactive}: {Number(excelGini.blockedInactive || 0).toLocaleString("en-US")}</p>
+              <p>{t.giniUnmapped}: {Number(excelGini.blockedUnmapped || 0).toLocaleString("en-US")}</p>
+              <p>{t.giniMissing}: {Number(excelGini.missingRequired || 0).toLocaleString("en-US")}</p>
+              <p>{t.giniRows}: {Number(excelGini.exportRows || 0).toLocaleString("en-US")}</p>
+              <p>{t.giniUniqueSkus}: {Number(excelGini.duplicateSkus?.uniqueSkus || 0).toLocaleString("en-US")}</p>
+              <p>{t.giniDuplicateSkus}: {Number(excelGini.duplicateSkus?.duplicateSkuValues || 0).toLocaleString("en-US")}</p>
+              <p>{t.giniExtraDuplicateRows}: {Number(excelGini.duplicateSkus?.extraDuplicateRows || 0).toLocaleString("en-US")}</p>
+              {(excelGini.missing || []).map((item) => (
+                <p key={item.code} className="text-amber-900 sm:col-span-2">
+                  {item.message}: {Number(item.count || 0).toLocaleString("en-US")}
+                </p>
+              ))}
+              {excelGini.duplicateSkus?.duplicateSkuValues > 0 ? (
+                <div className="sm:col-span-2">
+                  <p className="text-amber-900">{t.giniDuplicateWarning}</p>
+                  <div className="mt-3 max-h-72 space-y-3 overflow-auto">
+                    {(excelGini.duplicateSkus.duplicates || []).map((group) => (
+                      <div key={group.sku}>
+                        <p className="font-semibold">{t.giniSku}: {group.sku}</p>
+                        {(group.products || []).map((product) => (
+                          <p key={product.productId} className="text-brown/70">
+                            {t.giniProductName}: {product.name || "—"} · {t.giniBrand}: {product.brand || "—"} · {t.giniCollection}: {product.collection || "—"} · {t.giniSellingPrice}: {Number(product.sellingPrice || 0).toLocaleString("en-US")} · {t.giniProductId}: {product.productId} · {t.giniIbsherId}: {product.ibsherId || "—"}
+                          </p>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {excelTotal != null && !excelGini ? (
             <div className="mt-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="text-sm text-brown/50">{t.excelOrderHint}</p>
@@ -1347,13 +1365,36 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         </section>
       ) : null}
 
-      {tab === "products" ? (
-      <>
+      {tab === "overview" ? (
+        <PlatformOverview
+          partnerSlug={partnerSlug}
+          partner={partner}
+          t={t}
+          onOpen={setTab}
+          onPartner={setPartner}
+        />
+      ) : null}
+
+      {tab === "mapping" ? (
+        <CategorySetupPanel
+          partnerSlug={partnerSlug}
+          t={t}
+          lang={lang}
+          onNotices={setNoticeCount}
+        />
+      ) : null}
+
+      {tab === "availability" ? (
+        <AvailabilityPanel partnerSlug={partnerSlug} t={t} lang={lang} />
+      ) : null}
+
+      {tab === "commissions" ? (
       <div className="space-y-6">
         <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
           <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
             {t.addCommission}
           </p>
+          <p className="mt-2 text-sm text-brown/50">{t.commissionSignHint}</p>
           <form onSubmit={onSave} className="mt-4 space-y-3">
             <div className="flex flex-wrap items-end gap-3">
               <div className="shrink-0">
@@ -1578,8 +1619,10 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           )}
         </section>
       </div>
+      ) : null}
 
-      <section className="mt-6 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
+      {tab === "products" ? (
+      <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
@@ -1602,6 +1645,25 @@ function PartnerCommission({ partnerSlug, t, lang }) {
             className="rounded-full border border-brown/10 bg-cream px-4 py-2 text-sm"
           />
         </div>
+        <div className="mt-3 flex flex-wrap gap-1">
+          {[
+            ["all", t.eligibilityAll],
+            ["ready", t.ready],
+            ["blocked", t.blocked],
+            ["missing_setup", t.unmapped],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setEligibility(id)}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                eligibility === id ? "bg-brown text-cream" : "bg-cream text-brown/60"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         {(products.products || []).length ? (
           <div className="mt-5 divide-y divide-brown/5">
             {(products.products || []).map((item) => (
@@ -1610,14 +1672,31 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                 item={item}
                 t={t}
                 lang={lang}
+                busy={busy}
                 onEdit={() => openPlatformProduct(item)}
+                onToggle={async () => {
+                  setBusy(true);
+                  setError("");
+                  try {
+                    await api.setPlatformAvailability(partnerSlug, {
+                      scope: "product",
+                      targetId: item.id,
+                      isActive: item.platformActive === false,
+                    });
+                    await loadProducts();
+                  } catch (err) {
+                    setError(err.message);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
               />
             ))}
           </div>
         ) : (
           <p className="mt-8 text-sm text-brown/45">{t.noProducts}</p>
         )}
-        {Object.keys(preview).length && products.pagination?.pages > 1 ? (
+        {products.pagination?.pages > 1 ? (
           <div className="mt-4 flex justify-center gap-2">
             {Array.from({ length: products.pagination.pages }, (_, i) => i + 1)
               .filter(
@@ -1641,7 +1720,6 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           </div>
         ) : null}
       </section>
-      </>
       ) : null}
 
       {editing ? (
@@ -1650,6 +1728,32 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           t={t}
           lang={lang}
           mode="platform"
+          availability={{
+            active: editing.platformActive !== false,
+            eligibility: editing.eligibility,
+            onToggle: async (active) => {
+              setEditBusy(true);
+              setEditMessage("");
+              try {
+                const data = await api.setPlatformAvailability(partnerSlug, {
+                  scope: "product",
+                  targetId: editing.id,
+                  isActive: active,
+                });
+                setEditing((current) => ({
+                  ...(current || {}),
+                  platformActive: data.platformActive !== false && data.isActive !== false,
+                  eligibility: data.eligibility || current?.eligibility,
+                }));
+                setEditMessage(t.saved);
+                await loadProducts();
+              } catch (err) {
+                setEditMessage(err.message);
+              } finally {
+                setEditBusy(false);
+              }
+            },
+          }}
           busy={editBusy}
           message={editMessage}
           onClose={() => setEditing(null)}
@@ -1692,6 +1796,6 @@ export default function AdminCommissions() {
   const { partner } = useParams();
   const slug = String(partner || "").toLowerCase();
 
-  if (slug) return <PartnerCommission partnerSlug={slug} t={t} lang={lang} />;
+  if (slug) return <PartnerCommission key={slug} partnerSlug={slug} t={t} lang={lang} />;
   return <PartnerCards t={t} />;
 }

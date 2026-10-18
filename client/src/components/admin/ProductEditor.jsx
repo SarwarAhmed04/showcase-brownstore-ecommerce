@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { tName } from "../../i18n";
+import { reasonLabel, StatusBadge } from "./platform/platformUi";
 import { useEscape, useScrollLock } from "../../lib/hooks";
 
 const INPUT =
@@ -102,7 +103,7 @@ function jsonEqual(a, b) {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
-export function buildOverridePatch(product, form, { includePrice = true } = {}) {
+export function buildOverridePatch(product, form, { includePrice = true, includeActive = true } = {}) {
   const source = product.source || {};
   const patch = {};
 
@@ -121,8 +122,10 @@ export function buildOverridePatch(product, form, { includePrice = true } = {}) 
   const stock = Number(form.stock);
   patch.stock = Number(source.stock) === stock ? null : stock;
   patch.outOfStock = Boolean(form.outOfStock);
-  if (form.isActive === Boolean(source.isActive !== false)) patch.isActive = null;
-  else patch.isActive = Boolean(form.isActive);
+  if (includeActive) {
+    if (form.isActive === Boolean(source.isActive !== false)) patch.isActive = null;
+    else patch.isActive = Boolean(form.isActive);
+  }
 
   patch.name = locEqual(form.name, source.name) ? null : form.name;
   patch.description = locEqual(form.description, source.description) ? null : form.description;
@@ -177,6 +180,7 @@ export default function ProductEditor({
   onReset,
   busy,
   message,
+  availability,
 }) {
   const source = product?.source || {};
   const [form, setForm] = useState(() => formFromProduct(product));
@@ -217,6 +221,42 @@ export default function ProductEditor({
         </div>
 
         <div className="flex-1 space-y-6 overflow-y-auto px-5 py-5">
+          {mode === "platform" && availability ? (
+            <section className="rounded-3xl bg-white p-4 ring-1 ring-brown/5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
+                    {t.exportStatus}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <StatusBadge kind={availability.eligibility?.eligible ? "ready" : "blocked"} t={t} />
+                    <StatusBadge kind={availability.active ? "active" : "inactive"} t={t} />
+                  </div>
+                  {availability.eligibility?.eligible ? null : (
+                    <p className="mt-2 text-sm text-red-800">
+                      {(availability.eligibility?.reasons || [])
+                        .map((reason) => reasonLabel(t, reason))
+                        .join(" · ")}
+                    </p>
+                  )}
+                  <p className="mt-2 text-xs text-brown/45">{t.parentStillBlocks}</p>
+                </div>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => availability.onToggle?.(!availability.active)}
+                  className={`rounded-full px-4 py-2 text-xs font-semibold disabled:opacity-50 ${
+                    availability.active
+                      ? "bg-emerald-50 text-emerald-800"
+                      : "bg-brown/10 text-brown/55"
+                  }`}
+                >
+                  {availability.active ? t.commissionActive : t.commissionInactive}
+                </button>
+              </div>
+            </section>
+          ) : null}
+
           {mode === "platform" ? (
             <section className="rounded-3xl bg-white p-4 ring-1 ring-brown/5">
               <p className="text-sm text-brown/55">
@@ -297,17 +337,19 @@ export default function ProductEditor({
                 <option value="out">{t.outOfStock}</option>
               </select>
             </div>
-            <div>
-              <label className={LABEL}>{t.status}</label>
-              <select
-                value={form.isActive ? "on" : "off"}
-                onChange={(e) => setField("isActive", e.target.value === "on")}
-                className={INPUT}
-              >
-                <option value="on">{t.commissionActive}</option>
-                <option value="off">{t.commissionInactive}</option>
-              </select>
-            </div>
+            {mode === "store" ? (
+              <div>
+                <label className={LABEL}>{t.status}</label>
+                <select
+                  value={form.isActive ? "on" : "off"}
+                  onChange={(e) => setField("isActive", e.target.value === "on")}
+                  className={INPUT}
+                >
+                  <option value="on">{t.commissionActive}</option>
+                  <option value="off">{t.commissionInactive}</option>
+                </select>
+              </div>
+            ) : null}
           </section>
 
           <section>
@@ -460,7 +502,7 @@ export default function ProductEditor({
             <button
               type="button"
               disabled={busy}
-              onClick={() => onSave(buildOverridePatch(product, form, { includePrice: mode !== "platform" }))}
+              onClick={() => onSave(buildOverridePatch(product, form, { includePrice: mode !== "platform", includeActive: mode !== "platform" }))}
               className="ms-auto rounded-full bg-brown px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
             >
               {t.save}

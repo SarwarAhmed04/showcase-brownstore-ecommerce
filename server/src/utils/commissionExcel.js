@@ -1,9 +1,14 @@
 import ExcelJS from "exceljs";
 import { Product } from "../models/Product.js";
 import { PlatformProduct } from "../models/PlatformProduct.js";
-import { applyCommissionRate, commissionMatchFilter, winningCommission } from "./commission.js";
+import { applyCommissionRate, winningCommission } from "./commission.js";
 import { partnerPricePreview } from "./partnerCatalog.js";
 import { toResolvedProduct } from "./productView.js";
+import { evaluatePlatformEligibility } from "./platformEligibility.js";
+import {
+  loadEligibilityContext,
+  taxonomyValuesForProduct,
+} from "./platformTaxonomy.js";
 
 const MEDIA_ORIGIN = String(process.env.MEDIA_PUBLIC_ORIGIN || "https://api.brownstore.net").replace(
   /\/$/,
@@ -28,6 +33,9 @@ export const EXCEL_FIELDS = [
   { key: "brandKu", label: "Brand (KU)", width: 18 },
   { key: "brandEn", label: "Brand (EN)", width: 18 },
   { key: "brandAr", label: "Brand (AR)", width: 18 },
+  { key: "platformCategoryId", label: "Platform category ID", width: 22 },
+  { key: "platformCategoryName", label: "Platform category name", width: 28 },
+  { key: "platformCategoryPath", label: "Platform category path", width: 42 },
   { key: "warrantyKu", label: "Warranty (KU)", width: 22 },
   { key: "warrantyEn", label: "Warranty (EN)", width: 22 },
   { key: "warrantyAr", label: "Warranty (AR)", width: 22 },
@@ -114,11 +122,29 @@ export function downloadExcelOrder(saved, imageCount) {
   return order;
 }
 
+const PLATFORM_CATEGORY_KEYS = [
+  "platformCategoryId",
+  "platformCategoryName",
+  "platformCategoryPath",
+];
+
+function withPlatformCategoryColumns(order) {
+  const next = [...order];
+  for (const key of PLATFORM_CATEGORY_KEYS) {
+    if (!next.includes(key)) next.push(key);
+  }
+  return next;
+}
+
 export function visibleExcelOrder(saved, customized) {
-  if (customized) return savedExcelOrder(saved);
-  const exact = savedExcelOrder(saved);
-  if (exact.length > 0) return exact;
-  return editorExcelOrder([]);
+  let order;
+  if (customized) order = savedExcelOrder(saved);
+  else {
+    const exact = savedExcelOrder(saved);
+    order = exact.length > 0 ? exact : editorExcelOrder([]);
+  }
+  if (!order.length) order = editorExcelOrder([]);
+  return withPlatformCategoryColumns(order);
 }
 
 export function excelColumnList(saved, customized = false) {
@@ -194,14 +220,13 @@ function variantSummary(variants) {
     .join("\n");
 }
 
-function productRow(product, rules, extra) {
+function productRow(product, rules, extra, taxonomy) {
   const resolved = toResolvedProduct(product, extra);
   if (!resolved) return null;
   const rule = winningCommission(product, rules);
-  if (!rule) return null;
   const preview = partnerPricePreview(product, rules);
-  const rate = Number(rule.percentage);
-  const safeRate = Number.isFinite(rate) ? rate : 0;
+  const rate = Number(rule?.percentage);
+  const safeRate = Number.isFinite(rate) ? rate : preview.rate || 0;
   const store = toResolvedProduct(product);
   const discountPrice = Number(store?.discountPrice) || 0;
   const commissionedPrice = preview.price;
@@ -226,6 +251,9 @@ function productRow(product, rules, extra) {
       brandKu: locText(resolved.brand, "ku"),
       brandEn: locText(resolved.brand, "en"),
       brandAr: locText(resolved.brand, "ar"),
+      platformCategoryId: taxonomy?.categoryId || "",
+      platformCategoryName: taxonomy?.categoryName || "",
+      platformCategoryPath: [taxonomy?.subcategoryName, taxonomy?.subcategoryId].filter(Boolean).join(" / "),
       warrantyKu: locText(resolved.warranty, "ku"),
       warrantyEn: locText(resolved.warranty, "en"),
       warrantyAr: locText(resolved.warranty, "ar"),
@@ -246,33 +274,14 @@ function orderedValue(row, key) {
   return row.cells[key] ?? "";
 }
 
-export async function countCommissionProducts(rules) {
-  const filter = commissionMatchFilter(rules);
-  if (!filter) return 0;
-  return Product.countDocuments(filter);
-}
-
 export async function buildCommissionWorkbook(partner, rules) {
-  const filter = commissionMatchFilter(rules);
+  const context = await loadEligibilityContext(partner.slug);
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Brown Store";
   const sheet = workbook.addWorksheet("Excel");
 
-  const rows = [];
-  if (filter) {
-    const [products, overrides] = await Promise.all([
-      Product.find(filter).sort({ itemCode: 1 }).lean(),
-      PlatformProduct.find({ partner: partner.slug }).lean(),
-    ]);
-    const overrideMap = new Map(
-      overrides.map((row) => [String(row.product), row.overrides || {}])
-    );
-    for (const product of products) {
-      const row = productRow(product, rules, overrideMap.get(String(product._id)) || {});
-      if (row) rows.push(row);
-    }
-  }
-
+  const overrides = await PlatformProduct.find({ partner: partner.slug }).select("product overrides").lean();
+  const overrideMap = new Map(overrides.map((row) => [String(row.product), row.overrides || {}]));
   const order = visibleExcelOrder(partner.excelColumns, Boolean(partner.excelColumnsSet));
   const header = sheet.addRow(order.map(excelHeader));
   header.font = { bold: true };
@@ -283,7 +292,18 @@ export async function buildCommissionWorkbook(partner, rules) {
   };
   header.alignment = { vertical: "middle" };
 
-  for (const row of rows) {
+  let total = 0;
+  const cursor = Product.find().sort({ itemCode: 1, _id: 1 }).lean().cursor();
+  for await (const product of cursor) {
+    if (!evaluatePlatformEligibility(product, context).eligible) continue;
+    const row = productRow(
+      product,
+      rules,
+      overrideMap.get(String(product._id)) || {},
+      taxonomyValuesForProduct(product, context)
+    );
+    if (!row) continue;
+    total += 1;
     const added = sheet.addRow(order.map((key) => orderedValue(row, key)));
     added.alignment = { vertical: "top" };
     order.forEach((key, index) => {
@@ -305,5 +325,5 @@ export async function buildCommissionWorkbook(partner, rules) {
     from: { row: 1, column: 1 },
     to: { row: 1, column: Math.max(order.length, 1) },
   };
-  return { workbook, total: rows.length };
+  return { workbook, total };
 }

@@ -10,7 +10,6 @@ import { productsRouter } from "./routes/products.js";
 import { categoriesRouter } from "./routes/categories.js";
 import { authRouter } from "./routes/auth.js";
 import { adminRouter, syncFromIbsher } from "./routes/admin.js";
-import { miswagAdminRouter } from "./routes/miswagAdmin.js";
 import { partnersRouter } from "./routes/partners.js";
 import { enquiriesRouter } from "./routes/enquiries.js";
 import { bannersRouter } from "./routes/banners.js";
@@ -54,7 +53,6 @@ app.get("/api/health", (_req, res) => {
 app.use("/api/products", productsRouter);
 app.use("/api/categories", categoriesRouter);
 app.use("/api/auth", authRouter);
-app.use("/api/admin/miswag", miswagAdminRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/partners", partnersRouter);
 app.use("/api/enquiries", enquiriesRouter);
