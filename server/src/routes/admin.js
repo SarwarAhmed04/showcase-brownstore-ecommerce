@@ -74,6 +74,7 @@ import {
   toAdminActivity,
 } from "../utils/activity.js";
 import { platformManagementRouter } from "./platformManagement.js";
+import { miswagConnectionRouter } from "./miswagConnection.js";
 import {
   applyAvailability,
   combineFilters,
@@ -91,6 +92,7 @@ import { PlatformTaxonomyNotice } from "../models/PlatformTaxonomyNotice.js";
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
 adminRouter.use(platformManagementRouter);
+adminRouter.use(miswagConnectionRouter);
 
 adminRouter.get("/stats", async (_req, res) => {
   try {

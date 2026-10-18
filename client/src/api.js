@@ -20,9 +20,20 @@ async function request(path, options = {}) {
   }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = new Error(json.message || `Request failed (${res.status})`);
+    const parts = [json.message || `Request failed (${res.status})`];
+    if (json.operation) parts.push(`Operation: ${json.operation}`);
+    else if (json.method || json.endpoint) {
+      parts.push(`Operation: ${[json.method, json.endpoint].filter(Boolean).join(" ")}`);
+    }
+    if (json.miswagHttpStatus) parts.push(`Miswag HTTP ${json.miswagHttpStatus}`);
+    const err = new Error(parts.join(" · "));
     err.status = res.status;
     err.details = json.details;
+    err.code = json.code;
+    err.endpoint = json.endpoint;
+    err.method = json.method;
+    err.operation = json.operation;
+    err.miswagHttpStatus = json.miswagHttpStatus;
     throw err;
   }
   return json;
@@ -209,6 +220,69 @@ export const api = {
     ),
   taxonomyNotices: (slug) =>
     request(`/api/admin/platforms/${encodeURIComponent(slug)}/taxonomy-notices`),
+  miswagConnection: () => request("/api/admin/platforms/miswag/connection"),
+  saveMiswagConnection: (body) =>
+    request("/api/admin/platforms/miswag/connection", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  testMiswagConnection: async (body) => {
+    const res = await fetch(apiUrl("/api/admin/platforms/miswag/connection/test"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(body || {}),
+    });
+    const json = await res.json().catch(() => ({}));
+    // 401 is a valid connection-test outcome (auth failed), not a session error here.
+    if (!res.ok && res.status !== 401) {
+      const err = new Error(json.message || `Request failed (${res.status})`);
+      err.status = res.status;
+      err.details = json.details;
+      throw err;
+    }
+    return json;
+  },
+  miswagSyncOneSearch: (q = "", limit = 20) => {
+    const qs = new URLSearchParams({ q, limit: String(limit) });
+    return request(`/api/admin/platforms/miswag/sync-one/products?${qs}`);
+  },
+  miswagSyncOnePreview: (productId, params = {}) => {
+    const qs = new URLSearchParams(
+      Object.fromEntries(Object.entries(params).filter(([, v]) => v !== "" && v != null))
+    );
+    const suffix = qs.toString();
+    return request(
+      `/api/admin/platforms/miswag/sync-one/preview/${encodeURIComponent(productId)}${suffix ? `?${suffix}` : ""}`
+    );
+  },
+  miswagSyncOneSend: (body) =>
+    request("/api/admin/platforms/miswag/sync-one/send", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  miswagFindCategories: (q = "", limit = 20) => {
+    const qs = new URLSearchParams({ q, limit: String(limit) });
+    return request(`/api/admin/platforms/miswag/sync-one/categories?${qs}`);
+  },
+  miswagFindBrands: (q = "", limit = 20) => {
+    const qs = new URLSearchParams({ q, limit: String(limit) });
+    return request(`/api/admin/platforms/miswag/sync-one/brands?${qs}`);
+  },
+  miswagSyncAllStatus: () => request("/api/admin/platforms/miswag/sync-all"),
+  miswagSyncAllPreview: () =>
+    request("/api/admin/platforms/miswag/sync-all/preview", { method: "POST", body: "{}" }),
+  miswagSyncAllStart: (confirm = false) =>
+    request("/api/admin/platforms/miswag/sync-all/start", {
+      method: "POST",
+      body: JSON.stringify({ confirm: confirm === true }),
+    }),
+  miswagSyncAllPause: () =>
+    request("/api/admin/platforms/miswag/sync-all/pause", { method: "POST", body: "{}" }),
+  miswagSyncAllResume: () =>
+    request("/api/admin/platforms/miswag/sync-all/resume", { method: "POST", body: "{}" }),
+  miswagSyncAllStop: () =>
+    request("/api/admin/platforms/miswag/sync-all/stop", { method: "POST", body: "{}" }),
   adminPlatformProducts: (slug, params = {}) => {
     const qs = new URLSearchParams(
       Object.fromEntries(

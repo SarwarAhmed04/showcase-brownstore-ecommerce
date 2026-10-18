@@ -13,6 +13,17 @@ export const PLATFORM_SECTIONS = [
   ["api", "partnerApi"],
 ];
 
+export function platformSectionsFor(partnerSlug) {
+  if (partnerSlug === "miswag") {
+    return [
+      ["connection", "miswagApiConnection"],
+      ["syncAll", "miswagSyncAllTitle"],
+      ...PLATFORM_SECTIONS,
+    ];
+  }
+  return PLATFORM_SECTIONS;
+}
+
 function PlatformMark({ image, name }) {
   const [failed, setFailed] = useState(false);
   if (!image || failed) {
@@ -55,6 +66,7 @@ function SectionButton({ active, label, onClick, disabled, badge }) {
 
 export function PlatformNavBody({ nav, t, onNavigate }) {
   const partner = nav?.partner;
+  const sections = platformSectionsFor(partner?.slug);
   return (
     <div className="flex h-full flex-col">
       <div className="px-4 pb-4 pt-6">
@@ -84,7 +96,7 @@ export function PlatformNavBody({ nav, t, onNavigate }) {
         </div>
       </div>
       <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 pb-6">
-        {PLATFORM_SECTIONS.map(([id, labelKey]) => (
+        {sections.map(([id, labelKey]) => (
           <SectionButton
             key={id}
             active={nav?.tab === id}

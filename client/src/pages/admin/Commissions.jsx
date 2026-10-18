@@ -11,6 +11,8 @@ import AdminModal from "../../components/admin/AdminModal";
 import ProductEditor, { formatGrouped } from "../../components/admin/ProductEditor";
 import AvailabilityPanel from "../../components/admin/platform/AvailabilityPanel";
 import CategorySetupPanel from "../../components/admin/platform/CategorySetupPanel";
+import MiswagApiConnection from "../../components/admin/platform/MiswagApiConnection";
+import MiswagSyncAll from "../../components/admin/platform/MiswagSyncAll";
 import PlatformOverview from "../../components/admin/platform/PlatformOverview";
 import { reasonLabel, StatusBadge } from "../../components/admin/platform/platformUi";
 import { usePlatformNav } from "../../components/admin/platform/platformNav";
@@ -1374,6 +1376,10 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           onPartner={setPartner}
         />
       ) : null}
+
+      {tab === "connection" && partnerSlug === "miswag" ? <MiswagApiConnection t={t} /> : null}
+
+      {tab === "syncAll" && partnerSlug === "miswag" ? <MiswagSyncAll t={t} /> : null}
 
       {tab === "mapping" ? (
         <CategorySetupPanel

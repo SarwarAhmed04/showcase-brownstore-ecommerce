@@ -53,6 +53,7 @@ export default function PlatformOverview({ partnerSlug, partner, t, onOpen, onPa
     : [];
 
   const actions = [
+    ...(partnerSlug === "miswag" ? [["connection", t.miswagApiConnection]] : []),
     ["mapping", t.categoryMapping],
     ["availability", t.availabilityTab],
     ["commissions", t.existingCommissions],

@@ -74,10 +74,12 @@ app.use((err, _req, res, _next) => {
 });
 
 async function connectDatabase() {
+  const { setMongoMode } = await import("./utils/dbMode.js");
   const configured = process.env.MONGO_URL || process.env.MONGODB_URI || "";
   const uri = configured || "mongodb://127.0.0.1:27017/brownstore";
   try {
     await mongoose.connect(uri, { serverSelectionTimeoutMS: isProd ? 8000 : 2500 });
+    setMongoMode("persistent");
     console.log("MongoDB connected");
     return;
   } catch (err) {
@@ -91,7 +93,10 @@ async function connectDatabase() {
   const { MongoMemoryServer } = await import("mongodb-memory-server");
   const memory = await MongoMemoryServer.create();
   await mongoose.connect(memory.getUri("brownstore"));
-  console.log("MongoDB Memory Server connected (install local MongoDB to persist data)");
+  setMongoMode("memory");
+  console.warn(
+    "MongoDB Memory Server connected — credentials, sync jobs, and barcodes are temporary until local MongoDB is available"
+  );
 }
 
 function stripMeta(doc) {
