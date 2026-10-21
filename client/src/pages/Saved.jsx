@@ -37,7 +37,7 @@ export default function Saved() {
   return (
     <div className="container-x py-10 lg:py-14">
       <PageHead
-        eyebrow={<><Heart size={12} /> {t.savedEyebrow}</>}
+        eyebrow={t.savedEyebrow}
         title={t.savedTitle}
         sub={t.savedSub}
         crumbs={[{ label: t.savedItems }]}
@@ -45,7 +45,7 @@ export default function Saved() {
         {items.length > 0 && (
           <Button
             type="button"
-            variant="glass"
+            variant="line"
             onClick={() => items.forEach((p) => saved.toggle(p.id))}
           >
             <Trash2 /> {t.clearAll}
@@ -59,7 +59,7 @@ export default function Saved() {
         emptyTitle={t.savedEmpty}
         emptySub={t.savedEmptySub}
         emptyAction={
-          <Button asChild variant="brand">
+          <Button asChild variant="ink">
             <Link to="/shop">{t.startBrowsing}</Link>
           </Button>
         }

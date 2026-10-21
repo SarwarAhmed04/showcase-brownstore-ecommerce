@@ -1,72 +1,66 @@
 import { NavLink } from 'react-router-dom'
 import { Heart, Home, LayoutGrid, Search } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { useStore } from '../store'
 import { useLang } from '../context/LangContext'
 
+const itemClass = 'relative flex flex-col items-center gap-1 rounded-xl py-2 text-[10px] font-semibold transition-colors'
+
 export default function MobileNav() {
-  const { saved, setSearchOpen } = useStore()
+  const { saved, searchOpen, setSearchOpen } = useStore()
   const { t } = useLang()
 
   const tabs = [
     { to: '/', label: t.home, Icon: Home, end: true },
     { to: '/shop', label: t.shop, Icon: LayoutGrid },
-    { to: '/saved', label: t.savedItems, Icon: Heart, badge: true },
   ]
 
   return (
     <nav
-      className="glass-bar fixed inset-x-0 bottom-0 z-40 lg:hidden"
-      style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+      className="fixed inset-x-3 bottom-3 z-40 lg:hidden"
+      style={{ marginBottom: 'env(safe-area-inset-bottom)' }}
       aria-label={t.primaryNav}
     >
-      <div className="grid grid-cols-4">
-        {tabs.slice(0, 2).map((item) => (
-          <Tab key={item.to} {...item} count={saved.count} />
+      <div className="mx-auto grid max-w-md grid-cols-4 gap-1 rounded-2xl bg-bean-900 p-1.5 text-bean-50 shadow-[0_20px_40px_-14px_rgb(36_22_17/0.6)]">
+        {tabs.map(({ to, label, Icon, end }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={end}
+            className={({ isActive }) =>
+              cn(itemClass, isActive ? 'bg-bean-50/10 text-tan' : 'text-bean-50/65')
+            }
+          >
+            <Icon className="size-[18px]" />
+            {label}
+          </NavLink>
         ))}
 
         <button
           type="button"
           onClick={() => setSearchOpen(true)}
           aria-label={t.searchShortcut}
-          className="flex flex-col items-center justify-center py-2"
+          className={cn(itemClass, searchOpen ? 'bg-bean-50/10 text-tan' : 'text-bean-50/65')}
         >
-          <span
-            className="grid h-11 w-11 -translate-y-3 place-items-center rounded-2xl text-primary-foreground shadow-xl"
-            style={{ background: 'linear-gradient(135deg, rgb(var(--accent)), rgb(var(--accent-2)))' }}
-          >
-            <Search size={20} strokeWidth={2.4} />
-          </span>
-          <span className="-mt-2 text-2xs font-semibold text-muted-foreground">{t.searchShortcut}</span>
+          <Search className="size-[18px]" />
+          {t.searchShortcut}
         </button>
 
-        {tabs.slice(2).map((item) => (
-          <Tab key={item.to} {...item} count={saved.count} />
-        ))}
+        <NavLink
+          to="/saved"
+          className={({ isActive }) => cn(itemClass, isActive ? 'bg-bean-50/10 text-tan' : 'text-bean-50/65')}
+        >
+          <span className="relative">
+            <Heart className="size-[18px]" />
+            {saved.count > 0 && (
+              <span className="absolute -end-2.5 -top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[9px] font-bold leading-none text-primary-foreground">
+                {saved.count}
+              </span>
+            )}
+          </span>
+          {t.savedItems}
+        </NavLink>
       </div>
     </nav>
-  )
-}
-
-function Tab({ to, label, Icon, end, badge, count }) {
-  return (
-    <NavLink
-      to={to}
-      end={end}
-      className={({ isActive }) =>
-        `flex flex-col items-center gap-1 py-3 text-2xs font-semibold transition-colors ${
-          isActive ? 'text-primary' : 'text-muted-foreground'
-        }`
-      }
-    >
-      <span className="relative">
-        <Icon size={19} />
-        {badge && count > 0 && (
-          <span className="absolute -right-2 -top-1.5 grid h-4 min-w-[16px] place-items-center rounded-full bg-primary px-1 text-2xs font-black text-primary-foreground">
-            {count}
-          </span>
-        )}
-      </span>
-      {label}
-    </NavLink>
   )
 }

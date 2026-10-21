@@ -33,6 +33,7 @@ export function AdminThemeProvider({ children }) {
       root.classList.add("admin-theme-switching");
       root.getBoundingClientRect();
     }
+    root.classList.remove("sf");
     root.classList.toggle("admin-dark", theme === "dark");
     root.dataset.adminTheme = theme;
     try {

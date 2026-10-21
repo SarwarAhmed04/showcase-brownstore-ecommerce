@@ -1,36 +1,30 @@
 import { Link } from 'react-router-dom'
-import { ArrowRight } from 'lucide-react'
 import { imgUrl } from '../lib/img'
-import { useLang } from '../context/LangContext'
+import Logo from './Logo'
 
-export default function CategoryTile({ category: c, large = false }) {
-  const { t } = useLang()
-
+/** Arch-topped category tile — the storefront's signature shape. */
+export default function CategoryTile({ category: c }) {
   return (
-    <Link
-      to={`/category/${c.slug}`}
-      className={`group relative flex h-full overflow-hidden rounded-card bg-muted shadow-sm ring-1 ring-foreground/10 transition duration-500 hover:-translate-y-1 ${
-        large ? 'min-h-[300px] sm:min-h-[420px]' : 'aspect-[3/1] min-h-[96px]'
-      }`}
-    >
-      {c.cover ? (
-        <img
-          src={imgUrl(c.cover, { w: large ? 1200 : 700, h: large ? 900 : 520 })}
-          alt=""
-          loading="lazy"
-          className="absolute inset-0 h-full w-full object-cover transition duration-700 group-hover:scale-105"
-        />
-      ) : null}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/10" />
-      <div className={`relative mt-auto ${large ? 'p-6 sm:p-8' : 'p-3 sm:p-3.5'}`}>
-        <h3 className={`font-display font-bold leading-tight text-white ${large ? 'text-3xl' : 'text-sm'}`}>
-          {c.name}
-        </h3>
-        <div className="mt-1 flex items-center gap-1.5 text-[11px] font-semibold text-white/80 transition-colors group-hover:text-white">
-          {t.shop}
-          <ArrowRight size={14} className="transition-transform group-hover:translate-x-1" />
-        </div>
-      </div>
+    <Link to={`/category/${c.slug}`} className="group block text-center">
+      <span className="relative block aspect-[3/4] overflow-hidden rounded-t-full bg-bean-100">
+        {c.cover ? (
+          <img
+            src={imgUrl(c.cover, { w: 600, h: 800 })}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-[1.06]"
+          />
+        ) : (
+          <span className="absolute inset-0 grid place-items-center">
+            <Logo className="h-12 w-12 opacity-40" />
+          </span>
+        )}
+        <span className="absolute inset-0 bg-bean-900/0 transition-colors duration-500 group-hover:bg-bean-900/10" />
+      </span>
+      <span className="mt-4 block font-display text-base font-bold leading-snug text-bean-900 transition-colors group-hover:text-primary sm:text-lg">
+        {c.name}
+      </span>
     </Link>
   )
 }

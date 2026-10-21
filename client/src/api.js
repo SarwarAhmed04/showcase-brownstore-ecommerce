@@ -265,6 +265,23 @@ export const api = {
     const qs = new URLSearchParams({ q, limit: String(limit) });
     return request(`/api/admin/platforms/miswag/sync-one/categories?${qs}`);
   },
+  miswagMappingCategories: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.fromEntries(Object.entries(params).filter(([, v]) => v !== "" && v != null))
+    );
+    const suffix = qs.toString();
+    return request(
+      `/api/admin/platforms/miswag/mapping-categories${suffix ? `?${suffix}` : ""}`
+    );
+  },
+  saveMiswagMappingCategory: (brownCollectionId, body) =>
+    request(
+      `/api/admin/platforms/miswag/mapping-categories/${encodeURIComponent(brownCollectionId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }
+    ),
   miswagFindBrands: (q = "", limit = 20) => {
     const qs = new URLSearchParams({ q, limit: String(limit) });
     return request(`/api/admin/platforms/miswag/sync-one/brands?${qs}`);

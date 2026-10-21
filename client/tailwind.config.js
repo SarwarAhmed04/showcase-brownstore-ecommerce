@@ -117,9 +117,11 @@ export default {
         '6xl': ['5.5rem', { lineHeight: '5rem' }],         // 88/80 · display only
       },
 
+      /* Families live in CSS variables so the storefront (html.sf) can swap
+         typefaces without touching the admin, which keeps the :root stacks. */
       fontFamily: {
-        display: ['Fraunces', '"Noto Sans Arabic"', 'Georgia', 'serif'],
-        sans: ['"Plus Jakarta Sans"', '"Noto Sans Arabic"', 'system-ui', 'sans-serif'],
+        display: ['var(--font-display)'],
+        sans: ['var(--font-sans)'],
       },
 
       /* ===================================================== rhythm ==== */
@@ -163,6 +165,11 @@ export default {
           to: { opacity: 1, transform: 'none' },
         },
         fadeIn: { from: { opacity: 0 }, to: { opacity: 1 } },
+        progress: { from: { transform: 'scaleX(0)' }, to: { transform: 'scaleX(1)' } },
+        dropIn: {
+          from: { opacity: 0, transform: 'translateY(-8px)' },
+          to: { opacity: 1, transform: 'none' },
+        },
         // used by shadcn overlays via tailwindcss-animate
         'accordion-down': { from: { height: '0' }, to: { height: 'var(--radix-accordion-content-height)' } },
         'accordion-up': { from: { height: 'var(--radix-accordion-content-height)' }, to: { height: '0' } },
@@ -174,6 +181,8 @@ export default {
         shimmer: 'shimmer 1.8s infinite',
         popIn: 'popIn .35s cubic-bezier(.2,.9,.3,1.2) both',
         fadeIn: 'fadeIn .3s ease both',
+        progress: 'progress 7s linear both',
+        dropIn: 'dropIn .28s cubic-bezier(.2,.8,.3,1) both',
         'accordion-down': 'accordion-down .2s ease-out',
         'accordion-up': 'accordion-up .2s ease-out',
       },

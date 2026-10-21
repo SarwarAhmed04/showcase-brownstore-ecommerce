@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowRight, Search, TrendingUp } from 'lucide-react'
+import { ArrowLeft, Search, TrendingUp } from 'lucide-react'
 import {
   CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
   CommandSeparator,
@@ -64,7 +64,7 @@ export default function SearchOverlay() {
     <CommandDialog
       open={searchOpen}
       onOpenChange={(v) => (v ? setSearchOpen(true) : close())}
-      className="glass rounded-panel border-0"
+      className="rounded-2xl border-0 bg-background shadow-2xl"
       shouldFilter={false}
       title={t.searchShortcut}
       description={t.searchPalette}
@@ -88,7 +88,7 @@ export default function SearchOverlay() {
                 onSelect={() => go(`/product/${p.slug}`)}
                 className="gap-3"
               >
-                <span className="shot cutout size-9 shrink-0 overflow-hidden rounded-md">
+                <span className="sf-tile size-10 shrink-0 overflow-hidden rounded-md">
                   <img
                     src={imgUrl(p.img, { w: 96, h: 96 })}
                     alt=""
@@ -96,7 +96,7 @@ export default function SearchOverlay() {
                   />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="clamp-1 text-xs font-semibold">{p.name}</div>
+                  <div className="clamp-1 text-xs font-semibold text-bean-900">{p.name}</div>
                   <div className="text-2xs text-muted-foreground">{p.brand}</div>
                 </div>
               </CommandItem>
@@ -114,11 +114,11 @@ export default function SearchOverlay() {
               onSelect={() => go(`/category/${c.slug}`)}
             >
               <span
-                className="mr-2 size-2 shrink-0 rounded-pill"
+                className="me-2 size-2 shrink-0 rounded-full"
                 style={{ background: `rgb(${c.tone})` }}
               />
               <span className="flex-1 text-xs">{c.name}</span>
-              <ArrowRight className="size-3 opacity-50" />
+              <ArrowLeft className="size-3 opacity-50 ltr:rotate-180" />
             </CommandItem>
           ))}
         </CommandGroup>
@@ -129,7 +129,7 @@ export default function SearchOverlay() {
             <CommandGroup heading={t.trendingSearches}>
               {trending.map((term) => (
                 <CommandItem key={term} value={term} onSelect={() => setQuery(term)}>
-                  <TrendingUp className="mr-2 size-3.5 opacity-60" />
+                  <TrendingUp className="me-2 size-3.5 opacity-60" />
                   <span className="text-xs">{term}</span>
                 </CommandItem>
               ))}
@@ -146,7 +146,7 @@ export default function SearchOverlay() {
                 onSelect={() => go(`/search?q=${encodeURIComponent(query.trim())}`)}
                 className="justify-center text-primary"
               >
-                <Search className="mr-2 size-3.5" />
+                <Search className="me-2 size-3.5" />
                 <span className="text-xs font-semibold">
                   {t.seeAllResults} “{query}”
                 </span>

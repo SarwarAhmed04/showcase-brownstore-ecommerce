@@ -211,7 +211,7 @@ describe("platform management", { concurrency: 1 }, () => {
     assert.equal(summary.priceRules, 1);
     assert.equal(summary.totalCollections, 3);
     assert.equal(summary.configuredCollections, 0);
-    assert.equal(summary.missingSetupCollections, 0);
+    assert.equal(summary.missingSetupCollections, 3);
     assert.equal(summary.newTaxonomyAlerts, 0);
 
     const partner = await Partner.findOne({ slug: "miswag" });

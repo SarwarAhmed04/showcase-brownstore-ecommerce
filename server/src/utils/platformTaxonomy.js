@@ -20,6 +20,7 @@ import {
   requiredTaxonomyKeys,
   sanitizeTaxonomyValues,
   taxonomyFieldsFor,
+  taxonomyGatesEligibility,
 } from "./platformTaxonomyFields.js";
 import { listOpenTaxonomyNotices, resolveTaxonomyNotices } from "./taxonomyNotices.js";
 
@@ -68,7 +69,7 @@ export async function loadEligibilityContext(partnerSlug) {
     partnerSlug: slug,
     partnerActive: partner ? partner.isActive !== false : false,
     inactive,
-    taxonomyRequired: requiredTaxonomyKeys(slug).length > 0,
+    taxonomyRequired: taxonomyGatesEligibility(slug) && requiredTaxonomyKeys(slug).length > 0,
     configuredCollectionIds,
     taxonomyByCollection,
   };
@@ -149,6 +150,9 @@ export async function countEligibility(context) {
 export async function platformDashboard(partner) {
   const context = await loadEligibilityContext(partner.slug);
   const schemaReady = requiredTaxonomyKeys(partner.slug).length > 0;
+  const noticeFilter = { partner: partner.slug, status: "open" };
+  // Miswag Mapping Categories alerts are Collection-scoped only.
+  if (partner.slug === "miswag") noticeFilter.scope = "collection";
   const [eligibility, priceRules, collectionIds, newTaxonomyAlerts] = await Promise.all([
     countEligibility(context),
     Commission.countDocuments({ partner: partner.slug }),
@@ -156,7 +160,7 @@ export async function platformDashboard(partner) {
       { $match: { "collectionName._id": { $exists: true, $nin: [null, ""] } } },
       { $group: { _id: { $toString: "$collectionName._id" } } },
     ]),
-    PlatformTaxonomyNotice.countDocuments({ partner: partner.slug, status: "open" }),
+    PlatformTaxonomyNotice.countDocuments(noticeFilter),
   ]);
   const known = new Set(collectionIds.map((row) => String(row._id || "")).filter(Boolean));
   let configuredCollections = 0;

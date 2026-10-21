@@ -1,104 +1,53 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import ProductCard from './ProductCard'
+import { ArrowLink, RailArrows, SectionHead } from './ui'
+import { useRail } from '../lib/hooks'
 import { useLang } from '../context/LangContext'
 
-export default function ProductRail({ title, eyebrow, sub, items, to, cardWidth = 210 }) {
-  const scroller = useRef(null)
-  const [edges, setEdges] = useState({ start: true, end: false })
+const CARD = 'w-[44vw] max-w-[230px] sm:w-[230px]'
+
+export default function ProductRail({ title, eyebrow, sub, items, to }) {
   const { t } = useLang()
-
-  const measure = useCallback(() => {
-    const el = scroller.current
-    if (!el) return
-    const { scrollLeft, scrollWidth, clientWidth } = el
-    setEdges({
-      start: scrollLeft <= 4,
-      end: scrollLeft + clientWidth >= scrollWidth - 4,
-    })
-  }, [])
-
-  useEffect(() => {
-    measure()
-    const el = scroller.current
-    if (!el) return
-    el.addEventListener('scroll', measure, { passive: true })
-    window.addEventListener('resize', measure)
-    return () => {
-      el.removeEventListener('scroll', measure)
-      window.removeEventListener('resize', measure)
-    }
-  }, [measure, items])
-
-  const nudge = (dir) => {
-    scroller.current?.scrollBy({ left: dir * (cardWidth + 20) * 2, behavior: 'smooth' })
-  }
+  const rail = useRail(items?.length ?? 0)
 
   if (!items?.length) return null
 
   return (
-    <section className="py-10">
+    <section className="py-10 sm:py-14">
       <div className="container-x">
-        <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-          <div>
-            {eyebrow && <div className="eyebrow mb-3">{eyebrow}</div>}
-            <h2 className="headline text-2xl sm:text-3xl">{title}</h2>
-            {sub && <p className="mt-2 max-w-xl text-sm text-foreground/75">{sub}</p>}
-          </div>
-
-          <div className="flex items-center gap-2">
-            {to && (
-              <Link
-                to={to}
-                className="mr-1 hidden items-center gap-1.5 text-sm font-semibold text-primary transition hover:gap-2.5 sm:flex"
-              >
-                {t.viewAll} <ArrowRight size={15} />
-              </Link>
-            )}
-            <button
-              type="button"
-              onClick={() => nudge(-1)}
-              disabled={edges.start}
-              aria-label={`${t.scrollLeft} ${title}`}
-              className="glass-soft grid h-9 w-9 place-items-center rounded-full transition-all hover:text-primary disabled:opacity-30"
-            >
-              <ChevronLeft size={17} />
-            </button>
-            <button
-              type="button"
-              onClick={() => nudge(1)}
-              disabled={edges.end}
-              aria-label={`${t.scrollRight} ${title}`}
-              className="glass-soft grid h-9 w-9 place-items-center rounded-full transition-all hover:text-primary disabled:opacity-30"
-            >
-              <ChevronRight size={17} />
-            </button>
-          </div>
-        </div>
+        <SectionHead
+          eyebrow={eyebrow}
+          title={title}
+          sub={sub}
+          action={
+            <div className="flex items-center gap-5">
+              {to && (
+                <ArrowLink to={to} className="hidden sm:inline-flex">
+                  {t.viewAll}
+                </ArrowLink>
+              )}
+              <RailArrows rail={rail} label={typeof title === 'string' ? title : ''} />
+            </div>
+          }
+        />
       </div>
 
-      {/* full-bleed rail so cards run to the screen edge */}
-      <div className="relative">
-        <div ref={scroller} className="rail container-x">
-          {items.map((p) => (
-            <ProductCard key={p.id} product={p} width={cardWidth} compact />
-          ))}
-          {to && (
-            <Link
-              to={to}
-              className="glass grid place-items-center rounded-card px-8 text-center transition-all hover:-translate-y-1.5"
-              style={{ width: cardWidth }}
-            >
-              <span className="flex flex-col items-center gap-3">
-                <span className="grid h-12 w-12 place-items-center rounded-full bg-[rgb(var(--accent)/.14)] text-primary">
-                  <ArrowRight size={20} />
-                </span>
-                <span className="text-sm font-semibold">{t.seeEverything}</span>
-              </span>
-            </Link>
-          )}
-        </div>
+      <div ref={rail.ref} className="rail container-x scroll-px-4 sm:scroll-px-6 lg:scroll-px-10">
+        {items.map((p) => (
+          <ProductCard key={p.id} product={p} className={CARD} compact />
+        ))}
+        {to && (
+          <Link
+            to={to}
+            className={`group flex aspect-[4/5] flex-col items-center justify-center gap-4 rounded-lg border border-dashed border-bean-900/25 px-6 text-center transition-colors duration-300 hover:border-bean-900 hover:bg-bean-900 hover:text-bean-50 ${CARD}`}
+          >
+            <span className="grid size-14 place-items-center rounded-full bg-bean-900 text-bean-50 transition-colors duration-300 group-hover:bg-tan group-hover:text-bean-900">
+              <ArrowLeft className="size-5 ltr:rotate-180" />
+            </span>
+            <span className="text-sm font-semibold">{t.seeEverything}</span>
+          </Link>
+        )}
       </div>
     </section>
   )

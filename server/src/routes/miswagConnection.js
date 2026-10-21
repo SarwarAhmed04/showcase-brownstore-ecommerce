@@ -14,6 +14,10 @@ import {
   sendMiswagTestProduct,
 } from "../services/miswagTestProduct.js";
 import {
+  listMiswagCategoryMappings,
+  saveMiswagCategoryMapping,
+} from "../services/miswagCategoryMapping.js";
+import {
   getLatestMiswagSyncJob,
   pauseMiswagSyncAll,
   resumeMiswagSyncAll,
@@ -207,6 +211,37 @@ miswagConnectionRouter.post("/platforms/miswag/sync-one/send", async (req, res) 
     res.status(status).json(result);
   } catch (err) {
     fail(res, err, "Failed to send Miswag test product");
+  }
+});
+
+miswagConnectionRouter.get("/platforms/miswag/mapping-categories", async (req, res) => {
+  try {
+    res.json(
+      await listMiswagCategoryMappings({
+        q: req.query.q,
+        status: req.query.status,
+        page: req.query.page,
+        limit: req.query.limit,
+      })
+    );
+  } catch (err) {
+    fail(res, err, "Failed to load Miswag category mappings");
+  }
+});
+
+miswagConnectionRouter.put("/platforms/miswag/mapping-categories/:brownCollectionId", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(
+      await saveMiswagCategoryMapping(req.params.brownCollectionId, {
+        categoryId: body.categoryId || body.miswagCategoryId || body.id,
+        categoryName: body.categoryName || body.name,
+        categoryPath: body.categoryPath || body.path,
+        categoryLevel: body.categoryLevel || body.level,
+      })
+    );
+  } catch (err) {
+    fail(res, err, "Failed to save Miswag category mapping");
   }
 });
 

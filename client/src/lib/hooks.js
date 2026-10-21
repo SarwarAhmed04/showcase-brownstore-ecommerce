@@ -170,6 +170,57 @@ export function useEscape(handler, active = true) {
   }, [handler, active])
 }
 
+/* ------------------------------------------- horizontal rail, RTL-aware
+   In RTL, scrollLeft runs from 0 towards negative values (older engines
+   reported max..0), so "distance from start" is normalised before the
+   prev/next buttons are enabled. `contentKey` re-measures when items change. */
+export function useRail(contentKey) {
+  const ref = useRef(null)
+  const [state, setState] = useState({ overflow: false, canPrev: false, canNext: false })
+
+  const update = useCallback(() => {
+    const el = ref.current
+    if (!el) return
+    const max = el.scrollWidth - el.clientWidth
+    const rtl = getComputedStyle(el).direction === 'rtl'
+    const sl = el.scrollLeft
+    const fromStart = rtl ? (sl <= 0 ? -sl : max - sl) : sl
+    const next = {
+      overflow: max > 8,
+      canPrev: max > 8 && fromStart > 8,
+      canNext: max > 8 && fromStart < max - 8,
+    }
+    setState((cur) =>
+      cur.overflow === next.overflow && cur.canPrev === next.canPrev && cur.canNext === next.canNext ? cur : next,
+    )
+  }, [])
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return undefined
+    update()
+    el.addEventListener('scroll', update, { passive: true })
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    window.addEventListener('resize', update)
+    return () => {
+      el.removeEventListener('scroll', update)
+      ro.disconnect()
+      window.removeEventListener('resize', update)
+    }
+  }, [update, contentKey])
+
+  const move = useCallback((dir) => {
+    const el = ref.current
+    if (!el) return
+    const rtl = getComputedStyle(el).direction === 'rtl'
+    const amount = Math.max(el.clientWidth * 0.8, 240)
+    el.scrollBy({ left: (rtl ? -dir : dir) * amount, behavior: 'smooth' })
+  }, [])
+
+  return { ref, ...state, move }
+}
+
 /* --------------------------------------------------------- media query hook */
 // useSyncExternalStore keeps this in step with the browser without an effect
 // that re-renders on mount, and gives the right answer on the first paint.

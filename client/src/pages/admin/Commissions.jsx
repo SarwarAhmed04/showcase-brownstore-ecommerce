@@ -12,6 +12,7 @@ import ProductEditor, { formatGrouped } from "../../components/admin/ProductEdit
 import AvailabilityPanel from "../../components/admin/platform/AvailabilityPanel";
 import CategorySetupPanel from "../../components/admin/platform/CategorySetupPanel";
 import MiswagApiConnection from "../../components/admin/platform/MiswagApiConnection";
+import MiswagMappingCategories from "../../components/admin/platform/MiswagMappingCategories";
 import MiswagSyncAll from "../../components/admin/platform/MiswagSyncAll";
 import PlatformOverview from "../../components/admin/platform/PlatformOverview";
 import { reasonLabel, StatusBadge } from "../../components/admin/platform/platformUi";
@@ -1381,7 +1382,11 @@ function PartnerCommission({ partnerSlug, t, lang }) {
 
       {tab === "syncAll" && partnerSlug === "miswag" ? <MiswagSyncAll t={t} /> : null}
 
-      {tab === "mapping" ? (
+      {tab === "mappingCategories" && partnerSlug === "miswag" ? (
+        <MiswagMappingCategories t={t} lang={lang} onNotices={setNoticeCount} />
+      ) : null}
+
+      {tab === "mapping" && partnerSlug !== "miswag" ? (
         <CategorySetupPanel
           partnerSlug={partnerSlug}
           t={t}

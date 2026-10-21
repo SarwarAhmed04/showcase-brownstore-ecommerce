@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect } from "react";
 import { Outlet, useLocation } from "react-router-dom";
-import Backdrop from "./Backdrop";
 import Footer from "./Footer";
 import MobileNav from "./MobileNav";
 import Navbar from "./Navbar";
@@ -16,6 +15,13 @@ export default function Layout() {
   const { status, error, refresh } = useCatalog();
   const { t } = useLang();
 
+  // Storefront tokens live on <html> so portalled dialogs pick them up too.
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.classList.add("sf");
+    return () => root.classList.remove("sf");
+  }, []);
+
   useLayoutEffect(() => {
     if (!hash) window.scrollTo({ top: 0, left: 0, behavior: "instant" });
   }, [pathname, hash]);
@@ -28,10 +34,9 @@ export default function Layout() {
 
   return (
     <>
-      <Backdrop />
       <a
         href="#main"
-        className="sr-only focus:not-sr-only focus:fixed focus:start-4 focus:top-4 focus:z-[100] focus:rounded-pill focus:bg-primary focus:px-5 focus:py-2.5 focus:text-sm focus:font-bold focus:text-primary-foreground"
+        className="sr-only focus:not-sr-only focus:fixed focus:start-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-bean-900 focus:px-5 focus:py-2.5 focus:text-sm focus:font-bold focus:text-bean-50"
       >
         {t.skipToContent || "Skip to content"}
       </a>
@@ -47,7 +52,7 @@ export default function Layout() {
       <MobileNav />
       <QuickView />
       <SearchOverlay />
-      <Toaster position="bottom-right" closeButton richColors={false} />
+      <Toaster position="bottom-right" mobileOffset={{ bottom: "96px" }} closeButton richColors={false} />
     </>
   );
 }

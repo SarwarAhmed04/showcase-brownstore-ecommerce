@@ -1,119 +1,143 @@
 import { Link } from 'react-router-dom'
-import { Eye, Heart } from 'lucide-react'
-import { AspectRatio } from '@/components/ui/aspect-ratio'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
+import { ArrowLeft, Eye, Heart } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { imgUrl } from '../lib/img'
 import { useStore } from '../store'
 import { useLang } from '../context/LangContext'
-import { Stars } from './ui'
+import { Stars, StockDot } from './ui'
 
-/**
- * Commerce card, Origin UI layout adapted to Brown Store tokens.
- *
- * The pattern: fixed-ratio image, badges pinned top-left, hover actions
- * top-right, and a content block whose price row is pushed to the bottom by
- * `mt-auto` so cards in a row line up regardless of title length.
- */
-export default function ProductCard({ product: p, width, compact = false, className }) {
-  const { saved, openQuickView } = useStore()
+function useBadge(p) {
+  const { t } = useLang()
+  return p.badge === 'New' ? t.newBadge : p.badge
+}
+
+function SaveButton({ product: p, className }) {
+  const { saved } = useStore()
   const { t } = useLang()
   const isSaved = saved.has(p.id)
-
   return (
-    <Card
+    <button
+      type="button"
+      onClick={() => saved.toggle(p.id)}
+      aria-pressed={isSaved}
+      aria-label={isSaved ? t.removeFromSaved : t.saveThisItem}
       className={cn(
-        'group glass relative flex flex-col overflow-hidden rounded-card border-0 p-0',
-        'transition-transform duration-300 hover:-translate-y-1',
+        'grid size-9 place-items-center rounded-full transition-colors duration-300',
+        isSaved ? 'bg-bean-900 text-tan' : 'bg-background/85 text-bean-900 hover:bg-bean-900 hover:text-bean-50',
         className,
       )}
-      style={{ width }}
     >
-      {/* ---------- imagery ---------- */}
-      <Link to={`/product/${p.slug}`} aria-label={p.name} className="shot cutout block">
-        <AspectRatio ratio={1}>
-          <img
-            src={imgUrl(p.img, { w: 640, h: 640 })}
-            alt={p.name}
-            loading="lazy"
-            decoding="async"
-            className="h-full w-full object-contain p-3 sm:p-4"
-          />
-        </AspectRatio>
-      </Link>
-
-      <div className="pointer-events-none absolute left-3 top-3 flex flex-col items-start gap-2">
-        {p.badge && <Badge variant="overlay">{p.badge}</Badge>}
-        {p.stock === 'out' && <Badge variant="overlay">{t.outOfStock}</Badge>}
-      </div>
-
-      {/* hover actions — reachable by keyboard via group-focus-within */}
-      <div className="absolute right-3 top-3 flex flex-col gap-2 opacity-0 transition-opacity duration-300 group-hover:opacity-100 group-focus-within:opacity-100">
-        <Button
-          type="button"
-          variant="overlay"
-          size="icon-sm"
-          onClick={() => saved.toggle(p.id)}
-          aria-pressed={isSaved}
-          aria-label={isSaved ? t.removeFromSaved : t.saveThisItem}
-        >
-          <Heart className={cn(isSaved && 'text-clay-300')} fill={isSaved ? 'currentColor' : 'none'} />
-        </Button>
-        <Button
-          type="button"
-          variant="overlay"
-          size="icon-sm"
-          onClick={() => openQuickView(p)}
-          aria-label={`${t.details} ${p.name}`}
-        >
-          <Eye />
-        </Button>
-      </div>
-
-      {/* ---------- copy ---------- */}
-      <div className={cn('flex flex-1 flex-col', compact ? 'gap-1 p-3' : 'gap-1.5 p-3.5 sm:p-4')}>
-        <span className="text-2xs font-bold uppercase tracking-[.16em] text-muted-foreground">
-          {p.brand}
-        </span>
-
-        <h3
-          className={cn('clamp-1 font-semibold leading-snug', compact ? 'text-xs' : 'text-sm')}
-          title={p.name}
-        >
-          <Link to={`/product/${p.slug}`} className="transition-colors hover:text-primary">
-            {p.name}
-          </Link>
-        </h3>
-
-      {p.rating > 0 ? <Stars value={p.rating} reviews={p.reviews} showCount={!compact} /> : <div />}
-
-        {/* Seven-figure prices will not sit beside a button on a two-column
-            phone grid, so stack until there is room. */}
-        <div className="mt-auto flex flex-col gap-2 pt-2 sm:flex-row sm:items-end sm:justify-end">
-          <Button asChild variant="outline" size="xs" className="shrink-0 self-start rounded-pill sm:self-auto">
-            <Link to={`/product/${p.slug}`}>{t.details}</Link>
-          </Button>
-        </div>
-      </div>
-    </Card>
+      <Heart className="size-4" fill={isSaved ? 'currentColor' : 'none'} />
+    </button>
   )
 }
 
-/** Placeholder used while a grid is loading or filtering. */
-export function ProductCardSkeleton() {
+/**
+ * Portrait card: the packshot sits on a sand tile (white backgrounds are
+ * multiplied away), save is always reachable, quick view rises on hover.
+ */
+export default function ProductCard({ product: p, width, compact = false, className }) {
+  const { openQuickView } = useStore()
+  const { t } = useLang()
+  const badge = useBadge(p)
+  const href = `/product/${p.slug}`
+
   return (
-    <Card className="glass overflow-hidden rounded-card border-0 p-0">
-      <AspectRatio ratio={1}>
-        <Skeleton className="h-full w-full rounded-none" />
-      </AspectRatio>
-      <div className="space-y-2 p-3.5">
-        <Skeleton className="h-2.5 w-16" />
-        <Skeleton className="h-3.5 w-full" />
-        <Skeleton className="h-5 w-28" />
+    <article className={cn('group relative flex flex-col', className)} style={{ width }}>
+      <div className="sf-tile relative aspect-[4/5] overflow-hidden rounded-lg">
+        <Link to={href} tabIndex={-1} aria-hidden="true" className="block h-full w-full">
+          <img
+            src={imgUrl(p.img, { w: 640, h: 800 })}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full object-contain p-5 transition-transform duration-700 ease-out group-hover:scale-[1.05] sm:p-6"
+          />
+        </Link>
+
+        <div className="pointer-events-none absolute start-2.5 top-2.5 flex flex-col items-start gap-1.5">
+          {badge && (
+            <span className="rounded-sm bg-bean-900 px-2 py-1 text-[10px] font-bold leading-none text-bean-50 ltr:uppercase ltr:tracking-wider">
+              {badge}
+            </span>
+          )}
+        </div>
+
+        <SaveButton product={p} className="absolute end-2.5 top-2.5" />
+
+        <button
+          type="button"
+          onClick={() => openQuickView(p)}
+          className="absolute inset-x-2.5 bottom-2.5 hidden h-10 translate-y-3 items-center justify-center gap-2 rounded-md bg-bean-900 text-xs font-semibold text-bean-50 opacity-0 transition-all duration-300 hover:bg-primary focus-visible:translate-y-0 focus-visible:opacity-100 group-hover:translate-y-0 group-hover:opacity-100 lg:flex"
+        >
+          <Eye className="size-4" /> {t.quickView}
+        </button>
       </div>
-    </Card>
+
+      <div className={cn('flex flex-1 flex-col', compact ? 'mt-2.5 gap-1' : 'mt-3 gap-1.5')}>
+        <div className="flex min-h-4 items-center justify-between gap-2">
+          <span className="truncate text-2xs font-semibold text-muted-foreground ltr:uppercase ltr:tracking-[.12em]">
+            {p.brand}
+          </span>
+          <StockDot stock={p.stock} className="shrink-0" />
+        </div>
+        <h3 className={cn('clamp-2 font-semibold leading-snug text-bean-900', compact ? 'text-xs' : 'text-sm')}>
+          <Link to={href} className="transition-colors hover:text-primary">
+            {p.name}
+          </Link>
+        </h3>
+        {p.rating > 0 && <Stars value={p.rating} reviews={p.reviews} showCount={!compact} />}
+      </div>
+    </article>
+  )
+}
+
+/** Oversized lead card for the featured bento on the home page. */
+export function FeatureCard({ product: p, className }) {
+  const { t } = useLang()
+  const badge = useBadge(p)
+  const href = `/product/${p.slug}`
+
+  return (
+    <article className={cn('sf-tile group relative flex h-full flex-col overflow-hidden rounded-lg', className)}>
+      <Link to={href} tabIndex={-1} aria-hidden="true" className="relative block min-h-[300px] flex-1 sm:min-h-[380px]">
+        <img
+          src={imgUrl(p.img, { w: 1000, h: 1000 })}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          className="absolute inset-0 h-full w-full object-contain p-10 transition-transform duration-700 ease-out group-hover:scale-[1.04] sm:p-14"
+        />
+      </Link>
+
+      <div className="pointer-events-none absolute start-4 top-4 flex items-center gap-2 sm:start-6 sm:top-6">
+        <span className="sf-eyebrow">{t.handPickedEyebrow}</span>
+        {badge && (
+          <span className="rounded-sm bg-bean-900 px-2 py-1 text-[10px] font-bold leading-none text-bean-50">{badge}</span>
+        )}
+      </div>
+      <SaveButton product={p} className="absolute end-4 top-4 sm:end-6 sm:top-6" />
+
+      <div className="relative flex items-end justify-between gap-4 p-5 sm:p-7">
+        <div className="min-w-0">
+          {p.brand && (
+            <span className="text-2xs font-semibold text-muted-foreground ltr:uppercase ltr:tracking-[.12em]">{p.brand}</span>
+          )}
+          <h3 className="sf-display clamp-2 mt-1.5 text-xl text-bean-900 sm:text-2xl">
+            <Link to={href} className="transition-colors hover:text-primary">
+              {p.name}
+            </Link>
+          </h3>
+          <StockDot stock={p.stock} className="mt-2.5" />
+        </div>
+        <Link
+          to={href}
+          aria-label={`${t.details} — ${p.name}`}
+          className="grid size-12 shrink-0 place-items-center rounded-full bg-bean-900 text-bean-50 transition-colors duration-300 group-hover:bg-primary"
+        >
+          <ArrowLeft className="size-5 ltr:rotate-180" />
+        </Link>
+      </div>
+    </article>
   )
 }

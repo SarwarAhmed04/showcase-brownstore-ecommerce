@@ -9,16 +9,15 @@ import {
   MiswagError,
   assertMiswagSyncAllowed,
   createOrUpdateItem,
-  loadMiswagLeafCategories,
   logMiswagSafe,
   sanitizeMiswagText,
   sleep,
 } from "./miswag.js";
 import { createBrandResolverCache, resolveMiswagBrandForProduct } from "./miswagBrandResolve.js";
 import {
-  buildCategoryIndexes,
-  resolveMiswagCategoryForProduct,
-} from "./miswagCategoryResolve.js";
+  loadMiswagCategoryMappingMap,
+  resolveMappedMiswagCategory,
+} from "./miswagCategoryMapping.js";
 import { ensureProductVariationBarcodes } from "./miswagTestBarcodes.js";
 import {
   MISWAG_ITEM_CREATE_PATH,
@@ -47,12 +46,24 @@ function reasonFromErrors(errors = []) {
 
 function classifyBlocked(result) {
   if (result.status === "INACTIVE") return "inactive";
-  if (result.code === "category_unresolved" || result.code === "category_ambiguous" || result.code === "category_index_empty") {
+  if (
+    result.code === "category_mapping_missing" ||
+    result.code === "category_unresolved" ||
+    result.code === "category_ambiguous" ||
+    result.code === "category_index_empty"
+  ) {
     return "missingCategory";
   }
   if (String(result.code || "").startsWith("brand_")) return "missingBrand";
+  if (
+    result.code === "missing_color_value" ||
+    result.reason === "Missing variation color" ||
+    (result.errors || []).includes("missing_color_value")
+  ) {
+    return "missingColor";
+  }
   if (result.reason === "Missing valid product image" || (result.errors || []).includes("missing_images")) {
-    return "missingImage";
+    return "missingData";
   }
   if (result.status === "SKIPPED" || result.status === "FAILED") return "missingData";
   return "otherBlocked";
@@ -90,6 +101,7 @@ function publicJob(job, extras = {}) {
     ready: raw.ready || 0,
     missingCategory: raw.missingCategory || 0,
     missingBrand: raw.missingBrand || 0,
+    missingColor: raw.missingColor || 0,
     missingImage: raw.missingImage || 0,
     missingData: raw.missingData || 0,
     otherBlocked: raw.otherBlocked || 0,
@@ -131,7 +143,8 @@ async function evaluateOneProduct(doc, context) {
   }
 
   context.stats.categoryAttempted += 1;
-  const category = resolveMiswagCategoryForProduct(doc, context.categoryIndexes);
+  // Sync All uses only saved Collection → Miswag category mappings (no fuzzy auto-resolve).
+  const category = resolveMappedMiswagCategory(doc, context.mappingByCollection);
   if (!category.ok) {
     return {
       productId,
@@ -139,8 +152,8 @@ async function evaluateOneProduct(doc, context) {
       externalId,
       sku,
       status: "SKIPPED",
-      reason: category.reason,
-      code: category.code,
+      reason: category.reason || "Miswag category mapping missing",
+      code: category.code || "category_mapping_missing",
       httpStatus: 0,
     };
   }
@@ -255,18 +268,17 @@ async function sendWithRetry(payload) {
 
 async function prepareContext() {
   await assertMiswagSyncAllowed();
-  const [rules, eligibility, categoryPack] = await Promise.all([
+  const [rules, eligibility, mappingByCollection] = await Promise.all([
     Commission.find({ partner: "miswag", isActive: { $ne: false } }).lean(),
     loadEligibilityContext("miswag"),
-    loadMiswagLeafCategories({ maxPages: 200 }),
+    loadMiswagCategoryMappingMap(),
   ]);
   return {
     rules,
     eligibility,
-    categoryIndexes: buildCategoryIndexes(categoryPack.categories),
+    mappingByCollection,
     brandCache: createBrandResolverCache(),
-    categoryPages: categoryPack.pagesScanned,
-    categoryCount: categoryPack.categories.length,
+    mappingCount: mappingByCollection.size,
     stats: {
       categoryAttempted: 0,
       categoryResolved: 0,
@@ -331,6 +343,7 @@ export async function runMiswagSyncPreview() {
     skipped: 0,
     missingCategory: 0,
     missingBrand: 0,
+    missingColor: 0,
     missingImage: 0,
     missingData: 0,
     otherBlocked: 0,
@@ -384,6 +397,7 @@ export async function runMiswagSyncPreview() {
     job.skipped = counters.skipped;
     job.missingCategory = counters.missingCategory;
     job.missingBrand = counters.missingBrand;
+    job.missingColor = counters.missingColor;
     job.missingImage = counters.missingImage;
     job.missingData = counters.missingData;
     job.otherBlocked = counters.otherBlocked;
@@ -405,8 +419,7 @@ export async function runMiswagSyncPreview() {
     batchSize: MISWAG_SYNC_BATCH_SIZE,
     batchSizeReason:
       "No documented bulk-create max found; reused prior Miswag seller client BATCH_SIZE=15 (one item per POST /v1/items/bulk-create).",
-    categoryCatalogSize: context.categoryCount,
-    categoryPagesScanned: context.categoryPages,
+    mappedCollections: context.mappingCount,
     job: publicJob(job, { blockedSamples }),
   };
 }
@@ -624,10 +637,14 @@ export async function stopMiswagSyncAll() {
 
 /** Test helper: evaluate one product without sending. */
 export async function evaluateMiswagProductForSync(doc, overrides = {}) {
+  let mappingByCollection = overrides.mappingByCollection;
+  if (!mappingByCollection) {
+    mappingByCollection = await loadMiswagCategoryMappingMap();
+  }
   const context = {
     rules: overrides.rules || [],
     eligibility: overrides.eligibility || { partnerActive: true, inactive: {}, taxonomyRequired: false },
-    categoryIndexes: overrides.categoryIndexes || buildCategoryIndexes(overrides.categories || []),
+    mappingByCollection,
     brandCache: overrides.brandCache || createBrandResolverCache(),
     stats: { categoryAttempted: 0, categoryResolved: 0, brandAttempted: 0, brandResolved: 0 },
   };

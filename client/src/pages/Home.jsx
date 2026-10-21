@@ -1,43 +1,105 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Button } from '@/components/ui/button'
-import { ArrowRight, Clock } from 'lucide-react'
+import { RotateCcw, ShieldCheck, Sparkles, Truck } from 'lucide-react'
 import Hero from '../components/Hero'
 import ProductRail from '../components/ProductRail'
-import CategoryTile from '../components/CategoryTile'
 import CategoryShowcase from '../components/CategoryShowcase'
 import { LogoLoop } from '../components/LogoLoop'
-import ProductCard from '../components/ProductCard'
+import ProductCard, { FeatureCard } from '../components/ProductCard'
 import { BannerSlider, BannerStrip } from '../components/HomeBanners'
-import { Reveal, SectionHead } from '../components/ui'
+import { ArrowLink, Reveal, SectionHead } from '../components/ui'
 import { useCatalog } from '../lib/catalogStore'
 import { useLang } from '../context/LangContext'
 import { api } from '../api'
-import { useEffect, useState } from 'react'
 
-function HomeCategories({ categories, layout, lang }) {
-  if (layout && layout !== "mosaic") {
-    const items = categories.map((category) => ({
-      id: category.id,
-      name: category.name,
-      image: category.cover,
-    }))
-    return <CategoryShowcase categories={items} layout={layout} lang={lang} />
-  }
+const PROMISES = [
+  { Icon: Truck, key: 'featureSameDay', sub: 'featureSameDaySub' },
+  { Icon: ShieldCheck, key: 'featureCover', sub: 'featureCoverSub' },
+  { Icon: RotateCcw, key: 'featureReturns', sub: 'featureReturnsSub' },
+  { Icon: Sparkles, key: 'featurePicked', sub: 'featurePickedSub' },
+]
 
+function Promises() {
+  const { t } = useLang()
   return (
-    <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3 sm:gap-4">
-      {categories.map((category, index) => (
-        <Reveal key={category.slug} delay={(index % 3) * 70}>
-          <CategoryTile category={category} />
+    <section className="border-b border-bean-900/10">
+      <div className="container-x">
+        <ul className="grid grid-cols-2 gap-px bg-bean-900/10 lg:grid-cols-4">
+          {PROMISES.map(({ Icon, key, sub }) => (
+            <li key={key} className="flex items-center gap-3.5 bg-background px-1 py-5 sm:px-5 sm:py-6">
+              <span className="grid size-10 shrink-0 place-items-center rounded-full bg-bean-100 text-primary">
+                <Icon className="size-[18px]" strokeWidth={1.8} />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold leading-tight text-bean-900">{t[key]}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">{t[sub]}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  )
+}
+
+function FeaturedBento({ items }) {
+  const [lead, ...rest] = items
+  if (!lead) return null
+  return (
+    <div className="grid grid-cols-2 gap-x-3 gap-y-8 sm:gap-x-4 lg:grid-cols-4">
+      <Reveal className="col-span-2 lg:row-span-2">
+        <FeatureCard product={lead} />
+      </Reveal>
+      {rest.slice(0, 8).map((p, i) => (
+        <Reveal key={p.id} delay={(i % 4) * 70}>
+          <ProductCard product={p} />
         </Reveal>
       ))}
     </div>
   )
 }
 
+function BrandsBand({ brands }) {
+  const { t } = useLang()
+  if (brands.length < 3) return null
+
+  return (
+    <section className="my-10 bg-bean-100 py-10 sm:my-14 sm:py-14">
+      <div className="container-x mb-7 flex items-center justify-between gap-4">
+        <span className="sf-eyebrow">{t.brandsWeCarry}</span>
+        <span className="font-display text-sm font-bold tabular-nums text-bean-900/40" dir="ltr">
+          {String(brands.length).padStart(2, '0')}
+        </span>
+      </div>
+      <div dir="ltr" className="relative h-14">
+        <LogoLoop
+          logos={brands.map((name) => ({ name }))}
+          renderItem={(item) => (
+            <Link
+              to={`/shop?brand=${encodeURIComponent(item.name)}`}
+              aria-label={item.name}
+              className="whitespace-nowrap font-display text-2xl font-extrabold tracking-[-0.03em] text-bean-900/35 transition-colors hover:text-bean-900 sm:text-[2rem]"
+            >
+              {item.name}
+            </Link>
+          )}
+          speed={36}
+          direction="left"
+          logoHeight={40}
+          gap={64}
+          hoverSpeed={0}
+          fadeOut
+          fadeOutColor="rgb(var(--sand))"
+          ariaLabel={t.brandsWeCarry}
+        />
+      </div>
+    </section>
+  )
+}
+
 export default function Home() {
   const { categories, byCategory, brands, featured, live: products, layout, categoryLimit } = useCatalog()
-  const { t, lang } = useLang()
+  const { t } = useLang()
   const [banners, setBanners] = useState([])
   const [bannersReady, setBannersReady] = useState(false)
   const newest = [...products].sort((a, b) => String(b.id).localeCompare(String(a.id))).slice(0, 10)
@@ -53,115 +115,63 @@ export default function Home() {
   const sliderBanners = banners.filter((item) => item.slot <= 3)
   const bannerFour = banners.find((item) => item.slot === 4)
   const bannerFive = banners.find((item) => item.slot === 5)
-
-  const brandLogos = brands.map((b) => ({ name: b }))
-
-  const renderBrand = (item) => (
-    <Link
-      to={`/shop?brand=${encodeURIComponent(item.name)}`}
-      aria-label={item.name}
-      className="whitespace-nowrap font-display text-xl font-bold text-muted-foreground transition-colors hover:text-primary sm:text-2xl"
-    >
-      {item.name}
-    </Link>
-  )
+  const shownCategories = categoryLimit > 0 ? categories.slice(0, categoryLimit) : categories
 
   return (
     <>
-      {sliderBanners.length > 0 ? <BannerSlider banners={sliderBanners} /> : null}
-      {bannersReady && sliderBanners.length === 0 ? <Hero /> : null}
+      {bannersReady && sliderBanners.length > 0 ? (
+        <BannerSlider banners={sliderBanners} />
+      ) : (
+        <Hero />
+      )}
 
-      <section className="container-x py-14">
+      <Promises />
+
+      <section className="container-x pt-14 sm:pt-20">
         <Reveal>
           <SectionHead
             eyebrow={t.departmentsEyebrow}
             title={t.shopByCategory}
             sub={t.categorySub}
-            action={
-              <Button asChild variant="glass">
-                <Link to="/shop">
-                  {t.allProducts} <ArrowRight />
-                </Link>
-              </Button>
-            }
+            action={<ArrowLink to="/shop">{t.allProducts}</ArrowLink>}
           />
         </Reveal>
-
-        <HomeCategories
-          categories={categoryLimit > 0 ? categories.slice(0, categoryLimit) : categories}
-          layout={layout}
-          lang={lang}
-        />
+        <CategoryShowcase categories={shownCategories} layout={layout} />
       </section>
 
-      <section className="container-x py-14">
-        <Reveal>
-          <SectionHead
-            eyebrow={t.handPickedEyebrow}
-            title={t.featured}
-            sub={t.featuredSub}
-            action={
-              <Button asChild variant="glass">
-                <Link to="/shop">
-                  {t.viewAll} <ArrowRight />
-                </Link>
-              </Button>
-            }
-          />
-        </Reveal>
+      {featured.length > 0 && (
+        <section className="container-x pt-16 sm:pt-24">
+          <Reveal>
+            <SectionHead
+              eyebrow={t.handPickedEyebrow}
+              title={t.featured}
+              sub={t.featuredSub}
+              action={<ArrowLink to="/shop">{t.viewAll}</ArrowLink>}
+            />
+          </Reveal>
+          <FeaturedBento items={featured} />
+        </section>
+      )}
 
-        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-          {featured.slice(0, 8).map((p, i) => (
-            <Reveal key={p.id} delay={(i % 4) * 70}>
-              <ProductCard product={p} />
-            </Reveal>
-          ))}
-        </div>
-      </section>
-
-      <BannerStrip banner={bannerFour} />
+      <div className="pt-8">
+        <BannerStrip banner={bannerFour} />
+      </div>
 
       {categories.slice(0, 3).map((cat) => (
-        <Reveal key={cat.slug}>
-          <ProductRail
-            eyebrow={cat.tagline}
-            title={cat.name}
-            items={byCategory(cat.slug)}
-            to={`/category/${cat.slug}`}
-          />
-        </Reveal>
+        <ProductRail
+          key={cat.slug}
+          eyebrow={t.departmentsEyebrow}
+          title={cat.name}
+          items={byCategory(cat.slug)}
+          to={`/category/${cat.slug}`}
+        />
       ))}
+
+      <BrandsBand brands={brands} />
 
       <BannerStrip banner={bannerFive} />
 
-      <section className="py-14">
-        <div className="divider-glow mb-10" />
-        <div className="relative h-16">
-          <LogoLoop
-            logos={brandLogos}
-            renderItem={renderBrand}
-            speed={38}
-            direction="left"
-            logoHeight={40}
-            gap={72}
-            hoverSpeed={0}
-            scaleOnHover
-            fadeOut
-            fadeOutColor="rgb(var(--background))"
-            ariaLabel="Brown Store"
-          />
-        </div>
-        <div className="divider-glow mt-10" />
-      </section>
-
-      <Reveal>
-        <ProductRail
-          eyebrow={<><Clock size={12} /> {t.justLanded}</>}
-          title={t.newInShowroom}
-          items={newest}
-          to="/shop?sort=new"
-        />
-      </Reveal>
+      <ProductRail eyebrow={t.justLanded} title={t.newInShowroom} items={newest} to="/shop?sort=new" />
     </>
   )
 }

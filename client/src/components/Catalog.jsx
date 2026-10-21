@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, LayoutGrid, Rows3, SlidersHorizontal, X } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Separator } from '@/components/ui/separator'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
 import { useCatalog } from '../lib/catalogStore'
@@ -17,7 +15,7 @@ import { tName } from '../i18n'
 import { useLang } from '../context/LangContext'
 import ProductCard from './ProductCard'
 import ProductRow from './ProductRow'
-import { EmptyState, PageSkeleton, Reveal } from './ui'
+import { EmptyState, GridSkeleton, Reveal } from './ui'
 
 const SORT_API = {
   featured: 'featured',
@@ -27,11 +25,8 @@ const SORT_API = {
 }
 
 /**
- * The catalogue surface: filter rail + sorted, filtered grid.
- *
- * Filter state lives in the URL, so a filtered view is shareable, bookmarkable
- * and correct through the back button. One component serves Shop, Category,
- * Search and Saved. Shop-scale lists fetch from /api/products.
+ * Filter rail + sorted grid. Filter state lives in the URL so a view is
+ * shareable. One component serves Shop, Category, Search and Saved.
  */
 export default function Catalog({
   base,
@@ -47,7 +42,7 @@ export default function Catalog({
   const [sheetOpen, setSheetOpen] = useState(false)
   const isDesktop = useMedia('(min-width: 1024px)')
   const { categories } = useCatalog()
-  const { t, lang } = useLang()
+  const { t, lang, dir } = useLang()
   const remote = query != null
 
   const [remoteItems, setRemoteItems] = useState([])
@@ -199,8 +194,21 @@ export default function Catalog({
     return [...list].sort(by[sort] ?? by.featured)
   }, [remote, remoteItems, base, pickedCats, pickedBrands, sort])
 
+  const chips = [
+    ...pickedCats.map((slug) => ({
+      key: `cat-${slug}`,
+      label: catsHere.find((c) => c.slug === slug)?.name || slug,
+      onRemove: () => toggleMulti('cat', slug),
+    })),
+    ...pickedBrands.map((brand) => ({
+      key: `brand-${brand}`,
+      label: brandsHere.find((b) => b.value === brand || b.label === brand)?.label || brand,
+      onRemove: () => toggleMulti('brand', brand),
+    })),
+  ]
+
   const filters = (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {!lockCategory && catsHere.length > 1 && (
         <FilterGroup title={t.category}>
           {catsHere.map((c) => (
@@ -216,76 +224,72 @@ export default function Catalog({
       )}
 
       {brandsHere.length > 1 && (
-        <>
-          {!lockCategory && catsHere.length > 1 && <Separator />}
-          <FilterGroup title={t.productBrand}>
-            {brandsHere.map((b) => (
-              <CheckRow
-                key={b.value}
-                id={`brand-${String(b.value).replace(/\s+/g, '-')}`}
-                label={b.label}
-                checked={pickedBrands.includes(b.value) || pickedBrands.includes(b.label)}
-                onChange={() => toggleMulti('brand', b.value)}
-              />
-            ))}
-          </FilterGroup>
-        </>
+        <FilterGroup title={t.productBrand}>
+          {brandsHere.map((b) => (
+            <CheckRow
+              key={b.value}
+              id={`brand-${String(b.value).replace(/\s+/g, '-')}`}
+              label={b.label}
+              checked={pickedBrands.includes(b.value) || pickedBrands.includes(b.label)}
+              onChange={() => toggleMulti('brand', b.value)}
+            />
+          ))}
+        </FilterGroup>
       )}
 
       {activeCount > 0 && (
-        <Button type="button" variant="glass" onClick={clearAll} className="w-full">
-          {t.clearFilters} <X />
-        </Button>
+        <button
+          type="button"
+          onClick={clearAll}
+          className="sf-link text-sm font-semibold text-primary"
+        >
+          {t.clearFilters}
+        </button>
       )}
     </div>
   )
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[260px_1fr] lg:items-start">
+    <div className="grid gap-10 lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start">
       {isDesktop && (
-        <aside className="hidden lg:sticky lg:top-[7.25rem] lg:block lg:h-[calc(100dvh-7.75rem)] lg:self-start">
-          <div className="glass flex h-full flex-col overflow-hidden rounded-card p-6">
-            <h2 className="mb-5 flex shrink-0 items-center gap-2 text-sm font-bold">
-              <SlidersHorizontal className="size-4 text-primary" /> {t.filters}
-            </h2>
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
-              {filters}
-            </div>
-          </div>
+        <aside className="hidden lg:sticky lg:top-[8.5rem] lg:block">
+          <h2 className="sf-eyebrow mb-6">{t.filters}</h2>
+          {filters}
         </aside>
       )}
 
-      <div className="min-w-0 lg:sticky lg:top-[7.25rem] lg:flex lg:h-[calc(100dvh-7.75rem)] lg:flex-col lg:self-start">
-        <div className="glass mb-3 flex shrink-0 flex-wrap items-center gap-3 rounded-card px-4 py-3">
+      <div className="min-w-0">
+        <div className="mb-6 flex flex-wrap items-center gap-3 border-b border-bean-900/10 pb-4">
           {!isDesktop && (
             <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
               <SheetTrigger asChild>
-                <Button variant="glass" size="sm">
+                <Button variant="line" size="sm">
                   <SlidersHorizontal /> {t.filters}
                   {activeCount > 0 && (
-                    <Badge variant="deal" className="ml-1 px-1.5 py-0">
+                    <span className="grid h-5 min-w-5 place-items-center rounded-full bg-bean-900 px-1.5 text-[10px] font-bold text-bean-50">
                       {activeCount}
-                    </Badge>
+                    </span>
                   )}
                 </Button>
               </SheetTrigger>
-              <SheetContent side="left" className="w-[320px] overflow-y-auto sm:w-[380px]">
+              <SheetContent
+                side={dir === 'rtl' ? 'right' : 'left'}
+                className="w-[320px] overflow-y-auto border-0 bg-background sm:w-[360px]"
+              >
                 <SheetHeader>
-                  <SheetTitle className="flex items-center gap-2">
-                    <SlidersHorizontal className="size-4 text-primary" /> {t.filters}
-                  </SheetTitle>
+                  <SheetTitle className="sf-eyebrow text-start">{t.filters}</SheetTitle>
                 </SheetHeader>
-                <div className="mt-6">{filters}</div>
-                <Button variant="brand" className="mt-7 w-full" onClick={() => setSheetOpen(false)}>
+                <div className="mt-8">{filters}</div>
+                <Button variant="ink" className="mt-8 w-full" onClick={() => setSheetOpen(false)}>
                   {t.seeResults}
                 </Button>
               </SheetContent>
             </Sheet>
           )}
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ms-auto flex items-center gap-2">
             <Select value={sort} onValueChange={(v) => setParam('sort', v === 'featured' ? null : v)}>
-              <SelectTrigger className="h-9 w-auto gap-2 rounded-pill border-border/70 bg-foreground/[.06] text-xs font-semibold">
+              <SelectTrigger className="h-9 w-auto min-w-[8.5rem] gap-2 rounded-md border-bean-900/20 bg-transparent text-xs font-semibold">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -297,36 +301,47 @@ export default function Catalog({
               </SelectContent>
             </Select>
 
-            <div className="hidden items-center gap-1 sm:flex">
+            <div className="hidden items-center border border-bean-900/20 sm:flex">
               {[
-                { key: 'grid', Icon: LayoutGrid },
-                { key: 'list', Icon: Rows3 },
-              ].map(({ key, Icon }) => (
-                <Button
+                { key: 'grid', Icon: LayoutGrid, label: t.gridView },
+                { key: 'list', Icon: Rows3, label: t.listView },
+              ].map(({ key, Icon, label }) => (
+                <button
                   key={key}
                   type="button"
-                  size="icon-sm"
-                  variant="ghost"
                   onClick={() => setParam('view', key === 'grid' ? null : key)}
-                  aria-label={`${key} view`}
+                  aria-label={label}
                   aria-pressed={view === key}
                   className={cn(
-                    'rounded-pill',
-                    view === key ? 'bg-primary/15 text-primary' : 'text-muted-foreground',
+                    'grid size-9 place-items-center transition-colors',
+                    view === key ? 'bg-bean-900 text-bean-50' : 'text-bean-900/50 hover:text-bean-900',
                   )}
                 >
-                  <Icon />
-                </Button>
+                  <Icon className="size-4" />
+                </button>
               ))}
             </div>
           </div>
         </div>
 
-        <div className="relative min-h-0 lg:flex lg:flex-1 lg:flex-col">
-        <div className="hidden h-px shrink-0 bg-[rgb(var(--stroke)/0.14)] lg:block" />
-        <div className="min-h-0 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain">
+        {chips.length > 0 && (
+          <div className="mb-6 flex flex-wrap gap-2">
+            {chips.map((chip) => (
+              <button
+                key={chip.key}
+                type="button"
+                onClick={chip.onRemove}
+                className="inline-flex items-center gap-1.5 rounded-full border border-bean-900/15 bg-card py-1 pe-2 ps-3 text-xs font-semibold text-bean-900 transition-colors hover:border-bean-900"
+              >
+                {chip.label}
+                <X className="size-3.5 opacity-50" />
+              </button>
+            ))}
+          </div>
+        )}
+
         {loading ? (
-          <PageSkeleton />
+          <GridSkeleton count={12} />
         ) : shown.length === 0 ? (
           <EmptyState
             icon={emptyIcon}
@@ -335,55 +350,55 @@ export default function Catalog({
             action={
               emptyAction ??
               (activeCount > 0 && (
-                <Button variant="brand" onClick={clearAll}>
+                <Button variant="ink" onClick={clearAll}>
                   {t.clearFilters}
                 </Button>
               ))
             }
           />
         ) : view === 'list' ? (
-          <div className="space-y-3.5">
+          <div className="space-y-5">
             {shown.map((p, i) => (
-              <Reveal key={p.id} delay={Math.min(i, 6) * 50}>
+              <Reveal key={p.id} delay={Math.min(i, 6) * 40}>
                 <ProductRow product={p} />
               </Reveal>
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-8 sm:gap-x-4 lg:grid-cols-3 xl:grid-cols-4">
             {shown.map((p, i) => (
-              <Reveal key={p.id} delay={Math.min(i, 8) * 45}>
+              <Reveal key={p.id} delay={Math.min(i, 8) * 40}>
                 <ProductCard product={p} />
               </Reveal>
             ))}
           </div>
         )}
-        </div>
-        <div className="hidden h-px shrink-0 bg-[rgb(var(--stroke)/0.14)] lg:block" />
 
         {remote && remotePages > 1 && !loading && (
-          <div className="mt-4 flex shrink-0 flex-wrap items-center justify-center gap-2">
+          <nav className="mt-12 flex flex-wrap items-center justify-center gap-2" aria-label={t.page}>
             <Button
               type="button"
-              variant="glass"
+              variant="line"
               size="sm"
               disabled={page <= 1}
               onClick={() => setParam('page', page - 1)}
             >
-              <ChevronLeft /> {t.scrollPrev}
+              <ChevronRight className="ltr:rotate-180" /> {t.scrollPrev}
             </Button>
+            <span className="px-3 text-sm tabular-nums text-muted-foreground">
+              {page} {t.of} {remotePages}
+            </span>
             <Button
               type="button"
-              variant="glass"
+              variant="line"
               size="sm"
               disabled={page >= remotePages}
               onClick={() => setParam('page', page + 1)}
             >
-              {t.scrollNext} <ChevronRight />
+              {t.scrollNext} <ChevronLeft className="ltr:rotate-180" />
             </Button>
-          </div>
+          </nav>
         )}
-        </div>
       </div>
     </div>
   )
@@ -392,23 +407,18 @@ export default function Catalog({
 function FilterGroup({ title, children }) {
   return (
     <div>
-      <h3 className="mb-3 text-2xs font-bold uppercase tracking-[.18em] text-muted-foreground">
-        {title}
-      </h3>
-      <div className="space-y-2">{children}</div>
+      <h3 className="mb-3 text-xs font-semibold text-bean-900 ltr:uppercase ltr:tracking-[.14em]">{title}</h3>
+      <div className="space-y-0.5">{children}</div>
     </div>
   )
 }
 
 function CheckRow({ id, label, checked, onChange }) {
   return (
-    <div className="flex items-center gap-2.5">
-      <Checkbox id={id} checked={checked} onCheckedChange={onChange} />
-      <Label
-        htmlFor={id}
-        className="flex flex-1 cursor-pointer items-center gap-2 text-xs font-normal"
-      >
-        <span className="flex-1">{label}</span>
+    <div className="flex items-center gap-2.5 py-1">
+      <Checkbox id={id} checked={checked} onCheckedChange={onChange} className="rounded-[3px] shadow-none" />
+      <Label htmlFor={id} className="flex flex-1 cursor-pointer items-center gap-2 text-sm font-normal text-bean-900">
+        <span className="flex-1 leading-snug">{label}</span>
       </Label>
     </div>
   )

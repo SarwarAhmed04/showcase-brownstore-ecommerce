@@ -21,6 +21,7 @@ const miswagSyncJobSchema = new mongoose.Schema(
     ready: { type: Number, default: 0 },
     missingCategory: { type: Number, default: 0 },
     missingBrand: { type: Number, default: 0 },
+    missingColor: { type: Number, default: 0 },
     missingImage: { type: Number, default: 0 },
     missingData: { type: Number, default: 0 },
     otherBlocked: { type: Number, default: 0 },

@@ -1,91 +1,51 @@
-import { lazy, Suspense } from 'react'
 import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { ArrowLeft, Home, Search } from 'lucide-react'
 import { useCatalog } from '../lib/catalogStore'
-import { useMedia } from '../lib/hooks'
 import { useStore } from '../store'
 import { useLang } from '../context/LangContext'
-
-const PixelSwap = lazy(() => import('../components/PixelSwap'))
 
 export default function NotFound() {
   const { setSearchOpen } = useStore()
   const { categories } = useCatalog()
-  const reducedMotion = useMedia('(prefers-reduced-motion: reduce)')
   const { t } = useLang()
-
-  const numeral = (
-    <span className="headline gold-text text-5xl leading-none sm:text-6xl">404</span>
-  )
 
   return (
     <div className="container-x flex min-h-[70vh] flex-col items-center justify-center py-20 text-center">
-      <div className="glass w-full max-w-2xl rounded-panel p-10 sm:p-16">
-        <div className="mx-auto grid h-28 max-w-sm place-items-center sm:h-32">
-          {reducedMotion ? (
-            numeral
-          ) : (
-            <Suspense fallback={numeral}>
-            <PixelSwap
-              firstContent={<div className="grid h-full w-full place-items-center">{numeral}</div>}
-              secondContent={
-                <div className="grid h-full w-full place-items-center">
-                  <span className="font-display text-xl font-bold text-muted-foreground sm:text-2xl">
-                    {t.nothingOnShelf}
-                  </span>
-                </div>
-              }
-              pixelSize={28}
-              gap={2}
-              pixelRadius={4}
-              pixelScale={0.4}
-              duration={900}
-              pixelDuration={380}
-              pattern="random"
-              fade
-              trigger="hover"
-              aspectRatio="auto"
-              className="h-full w-full"
-            />
-            </Suspense>
-          )}
-        </div>
+      <p dir="ltr" className="sf-display text-[7rem] leading-none text-bean-900/10 sm:text-[9rem]">
+        404
+      </p>
+      <h1 className="sf-display mt-2 text-3xl text-bean-900 sm:text-4xl">{t.shelfEmpty}</h1>
+      <p className="mx-auto mt-4 max-w-md text-base leading-relaxed text-muted-foreground">
+        {t.shelfEmptyBody}
+      </p>
 
-        <h1 className="headline mt-4 text-3xl sm:text-4xl">{t.shelfEmpty}</h1>
-        <p className="mx-auto mt-4 max-w-md text-base leading-relaxed text-foreground/75">
-          {t.shelfEmptyBody}
-        </p>
+      <div className="mt-9 flex flex-wrap justify-center gap-3">
+        <Button asChild variant="ink" size="lg">
+          <Link to="/">
+            <Home /> {t.backToHome}
+          </Link>
+        </Button>
+        <Button type="button" variant="line" size="lg" onClick={() => setSearchOpen(true)}>
+          <Search /> {t.searchShortcut}
+        </Button>
+        <Button type="button" variant="line" size="lg" onClick={() => window.history.back()}>
+          <ArrowLeft className="ltr:rotate-180" /> {t.goBack}
+        </Button>
+      </div>
 
-        <div className="mt-9 flex flex-wrap justify-center gap-3">
-          <Button asChild variant="brand" size="lg">
-            <Link to="/">
-              <Home /> {t.backToHome}
+      <div className="mt-12 max-w-xl">
+        <div className="sf-eyebrow mb-4 justify-center">{t.jumpDepartment}</div>
+        <div className="flex flex-wrap justify-center gap-1.5">
+          {categories.map((c) => (
+            <Link
+              key={c.slug}
+              to={`/category/${c.slug}`}
+              className="rounded-full border border-bean-900/15 px-3 py-1.5 text-xs font-medium text-bean-900 transition-colors hover:border-bean-900 hover:bg-bean-900 hover:text-bean-50"
+            >
+              {c.name}
             </Link>
-          </Button>
-          <Button type="button" variant="glass" size="lg" onClick={() => setSearchOpen(true)}>
-            <Search /> {t.searchShortcut}
-          </Button>
-          <Button type="button" variant="glass" size="lg" onClick={() => window.history.back()}>
-            <ArrowLeft /> {t.goBack}
-          </Button>
-        </div>
-
-        <div className="mt-11 border-t border-border/60 pt-8">
-          <div className="mb-3.5 text-2xs font-bold uppercase tracking-[.18em] text-muted-foreground">
-            {t.jumpDepartment}
-          </div>
-          <div className="flex flex-wrap justify-center gap-1.5">
-            {categories.map((c) => (
-              <Link
-                key={c.slug}
-                to={`/category/${c.slug}`}
-                className="glass-soft rounded-full px-3 py-1.5 text-xs font-medium transition hover:text-primary"
-              >
-                {c.name}
-              </Link>
-            ))}
-          </div>
+          ))}
         </div>
       </div>
     </div>

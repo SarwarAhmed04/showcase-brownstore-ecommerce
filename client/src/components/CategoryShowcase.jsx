@@ -1,234 +1,164 @@
-import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { tName } from "../i18n";
-import { useLang } from "../context/LangContext";
+import { ArrowLeft } from "lucide-react";
+import CategoryTile from "./CategoryTile";
 import Logo from "./Logo";
+import { RailArrows, Reveal } from "./ui";
 import { imgUrl } from "../lib/img";
+import { useRail } from "../lib/hooks";
 
-function CatImage({ src, className }) {
+function CatImage({ src, className, w = 400, h = 400 }) {
   if (src) {
-    return <img src={imgUrl(src)} alt="" className={className} />;
+    return <img src={imgUrl(src, { w, h })} alt="" loading="lazy" decoding="async" className={className} />;
   }
   return (
-    <div className={`flex items-center justify-center bg-muted ${className}`}>
-      <Logo className="h-10 w-10 opacity-50" />
+    <span className={`grid place-items-center bg-bean-100 ${className}`}>
+      <Logo className="h-8 w-8 opacity-40" />
+    </span>
+  );
+}
+
+const Forward = ({ className = "" }) => (
+  <ArrowLeft className={`ltr:rotate-180 ${className}`} />
+);
+
+/* Arches: a scrolling rail on phones, a centred wrap from `sm` up. */
+function Mosaic({ items }) {
+  return (
+    <div className="no-scrollbar -mx-4 flex gap-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:flex-wrap sm:justify-center sm:gap-x-6 sm:gap-y-12 sm:overflow-visible sm:px-0 sm:pb-0">
+      {items.map((cat, n) => (
+        <Reveal
+          key={cat.slug}
+          delay={(n % 5) * 60}
+          className="w-[40vw] max-w-[200px] shrink-0 sm:w-[calc(33.333%-1rem)] sm:max-w-none lg:w-[calc(20%-1.2rem)]"
+        >
+          <CategoryTile category={cat} />
+        </Reveal>
+      ))}
     </div>
   );
 }
 
-function Chevron({ dir }) {
-  const next = dir === "next";
+function Circles({ items }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      className={`h-5 w-5 ${next ? "rotate-180 rtl:rotate-0" : "rtl:rotate-180"}`}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.2"
-    >
-      <path d="M14.5 5.5 8 12l6.5 6.5" />
-    </svg>
-  );
-}
-
-function ScrollRail({ children, className }) {
-  const { t } = useLang();
-  const scroller = useRef(null);
-  const [overflow, setOverflow] = useState(false);
-  const [canPrev, setCanPrev] = useState(false);
-  const [canNext, setCanNext] = useState(false);
-
-  function update() {
-    const el = scroller.current;
-    if (!el) return;
-    const max = el.scrollWidth - el.clientWidth;
-    const hasOverflow = max > 8;
-    setOverflow(hasOverflow);
-    if (!hasOverflow) {
-      setCanPrev(false);
-      setCanNext(false);
-      return;
-    }
-    const rtl = getComputedStyle(el).direction === "rtl";
-    const sl = el.scrollLeft;
-    const fromStart = rtl ? (sl <= 0 ? -sl : Math.max(0, max - sl)) : sl;
-    setCanPrev(fromStart > 8);
-    setCanNext(fromStart < max - 8);
-  }
-
-  useEffect(() => {
-    const el = scroller.current;
-    if (!el) return undefined;
-    update();
-    const onScroll = () => update();
-    el.addEventListener("scroll", onScroll, { passive: true });
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    for (const child of el.children) ro.observe(child);
-    window.addEventListener("resize", update);
-    return () => {
-      el.removeEventListener("scroll", onScroll);
-      ro.disconnect();
-      window.removeEventListener("resize", update);
-    };
-  }, [children]);
-
-  function move(dir) {
-    const el = scroller.current;
-    if (!el) return;
-    const amount = Math.max(el.clientWidth * 0.7, 220);
-    const rtl = getComputedStyle(el).direction === "rtl";
-    el.scrollBy({ left: (rtl ? -dir : dir) * amount, behavior: "smooth" });
-  }
-
-  const arrowClass =
-    "flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-fg shadow-sm transition disabled:cursor-default disabled:opacity-25";
-
-  return (
-    <div className="flex items-center gap-2">
-      {overflow ? (
-        <button
-          type="button"
-          aria-label={t.scrollPrev}
-          disabled={!canPrev}
-          onClick={() => move(-1)}
-          className={arrowClass}
-        >
-          <Chevron dir="prev" />
-        </button>
-      ) : null}
-      <div ref={scroller} className={`min-w-0 flex-1 overflow-x-auto no-scrollbar ${className}`}>
-        {children}
-      </div>
-      {overflow ? (
-        <button
-          type="button"
-          aria-label={t.scrollNext}
-          disabled={!canNext}
-          onClick={() => move(1)}
-          className={arrowClass}
-        >
-          <Chevron dir="next" />
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-export default function CategoryShowcase({ categories, layout = "pills", lang }) {
-  const items = categories || [];
-  if (!items.length) return null;
-
-  if (layout === "circles") {
-    return (
-      <div className="grid grid-cols-3 gap-x-3 gap-y-6 sm:grid-cols-5 lg:grid-cols-9">
-        {items.map((cat) => (
-          <Link
-            key={cat.id}
-            to={`/category/${cat.id}`}
-            className="flex flex-col items-center gap-3"
-          >
-            <span className="relative block aspect-square w-full max-w-36 overflow-hidden rounded-full bg-[#f7f3ec] ring-1 ring-foreground/10">
-              <img
-                src={imgUrl(cat.image)}
-                alt=""
-                className="absolute inset-0 h-full w-full object-cover"
-                style={{ objectFit: "cover" }}
-              />
-            </span>
-            <span className="max-w-36 text-center text-sm font-medium leading-snug text-fg">
-              {tName(cat.name, lang)}
-            </span>
-          </Link>
-        ))}
-      </div>
-    );
-  }
-
-  if (layout === "cards") {
-    return (
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-        {items.map((cat) => (
-          <Link
-            key={cat.id}
-            to={`/category/${cat.id}`}
-            className="group glass overflow-hidden rounded-card transition hover:-translate-y-0.5"
-          >
-            <div className="shot aspect-[4/3]">
-              <CatImage
-                src={cat.image}
-                className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
-              />
-            </div>
-            <p className="relative px-4 py-3 text-sm font-semibold text-fg">
-              {tName(cat.name, lang)}
-            </p>
-          </Link>
-        ))}
-      </div>
-    );
-  }
-
-  if (layout === "posters") {
-    return (
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {items.map((cat) => (
-          <Link
-            key={cat.id}
-            to={`/category/${cat.id}`}
-            className="group relative min-h-56 overflow-hidden rounded-panel bg-bg-2 shadow-lg"
-          >
-            <CatImage
-              src={cat.image}
-              className="absolute inset-0 h-full w-full object-cover opacity-80 transition duration-500 group-hover:scale-105"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-bg via-bg/30 to-transparent" />
-            <p className="absolute inset-x-0 bottom-0 p-5 font-display text-2xl text-fg">
-              {tName(cat.name, lang)}
-            </p>
-          </Link>
-        ))}
-      </div>
-    );
-  }
-
-  if (layout === "rail") {
-    return (
-      <div className="grid gap-3 md:grid-cols-2">
-        {items.map((cat, index) => (
-          <Link
-            key={cat.id}
-            to={`/category/${cat.id}`}
-            className="glass flex items-center gap-4 rounded-card p-3 transition hover:ring-1 hover:ring-primary/40"
-          >
-            <span className="w-8 text-center font-display text-lg text-primary">
-              {String(index + 1).padStart(2, "0")}
-            </span>
-            <CatImage
-              src={cat.image}
-              className="h-16 w-16 shrink-0 rounded-2xl object-cover"
-            />
-            <span className="min-w-0 flex-1 truncate font-medium text-fg">
-              {tName(cat.name, lang)}
-            </span>
-          </Link>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <ScrollRail key={items.map((cat) => cat.id).join("-")} className="flex gap-3">
+    <div className="grid grid-cols-3 gap-x-3 gap-y-8 sm:grid-cols-5 lg:grid-cols-9">
       {items.map((cat) => (
-        <Link
-          key={cat.id}
-          to={`/category/${cat.id}`}
-          className="glass flex min-w-32 flex-col items-center gap-2 rounded-card p-4 text-center transition hover:ring-1 hover:ring-primary/40"
-        >
-          <CatImage src={cat.image} className="h-14 w-14 rounded-full object-cover" />
-          <span className="text-xs font-medium text-fg">{tName(cat.name, lang)}</span>
+        <Link key={cat.slug} to={`/category/${cat.slug}`} className="group flex flex-col items-center gap-3 text-center">
+          <span className="relative block aspect-square w-full max-w-32 overflow-hidden rounded-full bg-bean-100 outline outline-1 outline-offset-4 outline-bean-900/15 transition-[outline-color] duration-300 group-hover:outline-primary">
+            <CatImage src={cat.cover} className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 group-hover:scale-110" />
+          </span>
+          <span className="max-w-32 text-sm font-semibold leading-snug text-bean-900 transition-colors group-hover:text-primary">
+            {cat.name}
+          </span>
         </Link>
       ))}
-    </ScrollRail>
+    </div>
   );
+}
+
+function Cards({ items }) {
+  return (
+    <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3 md:grid-cols-4">
+      {items.map((cat) => (
+        <Link key={cat.slug} to={`/category/${cat.slug}`} className="group block">
+          <span className="block aspect-[4/3] overflow-hidden rounded-lg bg-bean-100">
+            <CatImage
+              src={cat.cover}
+              w={600}
+              h={450}
+              className="h-full w-full object-cover transition-transform duration-700 group-hover:scale-105"
+            />
+          </span>
+          <span className="mt-3 flex items-center justify-between gap-3 border-b border-bean-900/15 pb-3">
+            <span className="text-sm font-semibold text-bean-900 transition-colors group-hover:text-primary sm:text-base">
+              {cat.name}
+            </span>
+            <Forward className="size-4 shrink-0 text-bean-900/35 transition-colors group-hover:text-primary" />
+          </span>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function Posters({ items }) {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {items.map((cat) => (
+        <Link
+          key={cat.slug}
+          to={`/category/${cat.slug}`}
+          className="group relative block aspect-[4/3] overflow-hidden rounded-lg bg-bean-900 lg:aspect-[4/5]"
+        >
+          <CatImage
+            src={cat.cover}
+            w={800}
+            h={1000}
+            className="absolute inset-0 h-full w-full object-cover opacity-90 transition-transform duration-700 group-hover:scale-105"
+          />
+          <span className="absolute inset-0 bg-gradient-to-t from-bean-900/85 via-bean-900/10 to-transparent" />
+          <span className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-4 p-5 sm:p-6">
+            <span className="sf-display text-2xl text-bean-50 sm:text-3xl">{cat.name}</span>
+            <span className="grid size-11 shrink-0 place-items-center rounded-full bg-bean-50 text-bean-900 transition-colors duration-300 group-hover:bg-tan">
+              <Forward className="size-4" />
+            </span>
+          </span>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function Index({ items }) {
+  return (
+    <ol className="grid gap-x-12 border-t border-bean-900/15 md:grid-cols-2">
+      {items.map((cat, index) => (
+        <li key={cat.slug}>
+          <Link to={`/category/${cat.slug}`} className="group flex items-center gap-4 border-b border-bean-900/15 py-4">
+            <span dir="ltr" className="w-7 shrink-0 font-display text-sm font-bold tabular-nums text-primary">
+              {String(index + 1).padStart(2, "0")}
+            </span>
+            <span className="h-14 w-11 shrink-0 overflow-hidden rounded-t-full bg-bean-100">
+              <CatImage src={cat.cover} w={120} h={150} className="h-full w-full object-cover" />
+            </span>
+            <span className="min-w-0 flex-1 truncate font-display text-lg font-bold text-bean-900 transition-colors group-hover:text-primary">
+              {cat.name}
+            </span>
+            <Forward className="size-4 shrink-0 text-bean-900/30 transition-all duration-300 group-hover:text-primary ltr:group-hover:translate-x-1 rtl:group-hover:-translate-x-1" />
+          </Link>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function Pills({ items }) {
+  const rail = useRail(items.length);
+  return (
+    <div className="flex items-center gap-4">
+      <div ref={rail.ref} className="no-scrollbar flex min-w-0 flex-1 gap-2.5 overflow-x-auto">
+        {items.map((cat) => (
+          <Link
+            key={cat.slug}
+            to={`/category/${cat.slug}`}
+            className="flex shrink-0 items-center gap-2.5 rounded-full border border-bean-900/15 bg-card py-1.5 pe-4 ps-1.5 text-sm font-semibold text-bean-900 transition-colors duration-300 hover:border-bean-900 hover:bg-bean-900 hover:text-bean-50"
+          >
+            <span className="size-9 shrink-0 overflow-hidden rounded-full bg-bean-100">
+              <CatImage src={cat.cover} w={80} h={80} className="h-full w-full object-cover" />
+            </span>
+            {cat.name}
+          </Link>
+        ))}
+      </div>
+      <RailArrows rail={rail} />
+    </div>
+  );
+}
+
+const LAYOUTS = { mosaic: Mosaic, circles: Circles, cards: Cards, posters: Posters, rail: Index, pills: Pills };
+
+/** Home-page departments, in whichever layout the admin picked. */
+export default function CategoryShowcase({ categories, layout = "mosaic" }) {
+  if (!categories?.length) return null;
+  const Layout = LAYOUTS[layout] || Mosaic;
+  return <Layout items={categories} />;
 }

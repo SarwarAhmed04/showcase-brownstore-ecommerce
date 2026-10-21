@@ -14,6 +14,7 @@ import { MiswagSyncJob } from "./models/MiswagSyncJob.js";
 import { MiswagSyncProductResult } from "./models/MiswagSyncProductResult.js";
 import { MiswagVariationBarcode } from "./models/MiswagVariationBarcode.js";
 import { Partner } from "./models/Partner.js";
+import { PlatformTaxonomyConfig } from "./models/PlatformTaxonomyConfig.js";
 import { PlatformVisibilityRule } from "./models/PlatformVisibilityRule.js";
 import { Product } from "./models/Product.js";
 import { User } from "./models/User.js";
@@ -24,6 +25,7 @@ import {
   buildCategoryIndexes,
   resolveMiswagCategoryForProduct,
 } from "./services/miswagCategoryResolve.js";
+import { saveMiswagCategoryMapping } from "./services/miswagCategoryMapping.js";
 import {
   MISWAG_SYNC_BATCH_SIZE,
   evaluateMiswagProductForSync,
@@ -151,6 +153,29 @@ async function markConnected() {
   assert.equal((await testMiswagConnection()).ok, true);
 }
 
+async function mapDefaultCollection(categoryId = "L4-100") {
+  await saveMiswagCategoryMapping("col-1", {
+    categoryId,
+    categoryName: "Food Processors",
+    categoryPath: "Home > Kitchen > Food Processors",
+    categoryLevel: "L4",
+  });
+}
+
+function mappingMap(categoryId = "L4-100") {
+  return new Map([
+    [
+      "col-1",
+      {
+        categoryId,
+        categoryName: "Food Processors",
+        categoryPath: "Home > Kitchen > Food Processors",
+        categoryLevel: "L4",
+      },
+    ],
+  ]);
+}
+
 describe("Miswag Sync All Products", { concurrency: 1 }, () => {
   before(async () => {
     memory = await MongoMemoryServer.create();
@@ -192,6 +217,7 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
       MiswagSyncProductResult.deleteMany({}),
       MiswagVariationBarcode.deleteMany({}),
       PlatformVisibilityRule.deleteMany({}),
+      PlatformTaxonomyConfig.deleteMany({}),
       Product.deleteMany({}),
     ]);
   });
@@ -203,13 +229,11 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
   it("dry run sends zero Miswag product creates", async () => {
     await markConnected();
     await Product.create(sampleProduct("dry-1"));
+    await mapDefaultCollection();
     let createCalls = 0;
     setMiswagFetch(async (url, options) => {
       const method = String(options?.method || "GET").toUpperCase();
       if (method === "HEAD") return mockResponse(200, "");
-      if (String(url).includes("/v1/categories/flat")) {
-        return mockResponse(200, { data: { content: leafCategories, paging: {} } });
-      }
       if (String(url).includes("/v1/brands/search")) {
         return mockResponse(200, { data: { content: [{ id: 42, name: "Philips", alias: "philips" }] } });
       }
@@ -225,6 +249,21 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
     assert.equal(preview.sentToMiswag, 0);
     assert.equal(createCalls, 0);
     assert.equal(preview.job.ready >= 1, true);
+  });
+
+  it("skips products when Collection has no saved Miswag mapping", async () => {
+    await markConnected();
+    await Product.create(sampleProduct("unmap-1"));
+    setMiswagFetch(async (url, options) => {
+      const method = String(options?.method || "GET").toUpperCase();
+      if (method === "HEAD") return mockResponse(200, "");
+      return mockResponse(404, {});
+    });
+    const preview = await runMiswagSyncPreview();
+    assert.equal(preview.job.ready, 0);
+    assert.equal(preview.job.missingCategory >= 1, true);
+    const sample = preview.job.blockedSamples?.[0];
+    assert.equal(sample?.reason, "Miswag category mapping missing");
   });
 
   it("keeps stable external_id and shared rounded price", async () => {
@@ -255,14 +294,13 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
       targetId: String(doc._id),
       isActive: false,
     });
-    const indexes = buildCategoryIndexes(leafCategories);
     const cache = createBrandResolverCache();
     cache.set(normalizeBrandKey("Philips"), { ok: true, brand: { id: 42, name: "Philips" } });
     const { loadEligibilityContext } = await import("./utils/platformTaxonomy.js");
     const result = await evaluateMiswagProductForSync(doc, {
       rules: await Commission.find({ partner: "miswag" }).lean(),
       eligibility: await loadEligibilityContext("miswag"),
-      categoryIndexes: indexes,
+      mappingByCollection: mappingMap(),
       brandCache: cache,
     });
     assert.equal(result.status, "INACTIVE");
@@ -298,15 +336,15 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
 
   it("brand exact match works and unresolved brand is skipped", async () => {
     const doc = await Product.create(sampleProduct("brand-1"));
-    const indexes = buildCategoryIndexes(leafCategories);
     const cache = createBrandResolverCache();
     cache.set(normalizeBrandKey("Philips"), { ok: true, brand: { id: 42, name: "Philips" } });
     const ok = await evaluateMiswagProductForSync(doc, {
       rules: await Commission.find({ partner: "miswag" }).lean(),
-      categoryIndexes: indexes,
+      mappingByCollection: mappingMap(),
       brandCache: cache,
     });
     assert.equal(ok.status, "READY");
+    assert.equal(ok.categoryId, "L4-100");
 
     const missing = await Product.create(
       sampleProduct("brand-2", { brand: { _id: "b2", name: { en: "UnknownBrandXYZ" } } })
@@ -319,11 +357,29 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
     });
     const bad = await evaluateMiswagProductForSync(missing, {
       rules: await Commission.find({ partner: "miswag" }).lean(),
-      categoryIndexes: indexes,
+      mappingByCollection: mappingMap(),
       brandCache: cache2,
     });
     assert.equal(bad.status, "SKIPPED");
     assert.match(bad.reason, /brand could not be resolved safely/i);
+  });
+
+  it("uses saved Collection mapping for Sync All category id", async () => {
+    const doc = await Product.create(sampleProduct("map-win-1"));
+    await saveMiswagCategoryMapping("col-1", {
+      categoryId: "L3-999",
+      categoryName: "Mapped Leaf",
+      categoryPath: "A > B > Mapped Leaf",
+      categoryLevel: "L3",
+    });
+    const cache = createBrandResolverCache();
+    cache.set(normalizeBrandKey("Philips"), { ok: true, brand: { id: 42, name: "Philips" } });
+    const result = await evaluateMiswagProductForSync(doc, {
+      rules: await Commission.find({ partner: "miswag" }).lean(),
+      brandCache: cache,
+    });
+    assert.equal(result.status, "READY");
+    assert.equal(result.categoryId, "L3-999");
   });
 
   it("missing image is blocked", async () => {
@@ -339,12 +395,11 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
         ],
       })
     );
-    const indexes = buildCategoryIndexes(leafCategories);
     const cache = createBrandResolverCache();
     cache.set(normalizeBrandKey("Philips"), { ok: true, brand: { id: 42, name: "Philips" } });
     const result = await evaluateMiswagProductForSync(doc, {
       rules: await Commission.find({ partner: "miswag" }).lean(),
-      categoryIndexes: indexes,
+      mappingByCollection: mappingMap(),
       brandCache: cache,
     });
     assert.equal(result.status, "SKIPPED");
@@ -364,14 +419,12 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
     await Product.create(sampleProduct("a"));
     await Product.create(sampleProduct("b"));
     await Product.create(sampleProduct("c"));
+    await mapDefaultCollection();
 
     let createCalls = 0;
     setMiswagFetch(async (url, options) => {
       const method = String(options?.method || "GET").toUpperCase();
       if (method === "HEAD") return mockResponse(200, "");
-      if (String(url).includes("/v1/categories/flat")) {
-        return mockResponse(200, { data: { content: leafCategories, paging: {} } });
-      }
       if (String(url).includes("/v1/brands/search")) {
         return mockResponse(200, { data: { content: [{ id: 42, name: "Philips", alias: "philips" }] } });
       }
@@ -414,6 +467,7 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
       return mockResponse(404, {});
     });
     await testMiswagConnection();
+    await mapDefaultCollection();
 
     const resumed = await resumeMiswagSyncAll();
     assert.equal(resumed.job.status, "running");
@@ -431,6 +485,7 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
   it("429 and 5xx retry then succeed without stopping the job", async () => {
     await markConnected();
     await Product.create(sampleProduct("retry-1"));
+    await mapDefaultCollection();
     let attempts = 0;
     setMiswagFetch(async (url, options) => {
       const method = String(options?.method || "GET").toUpperCase();
@@ -466,6 +521,7 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
     await markConnected();
     await Product.create(sampleProduct("restart-1"));
     await Product.create(sampleProduct("restart-2"));
+    await mapDefaultCollection();
     const total = 2;
     const job = await MiswagSyncJob.create({
       partner: "miswag",
@@ -511,6 +567,7 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
   it("pause and stop work", async () => {
     await markConnected();
     await Product.insertMany([sampleProduct("p1"), sampleProduct("p2"), sampleProduct("p3")]);
+    await mapDefaultCollection();
     setMiswagFetch(async (url, options) => {
       const method = String(options?.method || "GET").toUpperCase();
       if (method === "HEAD") return mockResponse(200, "");
@@ -552,7 +609,7 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
     assert.equal(res.status, 403);
   });
 
-  it("preview Miswag 401 is not reported as session Unauthorized and clears Connected", async () => {
+  it("Miswag category finder 401 is not reported as session Unauthorized and clears Connected", async () => {
     await markConnected();
     setMiswagFetch(async (url, options) => {
       const method = String(options?.method || "GET").toUpperCase();
@@ -562,7 +619,7 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
       }
       return mockResponse(404, {});
     });
-    const res = await call("POST", "/api/admin/platforms/miswag/sync-all/preview", { body: {} });
+    const res = await call("GET", "/api/admin/platforms/miswag/sync-one/categories?q=food");
     assert.equal(res.status, 502);
     assert.notEqual(res.json.message, "Unauthorized");
     assert.match(res.json.message, /Authentication failed/i);

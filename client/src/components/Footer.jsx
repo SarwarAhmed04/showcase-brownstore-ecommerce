@@ -2,89 +2,96 @@ import { Link } from 'react-router-dom'
 import { Mail, MapPin, Phone } from 'lucide-react'
 import { useCatalog } from '../lib/catalogStore'
 import { useLang } from '../context/LangContext'
-import { Wordmark } from './Navbar'
+import { EMAIL, LangSwitch, PHONE, Wordmark } from './Navbar'
 
 export default function Footer() {
   const { categories } = useCatalog()
   const { t } = useLang()
+
   const shop = [
     { to: '/shop', label: t.allProducts },
     { to: '/shop?sort=new', label: t.newArrivals },
     { to: '/saved', label: t.savedItems },
-  ]
-  const company = [
     { to: '/contact', label: t.contactUs },
   ]
 
   return (
-    <footer className="relative mt-28">
-      <div className="divider-glow" />
-
-      <div className="container-x pb-28 pt-16 lg:pb-16">
-        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1.2fr]">
-          <div>
-            <Wordmark />
+    <footer className="mt-24 overflow-hidden bg-bean-900 text-bean-50 lg:mt-32">
+      <div className="container-x pb-28 pt-16 lg:pb-10 lg:pt-20">
+        <div className="grid gap-12 sm:grid-cols-2 lg:grid-cols-[1.35fr_1fr_1.2fr_1.15fr]">
+          <div className="max-w-sm">
+            <Wordmark light />
+            <p className="mt-5 text-sm leading-relaxed text-bean-50/60">{t.footerCopy}</p>
           </div>
 
-          <FooterCol title={t.footerShop} links={shop} />
-          <FooterCol title={t.footerCompany} links={company} />
+          <div>
+            <FooterTitle>{t.footerShop}</FooterTitle>
+            <ul className="space-y-3">
+              {shop.map((l) => (
+                <li key={l.to}>
+                  <Link to={l.to} className="sf-link text-sm text-bean-50/75 hover:text-bean-50">
+                    {l.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
 
           <div>
-            <h4 className="mb-4 text-2xs font-bold uppercase tracking-[.18em] text-muted-foreground">
-              {t.findUs}
-            </h4>
-            <ul className="space-y-3.5 text-sm text-foreground/75">
+            <FooterTitle>{t.departments}</FooterTitle>
+            <ul className="space-y-3">
+              {categories.slice(0, 9).map((c) => (
+                <li key={c.slug}>
+                  <Link to={`/category/${c.slug}`} className="sf-link text-sm text-bean-50/75 hover:text-bean-50">
+                    {c.name}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <FooterTitle>{t.findUs}</FooterTitle>
+            <ul className="space-y-4 text-sm text-bean-50/75">
               <li className="flex gap-3">
-                <MapPin size={16} className="mt-0.5 shrink-0 text-primary" />
+                <MapPin className="mt-0.5 size-4 shrink-0 text-tan" />
                 <span>{t.addressKarrada}</span>
               </li>
               <li className="flex gap-3">
-                <Phone size={16} className="mt-0.5 shrink-0 text-primary" />
-                <span dir="ltr">+964 751 760 7671</span>
+                <Phone className="mt-0.5 size-4 shrink-0 text-tan" />
+                <a href={`tel:${PHONE.replace(/\s+/g, '')}`} dir="ltr" className="sf-link hover:text-bean-50">
+                  {PHONE}
+                </a>
               </li>
               <li className="flex gap-3">
-                <Mail size={16} className="mt-0.5 shrink-0 text-primary" />
-                <span>info@brownstore.net</span>
+                <Mail className="mt-0.5 size-4 shrink-0 text-tan" />
+                <a href={`mailto:${EMAIL}`} className="sf-link hover:text-bean-50">
+                  {EMAIL}
+                </a>
               </li>
             </ul>
           </div>
         </div>
 
-        <div className="mt-12 flex flex-wrap gap-1.5 border-t border-border/50 pt-8">
-          {categories.map((c) => (
-            <Link
-              key={c.slug}
-              to={`/category/${c.slug}`}
-              className="rounded-full px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-primary"
-            >
-              {c.name}
-            </Link>
-          ))}
-        </div>
-
-        <div className="mt-8 border-t border-border/50 pt-7 text-xs text-muted-foreground">
+        <div className="mt-16 flex flex-wrap items-center justify-between gap-4 border-t border-bean-50/10 pt-6 text-xs text-bean-50/50">
           <p>
             © {new Date().getFullYear()} Brown Store. {t.footerRights}
           </p>
+          <LangSwitch light />
+        </div>
+
+        <div
+          aria-hidden
+          dir="ltr"
+          className="pointer-events-none mt-8 select-none whitespace-nowrap text-center font-display text-[19vw] font-extrabold leading-[0.78] tracking-[-0.06em] text-bean-50/[0.06] lg:text-[248px]"
+        >
+          brownstore
         </div>
       </div>
     </footer>
   )
 }
 
-function FooterCol({ title, links }) {
-  return (
-    <div>
-      <h4 className="mb-4 text-2xs font-bold uppercase tracking-[.18em] text-muted-foreground">{title}</h4>
-      <ul className="space-y-2.5">
-        {links.map((l) => (
-          <li key={l.to + l.label}>
-            <Link to={l.to} className="text-sm text-foreground/75 transition-colors hover:text-primary">
-              {l.label}
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
+function FooterTitle({ children }) {
+  return <h2 className="mb-5 text-xs font-semibold text-tan ltr:uppercase ltr:tracking-[.16em]">{children}</h2>
 }

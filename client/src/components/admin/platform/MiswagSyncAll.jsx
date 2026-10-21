@@ -159,13 +159,16 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
           </p>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <Stat label={t.miswagSyncProcessed} value={`${current.processed ?? 0} / ${current.total ?? 0}`} />
-            <Stat label={t.miswagSyncSucceeded} value={current.success ?? current.ready ?? 0} />
-            <Stat label={t.miswagSyncFailed} value={current.failed ?? 0} />
-            <Stat label={t.miswagSyncSkipped} value={current.skipped ?? 0} />
-            <Stat label={t.miswagSyncInactive} value={current.inactive ?? 0} />
-            <Stat label={t.miswagSyncMissingCategory} value={current.missingCategory ?? 0} />
+            <Stat
+              label={t.miswagSyncReady}
+              value={preview?.dryRun ? current.ready ?? 0 : current.success ?? current.ready ?? 0}
+            />
+            <Stat label={t.miswagSyncMissingMapping} value={current.missingCategory ?? 0} />
             <Stat label={t.miswagSyncMissingBrand} value={current.missingBrand ?? 0} />
-            <Stat label={t.miswagSyncMissingImage} value={current.missingImage ?? 0} />
+            <Stat label={t.miswagSyncMissingColor} value={current.missingColor ?? 0} />
+            <Stat label={t.miswagSyncMissingData} value={current.missingData ?? 0} />
+            <Stat label={t.miswagSyncInactive} value={current.inactive ?? 0} />
+            <Stat label={t.miswagSyncFailed} value={current.failed ?? 0} />
           </div>
           {preview?.dryRun ? (
             <p className="text-xs text-brown/45">

@@ -52,6 +52,45 @@
     --success: 107 136 79;
     --warning: 189 104 66;
     --info: 79 129 123;
+
+    --font-display: Fraunces, "Noto Sans Arabic", Georgia, serif;
+    --font-sans: "Plus Jakarta Sans", "Noto Sans Arabic", system-ui, sans-serif;
+  }
+
+  /* ---- Storefront ------------------------------------------------------
+     Set on <html> by index.html and the storefront Layout, never in /admin.
+     Same brown/caramel/cream family as :root, retuned for a flat editorial
+     look: crisper radii, firmer hairlines, a grotesque + Kufi type pairing.
+     Living on <html> means portalled dialogs, sheets and menus inherit it. */
+  html.sf {
+    --bg: 248 242 233;
+    --bg-2: 236 224 210;
+    --background: 248 242 233;
+    --foreground: 36 22 17;
+    --text: 36 22 17;
+    --text-dim: 88 62 45;
+    --text-mute: 122 96 76;
+    --card: 253 250 245;
+    --card-foreground: 36 22 17;
+    --popover: 253 250 245;
+    --popover-foreground: 36 22 17;
+    --secondary: 236 224 210;
+    --secondary-foreground: 56 36 26;
+    --muted: 236 224 210;
+    --muted-foreground: 122 96 76;
+    --accent-surface: 240 230 217;
+    --accent-surface-foreground: 36 22 17;
+    --border: 224 210 193;
+    --input: 214 197 177;
+    --stroke: 72 44 28;
+    --stroke-a: 0.16;
+    --radius: 0.625rem;
+
+    --espresso: 36 22 17;
+    --sand: 236 224 210;
+
+    --font-display: "Bricolage Grotesque", "Noto Kufi Arabic", ui-sans-serif, system-ui, sans-serif;
+    --font-sans: Figtree, "Noto Sans Arabic", ui-sans-serif, system-ui, sans-serif;
   }
 
   * { border-color: rgb(var(--stroke) / var(--stroke-a)); }
@@ -206,6 +245,57 @@
   .divider-glow {
     height: 1px;
     background: linear-gradient(90deg, transparent, rgb(var(--accent) / .4), transparent);
+  }
+
+  /* ---------- Storefront primitives ----------
+     Arabic and Kurdish are cursive scripts: letter-spacing and uppercase are
+     only applied under dir="ltr", and RTL headings get extra line-height so
+     stacked Kufi lines never clip. */
+  .sf-display {
+    font-family: var(--font-display);
+    font-weight: 700;
+    line-height: 1.06;
+  }
+  [dir='ltr'] .sf-display { letter-spacing: -0.03em; }
+  [dir='rtl'] .sf-display { line-height: 1.32; }
+
+  .sf-eyebrow {
+    @apply inline-flex items-center gap-2.5 text-xs font-semibold text-primary;
+  }
+  .sf-eyebrow::before {
+    content: '';
+    width: 1.5rem;
+    height: 1px;
+    background: currentColor;
+  }
+  [dir='ltr'] .sf-eyebrow {
+    font-size: 0.6875rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  /* Underline that grows from the reading start on hover / when current. */
+  .sf-link {
+    background: linear-gradient(currentColor, currentColor) no-repeat 0 100% / 0 1px;
+    transition: background-size .35s cubic-bezier(.2, .7, .3, 1), color .2s ease;
+  }
+  [dir='rtl'] .sf-link { background-position: 100% 100%; }
+  .sf-link:hover,
+  .sf-link[aria-current='page'] { background-size: 100% 1px; }
+
+  /* Product photography sits on sand rather than floating on cream.
+     Multiply knocks a white packshot back into the tile. */
+  .sf-tile {
+    background: rgb(var(--sand));
+    isolation: isolate;
+  }
+  .sf-tile img {
+    mix-blend-mode: multiply;
+  }
+
+  .sf-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--stroke) / .28) transparent;
   }
 
   @media (prefers-reduced-motion: reduce) {

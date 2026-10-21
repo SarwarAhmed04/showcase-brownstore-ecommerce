@@ -46,15 +46,27 @@ export default function PlatformOverview({ partnerSlug, partner, t, onOpen, onPa
         [t.statInactive, stats.inactiveExcluded],
         [t.statPriceRules, stats.priceRules],
         [t.statTotalCollections, stats.totalCollections],
-        [t.statMappedCollections, stats.configuredCollections],
-        [t.statUnmappedCollections, stats.missingSetupCollections],
-        [t.statNewTaxonomyAlerts, stats.newTaxonomyAlerts],
+        [
+          partnerSlug === "miswag" ? t.mapped : t.statMappedCollections,
+          stats.configuredCollections,
+        ],
+        [
+          partnerSlug === "miswag" ? t.miswagMissingMapping : t.statUnmappedCollections,
+          stats.missingSetupCollections,
+        ],
+        [
+          partnerSlug === "miswag" ? t.miswagNewCollectionAlerts : t.statNewTaxonomyAlerts,
+          stats.newTaxonomyAlerts,
+        ],
       ]
     : [];
 
   const actions = [
     ...(partnerSlug === "miswag" ? [["connection", t.miswagApiConnection]] : []),
-    ["mapping", t.categoryMapping],
+    ...(partnerSlug === "miswag"
+      ? [["mappingCategories", t.miswagMappingCategories]]
+      : [["mapping", t.categoryMapping]]),
+    ...(partnerSlug === "miswag" ? [["syncAll", t.miswagSyncAllTitle]] : []),
     ["availability", t.availabilityTab],
     ["commissions", t.existingCommissions],
     ["excel", t.excelTab],

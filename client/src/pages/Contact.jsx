@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Check, Clock, Loader2, Mail, MapPin, Phone, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from 'sonner'
 import PageHead from '../components/PageHead'
+import { EMAIL, PHONE } from '../components/Navbar'
 import { Reveal } from '../components/ui'
 import { api } from '../api'
 import { useLang } from '../context/LangContext'
@@ -34,8 +34,8 @@ export default function Contact() {
 
   const lines = [
     { Icon: MapPin, title: t.showroom, body: t.showroomAddress, sub: t.collectionShowroom },
-    { Icon: Phone, title: t.phone, body: '+964 751 760 7671', sub: t.hoursDaily, dir: 'ltr' },
-    { Icon: Mail, title: t.email, body: 'info@brownstore.net', sub: t.emailReplyDay },
+    { Icon: Phone, title: t.phone, body: PHONE, sub: t.hoursDaily, dir: 'ltr' },
+    { Icon: Mail, title: t.email, body: EMAIL, sub: t.emailReplyDay },
     { Icon: Clock, title: t.hours, body: '10:00 – 22:00', sub: t.hoursSevenDays },
   ]
 
@@ -55,49 +55,50 @@ export default function Contact() {
   }
 
   return (
-    <div className="container-x py-10 lg:py-section-sm">
+    <div className="container-x py-10 lg:py-14">
       <PageHead
         eyebrow={t.contactEyebrow}
         title={
           <>
-            {t.contactAskUs} <span className="gold-text">{t.contactAskGold}</span>
+            {t.contactAskUs} <span className="text-primary">{t.contactAskGold}</span>
           </>
         }
         sub={t.contactSub}
         crumbs={[{ label: t.contact }]}
       />
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_1.15fr]">
-        <div className="space-y-4">
-          {lines.map((l, i) => (
-            <Reveal key={l.title} delay={i * 70}>
-              <Card className="glass flex gap-4 rounded-card border-0 p-6">
-                <span className="grid size-11 shrink-0 place-items-center rounded-md bg-primary/15 text-primary">
-                  <l.Icon className="size-5" />
+      <div className="grid overflow-hidden rounded-2xl ring-1 ring-bean-900/10 lg:grid-cols-[0.9fr_1.1fr]">
+        <div className="relative bg-bean-900 p-7 text-bean-50 sm:p-10">
+          <div aria-hidden className="pointer-events-none absolute -bottom-24 -end-10 h-64 w-48 rounded-t-full border border-tan/20" />
+          <p className="sf-eyebrow text-tan">{t.findUs}</p>
+          <h2 className="sf-display mt-4 text-2xl sm:text-3xl">{t.visitShowroom}</h2>
+          <ul className="relative mt-8 space-y-6">
+            {lines.map((l) => (
+              <li key={l.title} className="flex gap-4">
+                <span className="grid size-10 shrink-0 place-items-center rounded-full bg-bean-50/10 text-tan">
+                  <l.Icon className="size-4" />
                 </span>
                 <div>
-                  <div className="text-2xs font-bold uppercase tracking-[.18em] text-muted-foreground">
-                    {l.title}
-                  </div>
+                  <div className="text-2xs font-bold text-tan ltr:uppercase ltr:tracking-[.16em]">{l.title}</div>
                   <div className="mt-1 font-semibold" dir={l.dir}>{l.body}</div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">{l.sub}</div>
+                  <div className="mt-0.5 text-xs text-bean-50/55">{l.sub}</div>
                 </div>
-              </Card>
-            </Reveal>
-          ))}
+              </li>
+            ))}
+          </ul>
         </div>
 
-        <Reveal delay={120}>
-          <Card className="glass rounded-panel border-0 p-7 sm:p-10">
+        <Reveal>
+          <div className="bg-card p-7 sm:p-10">
             {sent ? (
               <div className="flex flex-col items-center py-16 text-center">
-                <span className="mb-6 grid size-16 place-items-center rounded-pill bg-success/15 text-success">
+                <span className="mb-6 grid size-16 place-items-center rounded-t-full bg-moss-200 text-moss-600">
                   <Check className="size-8" />
                 </span>
-                <h2 className="headline text-xl">{t.messageReceived}</h2>
+                <h2 className="sf-display text-xl text-bean-900">{t.messageReceived}</h2>
                 <p className="mt-2.5 max-w-sm text-xs text-muted-foreground">{t.messageReceivedBody}</p>
                 <Button
-                  variant="glass"
+                  variant="line"
                   className="mt-7"
                   onClick={() => {
                     setSent(false)
@@ -118,6 +119,7 @@ export default function Contact() {
                       })}
                       placeholder={t.enquiryNamePh}
                       aria-invalid={Boolean(errors.name)}
+                      className="rounded-md bg-background"
                     />
                   </Field>
                   <Field label={t.email} error={errors.email?.message}>
@@ -132,12 +134,13 @@ export default function Contact() {
                       })}
                       placeholder="you@example.com"
                       aria-invalid={Boolean(errors.email)}
+                      className="rounded-md bg-background"
                     />
                   </Field>
                 </div>
 
                 <div>
-                  <span className="mb-2.5 block text-2xs font-bold uppercase tracking-[.16em] text-muted-foreground">
+                  <span className="mb-2.5 block text-2xs font-bold text-muted-foreground ltr:uppercase ltr:tracking-[.16em]">
                     {t.whatAbout}
                   </span>
                   <div className="flex flex-wrap gap-1.5">
@@ -146,7 +149,7 @@ export default function Contact() {
                         key={s}
                         type="button"
                         size="xs"
-                        variant={subject === s ? 'brand' : 'glass'}
+                        variant={subject === s ? 'ink' : 'line'}
                         onClick={() => setSubject(s)}
                         aria-pressed={subject === s}
                       >
@@ -165,10 +168,11 @@ export default function Contact() {
                     })}
                     placeholder={t.enquiryMsgGeneric}
                     aria-invalid={Boolean(errors.message)}
+                    className="rounded-md bg-background"
                   />
                 </Field>
 
-                <Button type="submit" variant="brand" size="lg" className="w-full" disabled={isSubmitting}>
+                <Button type="submit" variant="ink" size="lg" className="w-full" disabled={isSubmitting}>
                   {isSubmitting ? <Loader2 className="animate-spin" /> : <Send />}
                   {t.sendEnquiry}
                 </Button>
@@ -176,7 +180,7 @@ export default function Contact() {
                 <p className="text-center text-2xs text-muted-foreground">{t.contactFormNote}</p>
               </form>
             )}
-          </Card>
+          </div>
         </Reveal>
       </div>
     </div>
@@ -186,7 +190,7 @@ export default function Contact() {
 function Field({ label, error, children }) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-2xs font-bold uppercase tracking-[.16em] text-muted-foreground">
+      <Label className="text-2xs font-bold text-muted-foreground ltr:uppercase ltr:tracking-[.16em]">
         {label}
       </Label>
       {children}

@@ -20,7 +20,7 @@ export default function Search() {
         eyebrow={t.searchShortcut}
         title={
           <>
-            {t.searchResults} <span className="gold-text">“{q}”</span>
+            {t.searchResults} <span className="text-primary">“{q}”</span>
           </>
         }
         sub={total === 0 ? t.searchNoMatch : undefined}
@@ -34,7 +34,7 @@ export default function Search() {
             <Link
               key={c.slug}
               to={`/category/${c.slug}`}
-              className="glass-soft rounded-full px-3 py-1.5 text-xs font-medium transition hover:text-primary"
+              className="rounded-full border border-bean-900/15 px-3 py-1.5 text-xs font-semibold text-bean-900 transition-colors hover:border-bean-900 hover:bg-bean-900 hover:text-bean-50"
             >
               {c.name}
             </Link>
@@ -48,7 +48,7 @@ export default function Search() {
         emptyTitle={`${t.searchNoMatch} “${q}”`}
         emptySub={t.widenFilters}
         emptyAction={
-          <Button asChild variant="brand">
+          <Button asChild variant="ink">
             <Link to="/shop">{t.startBrowsing}</Link>
           </Button>
         }

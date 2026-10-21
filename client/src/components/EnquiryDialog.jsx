@@ -66,24 +66,24 @@ export default function EnquiryDialog({ product, trigger, defaultSubject }) {
     <Dialog open={open} onOpenChange={close}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
 
-      <DialogContent className="glass rounded-panel border-0 sm:max-w-lg">
+      <DialogContent className="rounded-2xl border-0 bg-background sm:max-w-lg">
         {sent ? (
           <div className="flex flex-col items-center py-10 text-center">
-            <span className="mb-5 grid size-14 place-items-center rounded-pill bg-success/15 text-success">
+            <span className="mb-5 grid size-16 place-items-center rounded-t-full bg-moss-200 text-moss-600">
               <Check className="size-7" />
             </span>
-            <DialogTitle className="headline text-xl">{t.messageSent}</DialogTitle>
+            <DialogTitle className="sf-display text-xl text-bean-900">{t.messageSent}</DialogTitle>
             <DialogDescription className="mt-2 max-w-sm text-xs">
               {product ? t.enquiryHold : t.enquiryReply}
             </DialogDescription>
-            <Button variant="glass" className="mt-7" onClick={() => close(false)}>
+            <Button variant="line" className="mt-7" onClick={() => close(false)}>
               {t.close}
             </Button>
           </div>
         ) : (
           <>
             <DialogHeader>
-              <DialogTitle className="headline text-xl">
+              <DialogTitle className="sf-display text-xl text-bean-900">
                 {product ? t.reserveOrAsk : t.sendUsMessage}
               </DialogTitle>
               <DialogDescription className="text-xs">
@@ -92,8 +92,8 @@ export default function EnquiryDialog({ product, trigger, defaultSubject }) {
             </DialogHeader>
 
             {product && (
-              <div className="glass-soft flex items-center gap-3 rounded-md p-3">
-                <span className="shot cutout size-12 shrink-0 overflow-hidden rounded-md">
+              <div className="flex items-center gap-3 rounded-md bg-bean-50 p-3">
+                <span className="sf-tile size-12 shrink-0 overflow-hidden rounded-md">
                   <img
                     src={imgUrl(product.img, { w: 96, h: 96 })}
                     alt=""
@@ -101,7 +101,7 @@ export default function EnquiryDialog({ product, trigger, defaultSubject }) {
                   />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="clamp-1 text-xs font-semibold">{product.name}</div>
+                  <div className="clamp-1 text-xs font-semibold text-bean-900">{product.name}</div>
                   <div className="text-2xs text-muted-foreground">{product.brand}</div>
                 </div>
               </div>
@@ -117,6 +117,7 @@ export default function EnquiryDialog({ product, trigger, defaultSubject }) {
                     })}
                     placeholder={t.enquiryNamePh}
                     aria-invalid={Boolean(errors.name)}
+                    className="rounded-md bg-card"
                   />
                 </Field>
                 <Field label={t.email} error={errors.email?.message}>
@@ -128,12 +129,13 @@ export default function EnquiryDialog({ product, trigger, defaultSubject }) {
                     })}
                     placeholder="you@example.com"
                     aria-invalid={Boolean(errors.email)}
+                    className="rounded-md bg-card"
                   />
                 </Field>
               </div>
 
               <div>
-                <span className="mb-2 block text-2xs font-bold uppercase tracking-[.14em] text-muted-foreground">
+                <span className="mb-2 block text-2xs font-bold text-muted-foreground ltr:uppercase ltr:tracking-[.14em]">
                   {t.whatAbout}
                 </span>
                 <div className="flex flex-wrap gap-1.5">
@@ -142,7 +144,7 @@ export default function EnquiryDialog({ product, trigger, defaultSubject }) {
                       key={s}
                       type="button"
                       size="xs"
-                      variant={subject === s ? 'brand' : 'glass'}
+                      variant={subject === s ? 'ink' : 'line'}
                       onClick={() => setSubject(s)}
                       aria-pressed={subject === s}
                     >
@@ -161,10 +163,11 @@ export default function EnquiryDialog({ product, trigger, defaultSubject }) {
                   })}
                   placeholder={product ? t.enquiryMsgPh : t.enquiryMsgGeneric}
                   aria-invalid={Boolean(errors.message)}
+                  className="rounded-md bg-card"
                 />
               </Field>
 
-              <Button type="submit" variant="brand" size="lg" className="w-full" disabled={isSubmitting}>
+              <Button type="submit" variant="ink" size="lg" className="w-full" disabled={isSubmitting}>
                 {isSubmitting ? <Loader2 className="animate-spin" /> : <Send />}
                 {product ? t.sendReservation : t.sendEnquiry}
               </Button>
@@ -179,7 +182,7 @@ export default function EnquiryDialog({ product, trigger, defaultSubject }) {
 function Field({ label, error, children }) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-2xs font-bold uppercase tracking-[.14em] text-muted-foreground">
+      <Label className="text-2xs font-bold text-muted-foreground ltr:uppercase ltr:tracking-[.14em]">
         {label}
       </Label>
       {children}

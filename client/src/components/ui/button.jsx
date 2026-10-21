@@ -34,6 +34,15 @@ const buttonVariants = cva(
         // rather than trusting a translucent tint over an unknown image
         overlay:
           'rounded-pill bg-black/45 text-white backdrop-blur-md hover:scale-110 hover:bg-black/65',
+        // ---- storefront: flat, square-shouldered ----------------------
+        ink: 'bg-bean-900 text-bean-50 hover:bg-primary active:translate-y-px',
+        caramel: 'bg-primary text-primary-foreground hover:bg-caramel-700 active:translate-y-px',
+        line:
+          'border border-bean-900/25 bg-transparent text-bean-900 ' +
+          'hover:border-bean-900 hover:bg-bean-900 hover:text-bean-50',
+        'line-light':
+          'border border-bean-50/30 bg-transparent text-bean-50 ' +
+          'hover:border-bean-50 hover:bg-bean-50 hover:text-bean-900',
         // ---- stock shadcn ---------------------------------------------
         default: 'bg-primary text-primary-foreground shadow hover:bg-primary/90',
         destructive: 'bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90',

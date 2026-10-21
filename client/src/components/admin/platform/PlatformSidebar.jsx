@@ -18,7 +18,8 @@ export function platformSectionsFor(partnerSlug) {
     return [
       ["connection", "miswagApiConnection"],
       ["syncAll", "miswagSyncAllTitle"],
-      ...PLATFORM_SECTIONS,
+      ["mappingCategories", "miswagMappingCategories"],
+      ...PLATFORM_SECTIONS.filter(([id]) => id !== "mapping"),
     ];
   }
   return PLATFORM_SECTIONS;
@@ -102,7 +103,9 @@ export function PlatformNavBody({ nav, t, onNavigate }) {
             active={nav?.tab === id}
             disabled={!nav?.setTab}
             label={t[labelKey]}
-            badge={id === "mapping" ? Number(nav?.noticeCount) || 0 : 0}
+            badge={
+              id === "mapping" || id === "mappingCategories" ? Number(nav?.noticeCount) || 0 : 0
+            }
             onClick={() => {
               nav?.setTab?.(id);
               onNavigate?.();
