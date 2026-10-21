@@ -3,7 +3,7 @@ import { PlatformTaxonomyNotice } from "../models/PlatformTaxonomyNotice.js";
 import { Product } from "../models/Product.js";
 import { discoverBrownCollections } from "../utils/brownTaxonomy.js";
 import { productScopeIds } from "../utils/platformEligibility.js";
-import { isTaxonomyComplete } from "../utils/platformTaxonomyFields.js";
+import { isTaxonomyComplete, miswagIsLargeFlag } from "../utils/platformTaxonomyFields.js";
 import { resolveTaxonomyNotices } from "../utils/taxonomyNotices.js";
 import { MiswagError, miswagCategoryLevel } from "./miswag.js";
 
@@ -43,13 +43,45 @@ export function isValidMiswagMappedCategoryId(categoryId) {
   return Boolean(id) && (level === "L3" || level === "L4");
 }
 
-export function normalizeMiswagMappingValues(input = {}) {
-  const categoryId = clean(input.categoryId || input.miswagCategoryId || input.id);
+function categoryAttempted(input = {}) {
+  return ["categoryId", "miswagCategoryId", "id"].some((key) =>
+    Object.prototype.hasOwnProperty.call(input, key)
+  );
+}
+
+function isLargeAttempted(input = {}) {
+  return (
+    Object.prototype.hasOwnProperty.call(input, "isLarge") ||
+    Object.prototype.hasOwnProperty.call(input, "is_large")
+  );
+}
+
+function isLargeInput(input = {}) {
+  return Object.prototype.hasOwnProperty.call(input, "isLarge") ? input.isLarge : input.is_large;
+}
+
+export function normalizeMiswagMappingValues(input = {}, previous = {}) {
+  const attempted = categoryAttempted(input);
+  const categoryId = attempted
+    ? clean(input.categoryId || input.miswagCategoryId || input.id)
+    : clean(previous.categoryId);
   if (!isValidMiswagMappedCategoryId(categoryId)) {
     throw new MiswagError("Miswag category_id must be an L3-... or L4-... id.", {
       status: 400,
       code: "invalid_category_id",
     });
+  }
+  const isLarge = isLargeAttempted(input)
+    ? miswagIsLargeFlag(isLargeInput(input))
+    : miswagIsLargeFlag(previous.isLarge);
+  if (!attempted) {
+    return {
+      categoryId,
+      categoryName: clean(previous.categoryName).slice(0, 500),
+      categoryPath: clean(previous.categoryPath).slice(0, 1000),
+      categoryLevel: clean(previous.categoryLevel) || miswagCategoryLevel(categoryId),
+      isLarge,
+    };
   }
   const level = miswagCategoryLevel(categoryId) || clean(input.categoryLevel || input.level);
   return {
@@ -57,6 +89,17 @@ export function normalizeMiswagMappingValues(input = {}) {
     categoryName: clean(input.categoryName || input.name).slice(0, 500),
     categoryPath: clean(input.categoryPath || input.path).slice(0, 1000),
     categoryLevel: level,
+    isLarge,
+  };
+}
+
+function publicMiswag(values) {
+  return {
+    categoryId: clean(values?.categoryId),
+    categoryName: clean(values?.categoryName),
+    categoryPath: clean(values?.categoryPath),
+    categoryLevel: clean(values?.categoryLevel) || miswagCategoryLevel(values?.categoryId),
+    isLarge: miswagIsLargeFlag(values?.isLarge),
   };
 }
 
@@ -75,6 +118,7 @@ export async function loadMiswagCategoryMappingMap() {
       categoryName: clean(values.categoryName),
       categoryPath: clean(values.categoryPath),
       categoryLevel: clean(values.categoryLevel) || miswagCategoryLevel(categoryId),
+      isLarge: miswagIsLargeFlag(values.isLarge),
     });
   }
   return map;
@@ -104,9 +148,17 @@ export function resolveMappedMiswagCategory(product, mappingByCollection) {
       name: mapped.categoryName || mapped.categoryId,
       path: mapped.categoryPath || "",
       level: mapped.categoryLevel || miswagCategoryLevel(mapped.categoryId),
+      isLarge: miswagIsLargeFlag(mapped.isLarge),
       source: "manual_mapping",
     },
   };
+}
+
+/** Large Product for a product's BrownStore collection. Unmapped collections are false. */
+export function resolveMiswagCollectionIsLarge(product, mappingByCollection) {
+  const collectionId = productScopeIds(product).collection;
+  if (!collectionId) return false;
+  return miswagIsLargeFlag(mappingByCollection?.get?.(collectionId)?.isLarge);
 }
 
 async function countOpenCollectionNotices() {
@@ -165,6 +217,7 @@ export async function listMiswagCategoryMappings({
     const values = byCollection.get(id) || {};
     const mapped = isTaxonomyComplete(PARTNER, values);
     const path = joinPath([row.brownCategoryName, row.brownSubCategoryName, row.brownCollectionName]);
+    const isLarge = miswagIsLargeFlag(values.isLarge);
     return {
       id,
       brownCollectionId: id,
@@ -175,14 +228,8 @@ export async function listMiswagCategoryMappings({
       productCount: Number(row.productCount) || 0,
       mapped,
       status: mapped ? "mapped" : "missing",
-      miswag: mapped
-        ? {
-            categoryId: clean(values.categoryId),
-            categoryName: clean(values.categoryName),
-            categoryPath: clean(values.categoryPath),
-            categoryLevel: clean(values.categoryLevel) || miswagCategoryLevel(values.categoryId),
-          }
-        : null,
+      isLarge,
+      miswag: mapped ? publicMiswag(values) : null,
       values,
     };
   });
@@ -234,7 +281,11 @@ export async function saveMiswagCategoryMapping(brownCollectionId, input = {}) {
   if (!collectionId) {
     throw new MiswagError("Choose a BrownStore collection.", { status: 400, code: "missing_collection" });
   }
-  const values = normalizeMiswagMappingValues(input);
+  const existing = await PlatformTaxonomyConfig.findOne({
+    partner: PARTNER,
+    brownCollectionId: collectionId,
+  }).lean();
+  const values = normalizeMiswagMappingValues(input, existing?.values || {});
   const exists = await Product.exists({
     $expr: {
       $eq: [{ $toString: { $ifNull: ["$collectionName._id", ""] } }, collectionId],
@@ -260,17 +311,14 @@ export async function saveMiswagCategoryMapping(brownCollectionId, input = {}) {
   }
 
   const noticeCount = await countOpenCollectionNotices();
+  const miswag = publicMiswag(saved.values);
   return {
     id: collectionId,
     brownCollectionId: collectionId,
     mapped: isTaxonomyComplete(PARTNER, saved.values),
+    isLarge: miswag.isLarge,
     values: saved.values || {},
-    miswag: {
-      categoryId: clean(saved.values?.categoryId),
-      categoryName: clean(saved.values?.categoryName),
-      categoryPath: clean(saved.values?.categoryPath),
-      categoryLevel: clean(saved.values?.categoryLevel) || miswagCategoryLevel(saved.values?.categoryId),
-    },
+    miswag,
     noticeCount,
   };
 }

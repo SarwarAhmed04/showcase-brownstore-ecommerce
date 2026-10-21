@@ -196,6 +196,7 @@ async function evaluateOneProduct(doc, context) {
     categoryId: category.category.id,
     brandId: brand.brand.id,
     brandName: brand.brand.name,
+    isLarge: category.category.isLarge === true,
     barcodeAssignments,
   });
 
@@ -225,6 +226,7 @@ async function evaluateOneProduct(doc, context) {
     payload: built.payload,
     platformPrice: built.platformPrice,
     categoryId: category.category.id,
+    isLarge: built.payload?.is_large === true,
     brandId: brand.brand.id,
   };
 }

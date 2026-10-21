@@ -12,6 +12,7 @@ const PLATFORM_TAXONOMY_FIELDS = {
     { key: "categoryName", label: "Miswag category name", required: false },
     { key: "categoryPath", label: "Miswag category path", required: false },
     { key: "categoryLevel", label: "Miswag category level", required: false },
+    // isLarge is stored on the same values object. It is not a completeness field.
   ],
 };
 
@@ -60,4 +61,13 @@ export function sanitizeTaxonomyValues(partner, input) {
     }
   }
   return values;
+}
+
+/**
+ * Miswag Large Product flag.
+ * Missing values and anything other than a real true-like input resolve to false.
+ * The return value is always a boolean.
+ */
+export function miswagIsLargeFlag(value) {
+  return value === true || value === 1 || value === "1" || value === "true";
 }

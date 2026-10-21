@@ -2,6 +2,7 @@ import { Commission } from "../models/Commission.js";
 import { Product } from "../models/Product.js";
 import { partnerPricePreview } from "../utils/partnerCatalog.js";
 import { evaluatePlatformEligibility } from "../utils/platformEligibility.js";
+import { miswagIsLargeFlag } from "../utils/platformTaxonomyFields.js";
 import { loadEligibilityContext } from "../utils/platformTaxonomy.js";
 import { cdnUrl, toResolvedProduct } from "../utils/productView.js";
 import {
@@ -13,6 +14,10 @@ import {
   sanitizeMiswagText,
   searchBrands,
 } from "./miswag.js";
+import {
+  loadMiswagCategoryMappingMap,
+  resolveMiswagCollectionIsLarge,
+} from "./miswagCategoryMapping.js";
 import { ensureProductVariationBarcodes } from "./miswagTestBarcodes.js";
 
 export const MISWAG_ITEM_CREATE_PATH = "/v1/items/bulk-create";
@@ -288,6 +293,7 @@ export function buildMiswagTestPayload(
     categoryId = "",
     brandId = "",
     brandName = "",
+    isLarge = false,
     origin = mediaPublicOrigin(),
     barcodeAssignments = null,
   } = {}
@@ -436,6 +442,7 @@ export function buildMiswagTestPayload(
     ...(highlight ? { highlight } : {}),
     ...(description ? { description } : {}),
     ...(categoryCheck.ok ? { category_id: categoryCheck.categoryId } : {}),
+    is_large: miswagIsLargeFlag(isLarge),
     ...(brandCheck.ok ? { brand_id: brandCheck.brandId } : {}),
     price: Number.isFinite(price) ? price : 0,
     currency: "IQD",
@@ -486,6 +493,7 @@ export function buildMiswagTestPayload(
       ? { id: brandCheck.brandId, name: String(brandName || entityName(resolved.brand) || "") }
       : null,
     categoryId: categoryCheck.ok ? categoryCheck.categoryId : "",
+    isLarge: miswagIsLargeFlag(isLarge),
   };
 }
 
@@ -552,19 +560,22 @@ export async function previewMiswagTestProduct({
   const doc = await loadProductOrThrow(productId);
   const storePriceBefore = Number(toResolvedProduct(doc)?.sellingPrice) || 0;
 
-  const [rules, eligibilityContext, brand] = await Promise.all([
+  const [rules, eligibilityContext, brand, mappingByCollection] = await Promise.all([
     Commission.find({ partner: "miswag", isActive: { $ne: false } }).lean(),
     loadEligibilityContext("miswag"),
     tryResolveBrandId(doc, brandId),
+    loadMiswagCategoryMappingMap(),
   ]);
 
   const eligibility = evaluatePlatformEligibility(doc, eligibilityContext);
   const barcodeAssignments = await ensureProductVariationBarcodes(doc);
+  const isLarge = resolveMiswagCollectionIsLarge(doc, mappingByCollection);
   const built = buildMiswagTestPayload(doc, {
     rules,
     categoryId,
     brandId: brand.brandId || brandId,
     brandName: brand.brandName,
+    isLarge,
     barcodeAssignments,
   });
 
@@ -615,6 +626,8 @@ export async function previewMiswagTestProduct({
     brand: built.brand,
     brandResolution: brand,
     categoryId: built.categoryId || String(categoryId || "").trim(),
+    isLarge: built.payload?.is_large === true,
+    largeProduct: built.payload?.is_large === true ? "Yes" : "No",
     categoryRequired: true,
     categoryNote:
       "Miswag category_id is mandatory (L3-… or L4-…). Enter a temporary ID for this test only — no mapping system is saved.",

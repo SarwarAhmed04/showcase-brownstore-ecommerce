@@ -8,6 +8,42 @@ function label(name, lang) {
   return name[lang] || name.en || name.ku || name.ar || "";
 }
 
+function LargeProductToggle({ on, disabled, onToggle, labelText }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <span className="text-xs font-semibold text-brown/60">{labelText}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={labelText}
+        data-on={on ? "true" : "false"}
+        disabled={disabled}
+        onClick={onToggle}
+        className={`miswag-large-toggle inline-flex h-11 items-center gap-2 rounded-full py-1 pe-3 ps-1 text-xs font-bold tracking-wide ring-1 transition disabled:opacity-50 ${
+          on
+            ? "bg-emerald-600 text-white ring-emerald-700"
+            : "bg-white text-brown ring-brown/15"
+        }`}
+      >
+        <span
+          className="relative h-6 w-11 shrink-0 rounded-full"
+          style={{ background: on ? "rgba(255,255,255,0.28)" : "#a1a1aa" }}
+        >
+          <span
+            className="absolute top-0.5 h-5 w-5 rounded-full shadow"
+            style={{
+              background: "#ffffff",
+              insetInlineStart: on ? "1.35rem" : "0.125rem",
+            }}
+          />
+        </span>
+        {on ? "ON" : "OFF"}
+      </button>
+    </div>
+  );
+}
+
 export default function MiswagMappingCategories({ t, lang, onNotices }) {
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
@@ -18,6 +54,7 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState("");
   const [drafts, setDrafts] = useState({});
+  const [largeDrafts, setLargeDrafts] = useState({});
   const [pickerFor, setPickerFor] = useState("");
   const [categoryQuery, setCategoryQuery] = useState("");
   const [categoryHits, setCategoryHits] = useState([]);
@@ -32,10 +69,13 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
         if (ignore) return;
         setData(next);
         const nextDrafts = {};
+        const nextLarge = {};
         for (const row of next.rows || []) {
           nextDrafts[row.id] = row.miswag?.categoryId || "";
+          nextLarge[row.id] = row.isLarge === true;
         }
         setDrafts(nextDrafts);
+        setLargeDrafts(nextLarge);
         onNotices?.(Number(next.noticeCount) || 0);
       })
       .catch((err) => {
@@ -72,6 +112,7 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
                   ...item,
                   mapped,
                   status: mapped ? "mapped" : "missing",
+                  isLarge: result.isLarge === true,
                   miswag: result.miswag || null,
                   values: result.values || item.values,
                 }
@@ -80,6 +121,7 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
         };
       });
       setDrafts((current) => ({ ...current, [row.id]: result.miswag?.categoryId || "" }));
+      setLargeDrafts((current) => ({ ...current, [row.id]: result.isLarge === true }));
       onNotices?.(Number(result.noticeCount) || 0);
       setMessage(t.mappingSaved);
       setPickerFor("");
@@ -234,8 +276,8 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
                 </StatusBadge>
               </div>
 
-              <div className="mt-4 flex flex-wrap items-end gap-2">
-                <label className="block min-w-[12rem] flex-1 text-xs font-semibold text-brown/60">
+              <div className="mt-4 space-y-3">
+                <label className="block text-xs font-semibold text-brown/60">
                   {t.miswagCategoryIdManual}
                   <input
                     dir="ltr"
@@ -247,27 +289,45 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
                     className="mt-1 w-full rounded-xl border border-brown/10 bg-white px-3 py-2 text-sm font-medium text-brown"
                   />
                 </label>
-                <button
-                  type="button"
-                  disabled={saving === row.id || !String(drafts[row.id] || "").trim()}
-                  onClick={() => save(row, { categoryId: drafts[row.id] })}
-                  className="rounded-full bg-brown px-4 py-2 text-xs font-semibold text-cream disabled:opacity-50"
-                >
-                  {row.mapped ? t.updateSetup : t.saveSetup}
-                </button>
-                <button
-                  type="button"
-                  disabled={finding && pickerFor === row.id}
-                  onClick={() => {
-                    const term = label(row.name, lang);
-                    setPickerFor(row.id);
-                    setCategoryQuery(term);
-                    findCategories(row.id, term);
-                  }}
-                  className="rounded-full bg-white px-4 py-2 text-xs font-semibold text-brown ring-1 ring-brown/10 disabled:opacity-50"
-                >
-                  {finding && pickerFor === row.id ? t.loading : t.miswagPickCategory}
-                </button>
+                <LargeProductToggle
+                  on={largeDrafts[row.id] === true}
+                  disabled={saving === row.id}
+                  labelText={t.miswagLargeProduct || "Large Product"}
+                  onToggle={() =>
+                    setLargeDrafts((current) => ({
+                      ...current,
+                      [row.id]: current[row.id] !== true,
+                    }))
+                  }
+                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={saving === row.id || !String(drafts[row.id] || "").trim()}
+                    onClick={() =>
+                      save(row, {
+                        categoryId: drafts[row.id],
+                        isLarge: largeDrafts[row.id] === true,
+                      })
+                    }
+                    className="rounded-full bg-brown px-4 py-2 text-xs font-semibold text-cream disabled:opacity-50"
+                  >
+                    {row.mapped ? t.updateSetup : t.saveSetup}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={finding && pickerFor === row.id}
+                    onClick={() => {
+                      const term = label(row.name, lang);
+                      setPickerFor(row.id);
+                      setCategoryQuery(term);
+                      findCategories(row.id, term);
+                    }}
+                    className="rounded-full bg-white px-4 py-2 text-xs font-semibold text-brown ring-1 ring-brown/10 disabled:opacity-50"
+                  >
+                    {finding && pickerFor === row.id ? t.loading : t.miswagPickCategory}
+                  </button>
+                </div>
               </div>
 
               {pickerFor === row.id ? (
@@ -305,6 +365,7 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
                               categoryName: hit.name || hit.nameEn || hit.nameAr,
                               categoryPath: hit.path,
                               categoryLevel: hit.level,
+                              isLarge: largeDrafts[row.id] === true,
                             })
                           }
                           className="w-full rounded-xl px-3 py-2 text-start hover:bg-cream"

@@ -331,6 +331,7 @@ export default function MiswagSyncOneProduct({ t, lang, syncEnabled }) {
               [t.miswagPreviewFinalPrice, preview.pricing?.finalRoundedPrice],
               [t.miswagPreviewStock, product?.stock],
               [t.miswagPreviewEligible, preview.eligibility?.eligible ? t.yes : t.no],
+              [t.miswagLargeProduct || "Large Product", preview.largeProduct === "Yes" ? "Yes" : "No"],
             ].map(([label, value]) => (
               <div key={label} className="rounded-2xl bg-cream px-4 py-3">
                 <dt className="text-[11px] font-semibold tracking-wide text-brown/45 uppercase">{label}</dt>

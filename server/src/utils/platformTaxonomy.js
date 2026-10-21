@@ -17,6 +17,7 @@ import {
 } from "./platformEligibility.js";
 import {
   isTaxonomyComplete,
+  miswagIsLargeFlag,
   requiredTaxonomyKeys,
   sanitizeTaxonomyValues,
   taxonomyFieldsFor,
@@ -430,6 +431,22 @@ export async function saveCategorySetup(partner, brownCollectionId, input) {
   const collectionId = cleanText(brownCollectionId);
   if (!collectionId) throw inputError("Choose a BrownStore collection");
   const values = sanitizeTaxonomyValues(partner, input);
+  if (String(partner || "").toLowerCase() === "miswag") {
+    const previous = await PlatformTaxonomyConfig.findOne({
+      partner,
+      brownCollectionId: collectionId,
+    })
+      .select("values")
+      .lean();
+    const source = input && typeof input === "object" ? input : {};
+    const provided =
+      Object.prototype.hasOwnProperty.call(source, "isLarge") ||
+      Object.prototype.hasOwnProperty.call(source, "is_large");
+    const raw = Object.prototype.hasOwnProperty.call(source, "isLarge")
+      ? source.isLarge
+      : source.is_large;
+    values.isLarge = provided ? miswagIsLargeFlag(raw) : miswagIsLargeFlag(previous?.values?.isLarge);
+  }
   const collection = await Product.exists({
     $expr: {
       $eq: [{ $toString: { $ifNull: ["$collectionName._id", ""] } }, collectionId],

@@ -232,14 +232,20 @@ miswagConnectionRouter.get("/platforms/miswag/mapping-categories", async (req, r
 miswagConnectionRouter.put("/platforms/miswag/mapping-categories/:brownCollectionId", async (req, res) => {
   try {
     const body = req.body || {};
-    res.json(
-      await saveMiswagCategoryMapping(req.params.brownCollectionId, {
-        categoryId: body.categoryId || body.miswagCategoryId || body.id,
-        categoryName: body.categoryName || body.name,
-        categoryPath: body.categoryPath || body.path,
-        categoryLevel: body.categoryLevel || body.level,
-      })
-    );
+    const input = {};
+    const categoryAttempted =
+      Object.prototype.hasOwnProperty.call(body, "categoryId") ||
+      Object.prototype.hasOwnProperty.call(body, "miswagCategoryId") ||
+      Object.prototype.hasOwnProperty.call(body, "id");
+    if (categoryAttempted) {
+      input.categoryId = body.categoryId || body.miswagCategoryId || body.id || "";
+      input.categoryName = body.categoryName || body.name || "";
+      input.categoryPath = body.categoryPath || body.path || "";
+      input.categoryLevel = body.categoryLevel || body.level || "";
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "isLarge")) input.isLarge = body.isLarge;
+    else if (Object.prototype.hasOwnProperty.call(body, "is_large")) input.is_large = body.is_large;
+    res.json(await saveMiswagCategoryMapping(req.params.brownCollectionId, input));
   } catch (err) {
     fail(res, err, "Failed to save Miswag category mapping");
   }
