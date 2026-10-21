@@ -96,68 +96,49 @@ export function BannerSlider({ banners }) {
   const current = slides[Math.min(index, slides.length - 1)];
 
   return (
-    <section className="relative z-0 overflow-hidden bg-bean-900">
-      <div className="relative aspect-[5/4] sm:aspect-[16/9] lg:aspect-[2.4/1]">
-        {slides.map((item) => (
-          <BannerFrame
-            key={item.slot}
-            banner={item}
-            className={`absolute inset-0 transition-opacity duration-700 ${
-              item.slot === current.slot ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0"
-            }`}
-          >
-            <img
-              src={imgUrl(item.image)}
-              alt=""
-              loading={item.slot === slides[0]?.slot ? "eager" : "lazy"}
-              decoding="async"
-              fetchPriority={item.slot === current.slot ? "high" : "low"}
-              className="h-full w-full object-cover"
-            />
-              <BannerCopy banner={item} className="pb-20 sm:pb-24" />
-          </BannerFrame>
-        ))}
-      </div>
-      {slides.length > 1 ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-5 z-10 sm:bottom-7">
-          <div
-            className="container-x pointer-events-auto grid max-w-sm gap-4"
-            style={{ gridTemplateColumns: `repeat(${slides.length}, minmax(0, 1fr))` }}
-          >
-            {slides.map((item, i) => (
-              <button
+    <section className="pt-24 sm:pt-[6.75rem] lg:pt-28">
+      <div className="container-x">
+        <div className="relative overflow-hidden rounded-2xl bg-white ring-1 ring-bean-900/10">
+          <div className="relative aspect-[8/3]">
+            {slides.map((item) => (
+              <BannerFrame
                 key={item.slot}
-                type="button"
-                aria-label={`Banner ${i + 1}`}
-                aria-current={i === index ? true : undefined}
-                onClick={() => setIndex(i)}
-                className="group text-start"
+                banner={item}
+                className={`absolute inset-0 transition-opacity duration-700 ${
+                  item.slot === current.slot ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0"
+                }`}
               >
-                <span className="block h-0.5 overflow-hidden bg-bean-50/20">
-                  <span
-                    key={i === index ? `on-${index}` : "off"}
-                    className={cn(
-                      "block h-full origin-left bg-tan rtl:origin-right",
-                      i < index && "w-full",
-                      i > index && "w-0",
-                      i === index && (reducedMotion ? "w-full" : "w-full animate-progress")
-                    )}
-                  />
-                </span>
-                <span
-                  dir="ltr"
-                  className={cn(
-                    "mt-2.5 block font-display text-xs font-bold tabular-nums transition-colors",
-                    i === index ? "text-bean-50" : "text-bean-50/40 group-hover:text-bean-50/70"
-                  )}
-                >
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-              </button>
+                <img
+                  src={imgUrl(item.image)}
+                  alt=""
+                  loading={item.slot === slides[0]?.slot ? "eager" : "lazy"}
+                  decoding="async"
+                  fetchPriority={item.slot === current.slot ? "high" : "low"}
+                  className="h-full w-full object-cover"
+                />
+                <BannerCopy banner={item} className="pb-8 sm:pb-10" />
+              </BannerFrame>
             ))}
           </div>
+          {slides.length > 1 ? (
+            <div className="absolute inset-x-0 bottom-3 z-10 flex items-center justify-center gap-1.5 sm:bottom-4">
+              {slides.map((item, i) => (
+                <button
+                  key={item.slot}
+                  type="button"
+                  aria-label={`Banner ${i + 1}`}
+                  aria-current={i === index ? true : undefined}
+                  onClick={() => setIndex(i)}
+                  className={cn(
+                    "rounded-full shadow-[0_1px_2px_rgb(0_0_0/0.45)] transition-all",
+                    i === index ? "size-2.5 bg-white" : "size-2 bg-white/55 hover:bg-white/85"
+                  )}
+                />
+              ))}
+            </div>
+          ) : null}
         </div>
-      ) : null}
+      </div>
     </section>
   );
 }
