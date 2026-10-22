@@ -33,7 +33,12 @@ export default function ProductRail({ title, eyebrow, sub, items, to }) {
         />
       </div>
 
-      <div ref={rail.ref} className="rail container-x scroll-px-4 sm:scroll-px-6 lg:scroll-px-10">
+      <div
+        ref={rail.ref}
+        data-fade-start={rail.canPrev || undefined}
+        data-fade-end={rail.canNext || undefined}
+        className="rail container-x scroll-px-4 sm:scroll-px-6 lg:scroll-px-10"
+      >
         {items.map((p) => (
           <ProductCard key={p.id} product={p} className={CARD} compact />
         ))}

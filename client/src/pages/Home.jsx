@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { RotateCcw, ShieldCheck, Sparkles, Truck } from 'lucide-react'
 import Hero from '../components/Hero'
 import ProductRail from '../components/ProductRail'
 import CategoryShowcase from '../components/CategoryShowcase'
@@ -11,36 +10,6 @@ import { ArrowLink, Reveal, SectionHead } from '../components/ui'
 import { useCatalog } from '../lib/catalogStore'
 import { useLang } from '../context/LangContext'
 import { api } from '../api'
-
-const PROMISES = [
-  { Icon: Truck, key: 'featureSameDay', sub: 'featureSameDaySub' },
-  { Icon: ShieldCheck, key: 'featureCover', sub: 'featureCoverSub' },
-  { Icon: RotateCcw, key: 'featureReturns', sub: 'featureReturnsSub' },
-  { Icon: Sparkles, key: 'featurePicked', sub: 'featurePickedSub' },
-]
-
-function Promises() {
-  const { t } = useLang()
-  return (
-    <section className="border-b border-bean-900/10">
-      <div className="container-x">
-        <ul className="grid grid-cols-2 gap-px bg-bean-900/10 lg:grid-cols-4">
-          {PROMISES.map(({ Icon, key, sub }) => (
-            <li key={key} className="flex items-center gap-3.5 bg-background px-1 py-5 sm:px-5 sm:py-6">
-              <span className="grid size-10 shrink-0 place-items-center rounded-full bg-bean-100 text-primary">
-                <Icon className="size-[18px]" strokeWidth={1.8} />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold leading-tight text-bean-900">{t[key]}</span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">{t[sub]}</span>
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </section>
-  )
-}
 
 function FeaturedBento({ items }) {
   const [lead, ...rest] = items
@@ -124,8 +93,6 @@ export default function Home() {
       ) : (
         <Hero />
       )}
-
-      <Promises />
 
       <section className="container-x pt-14 sm:pt-20">
         <Reveal>

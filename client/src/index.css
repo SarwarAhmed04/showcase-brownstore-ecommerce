@@ -224,10 +224,60 @@
 
   /* ---------- Horizontal rails ---------- */
   .rail {
+    --rail-pad: 1rem;
+    --rail-fade: 7rem;
+    --rail-edge-start: #000;
+    --rail-edge-end: #000;
     @apply flex gap-5 overflow-x-auto pb-3;
     scroll-snap-type: x mandatory;
     scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(
+      to right,
+      var(--rail-edge-start) 0,
+      var(--rail-edge-start) var(--rail-pad),
+      #000 calc(var(--rail-pad) + var(--rail-fade)),
+      #000 calc(100% - var(--rail-pad) - var(--rail-fade)),
+      var(--rail-edge-end) calc(100% - var(--rail-pad)),
+      var(--rail-edge-end) 100%
+    );
+    mask-image: linear-gradient(
+      to right,
+      var(--rail-edge-start) 0,
+      var(--rail-edge-start) var(--rail-pad),
+      #000 calc(var(--rail-pad) + var(--rail-fade)),
+      #000 calc(100% - var(--rail-pad) - var(--rail-fade)),
+      var(--rail-edge-end) calc(100% - var(--rail-pad)),
+      var(--rail-edge-end) 100%
+    );
   }
+  @media (min-width: 640px) {
+    .rail { --rail-pad: 1.5rem; }
+  }
+  @media (min-width: 1024px) {
+    .rail { --rail-pad: 2.5rem; }
+  }
+  html[dir="rtl"] .rail {
+    -webkit-mask-image: linear-gradient(
+      to left,
+      var(--rail-edge-start) 0,
+      var(--rail-edge-start) var(--rail-pad),
+      #000 calc(var(--rail-pad) + var(--rail-fade)),
+      #000 calc(100% - var(--rail-pad) - var(--rail-fade)),
+      var(--rail-edge-end) calc(100% - var(--rail-pad)),
+      var(--rail-edge-end) 100%
+    );
+    mask-image: linear-gradient(
+      to left,
+      var(--rail-edge-start) 0,
+      var(--rail-edge-start) var(--rail-pad),
+      #000 calc(var(--rail-pad) + var(--rail-fade)),
+      #000 calc(100% - var(--rail-pad) - var(--rail-fade)),
+      var(--rail-edge-end) calc(100% - var(--rail-pad)),
+      var(--rail-edge-end) 100%
+    );
+  }
+  .rail[data-fade-start] { --rail-edge-start: transparent; }
+  .rail[data-fade-end] { --rail-edge-end: transparent; }
   .rail::-webkit-scrollbar { display: none; }
   .rail > * { scroll-snap-align: start; flex: 0 0 auto; }
 

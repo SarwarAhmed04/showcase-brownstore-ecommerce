@@ -21,7 +21,6 @@ export default function Footer() {
         <div className="grid gap-12 sm:grid-cols-2 lg:grid-cols-[1.35fr_1fr_1.2fr_1.15fr]">
           <div className="max-w-sm">
             <Wordmark light />
-            <p className="mt-5 text-sm leading-relaxed text-bean-50/60">{t.footerCopy}</p>
           </div>
 
           <div>
