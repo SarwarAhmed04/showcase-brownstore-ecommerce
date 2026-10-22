@@ -162,8 +162,8 @@ function AdminShell() {
       ) : null}
 
       <aside
-        className={`fixed inset-y-0 z-50 flex w-[15.5rem] flex-col border-e border-brown/[0.06] bg-[#f3ebe0] transition-[inset-inline-start] duration-200 ${
-          open ? "start-0" : "-start-[15.5rem] lg:start-0"
+        className={`fixed inset-y-0 z-50 flex w-[13.5rem] flex-col border-e border-brown/[0.06] bg-[#f3ebe0] transition-[inset-inline-start] duration-200 ${
+          open ? "start-0" : "-start-[13.5rem] lg:start-0"
         }`}
       >
         <div className="px-5 pb-4 pt-6">
@@ -241,7 +241,7 @@ function AdminShell() {
         />
       ) : null}
 
-      <div className={`min-w-0 ${platformSlug ? "lg:ms-[30rem]" : "lg:ms-[15.5rem]"}`}>
+      <div className={`min-w-0 ${platformSlug ? "lg:ms-[27rem]" : "lg:ms-[13.5rem]"}`}>
         <header className="sticky top-0 z-30 flex h-16 items-center gap-3 bg-[#faf4ec]/90 px-5 backdrop-blur-md md:px-8">
           <div className="flex shrink-0 items-center gap-2">
             <button

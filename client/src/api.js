@@ -296,12 +296,18 @@ export const api = {
     return request(`/api/admin/platforms/miswag/sync-one/brands?${qs}`);
   },
   miswagSyncAllStatus: () => request("/api/admin/platforms/miswag/sync-all"),
-  miswagSyncAllPreview: () =>
-    request("/api/admin/platforms/miswag/sync-all/preview", { method: "POST", body: "{}" }),
-  miswagSyncAllStart: (confirm = false) =>
+  miswagSyncAllPreview: (strategy = "full") =>
+    request("/api/admin/platforms/miswag/sync-all/preview", {
+      method: "POST",
+      body: JSON.stringify({ strategy: strategy === "changed" ? "changed" : "full" }),
+    }),
+  miswagSyncAllStart: (confirm = false, strategy = "full") =>
     request("/api/admin/platforms/miswag/sync-all/start", {
       method: "POST",
-      body: JSON.stringify({ confirm: confirm === true }),
+      body: JSON.stringify({
+        confirm: confirm === true,
+        strategy: strategy === "changed" ? "changed" : "full",
+      }),
     }),
   miswagSyncAllPause: () =>
     request("/api/admin/platforms/miswag/sync-all/pause", { method: "POST", body: "{}" }),

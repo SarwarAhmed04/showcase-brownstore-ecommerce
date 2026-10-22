@@ -14,6 +14,7 @@ const miswagSyncProductResultSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    changeType: { type: String, enum: ["new", "changed", "unchanged"] },
     httpStatus: { type: Number, default: 0 },
     reason: { type: String, default: "" },
     miswagProductId: { type: String, default: "" },

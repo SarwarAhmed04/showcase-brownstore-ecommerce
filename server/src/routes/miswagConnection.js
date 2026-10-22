@@ -259,9 +259,9 @@ miswagConnectionRouter.get("/platforms/miswag/sync-all", async (_req, res) => {
   }
 });
 
-miswagConnectionRouter.post("/platforms/miswag/sync-all/preview", async (_req, res) => {
+miswagConnectionRouter.post("/platforms/miswag/sync-all/preview", async (req, res) => {
   try {
-    res.json(await runMiswagSyncPreview());
+    res.json(await runMiswagSyncPreview({ strategy: req.body?.strategy }));
   } catch (err) {
     fail(res, err, "Failed to run Miswag sync preview");
   }
@@ -269,7 +269,12 @@ miswagConnectionRouter.post("/platforms/miswag/sync-all/preview", async (_req, r
 
 miswagConnectionRouter.post("/platforms/miswag/sync-all/start", async (req, res) => {
   try {
-    res.json(await startMiswagSyncAll({ confirm: req.body?.confirm === true }));
+    res.json(
+      await startMiswagSyncAll({
+        confirm: req.body?.confirm === true,
+        strategy: req.body?.strategy,
+      })
+    );
   } catch (err) {
     fail(res, err, "Failed to start Miswag sync");
   }

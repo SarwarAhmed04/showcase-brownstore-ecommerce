@@ -19,6 +19,7 @@ import {
   resolveMappedMiswagCategory,
 } from "./miswagCategoryMapping.js";
 import { ensureProductVariationBarcodes } from "./miswagTestBarcodes.js";
+import { classifyMiswagPayload, loadMiswagSyncStateMap, saveMiswagAcceptedPayload } from "./miswagSyncState.js";
 import {
   MISWAG_ITEM_CREATE_PATH,
   buildMiswagTestPayload,
@@ -69,15 +70,29 @@ function classifyBlocked(result) {
   return "otherBlocked";
 }
 
+const RESULT_FIELDS = [
+  "productId",
+  "ibsherId",
+  "externalId",
+  "sku",
+  "status",
+  "httpStatus",
+  "reason",
+  "miswagProductId",
+  "changeType",
+];
+
 async function upsertResult(jobId, row) {
+  const $set = { partner: "miswag" };
+  for (const key of RESULT_FIELDS) {
+    if (row?.[key] !== undefined) $set[key] = row[key];
+  }
+  if ($set.changeType && !["new", "changed", "unchanged"].includes($set.changeType)) {
+    delete $set.changeType;
+  }
   await MiswagSyncProductResult.findOneAndUpdate(
     { jobId, productId: row.productId },
-    {
-      $set: {
-        partner: "miswag",
-        ...row,
-      },
-    },
+    { $set },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
 }
@@ -90,6 +105,7 @@ function publicJob(job, extras = {}) {
     id: String(raw._id),
     status: raw.status,
     mode: raw.mode,
+    strategy: raw.strategy === "changed" ? "changed" : "full",
     batchSize: raw.batchSize || MISWAG_SYNC_BATCH_SIZE,
     cursorIbsherId: raw.cursorIbsherId || "",
     total,
@@ -99,6 +115,11 @@ function publicJob(job, extras = {}) {
     skipped: raw.skipped || 0,
     inactive: raw.inactive || 0,
     ready: raw.ready || 0,
+    newCount: raw.newCount || 0,
+    changedCount: raw.changedCount || 0,
+    unchangedCount: raw.unchangedCount || 0,
+    scanned: processed,
+    sent: raw.mode === "preview" ? 0 : raw.success || 0,
     missingCategory: raw.missingCategory || 0,
     missingBrand: raw.missingBrand || 0,
     missingColor: raw.missingColor || 0,
@@ -290,6 +311,51 @@ async function prepareContext() {
   };
 }
 
+function normalizeStrategy(value) {
+  return value === "changed" ? "changed" : "full";
+}
+
+function storedStrategy(job) {
+  return job?.strategy === "changed" ? "changed" : "full";
+}
+
+function countChange(target, result) {
+  if (result?.changeType === "new") target.newCount += 1;
+  else if (result?.changeType === "changed") target.changedCount += 1;
+  else if (result?.changeType === "unchanged") target.unchangedCount += 1;
+}
+
+/** Classify READY rows from one batch with a single sync-state query. */
+async function annotateChangeTypes(results) {
+  const externalIds = [];
+  for (const result of results) {
+    if (result?.status === "READY" && result.externalId) externalIds.push(result.externalId);
+  }
+  const states = await loadMiswagSyncStateMap(externalIds);
+  return results.map((result) => {
+    if (result?.status !== "READY") return result;
+    const classified = classifyMiswagPayload(result.payload, states.get(result.externalId));
+    return {
+      ...result,
+      changeType: classified.changeType,
+      payloadHash: classified.currentPayloadHash,
+    };
+  });
+}
+
+async function recordAcceptedPayload(result, sent) {
+  const miswagProductId = String(sent.data?.item_id || sent.data?.id || result.externalId || "");
+  await saveMiswagAcceptedPayload({
+    productId: result.productId,
+    ibsherId: result.ibsherId,
+    externalId: result.externalId,
+    payload: result.payload,
+    httpStatus: sent.httpStatus,
+    miswagProductId,
+  });
+  return miswagProductId;
+}
+
 /** Re-attach runner after process restart if a job is still marked running. */
 export async function ensureMiswagSyncRunner() {
   const job = await MiswagSyncJob.findOne({ partner: "miswag", status: "running" }).sort({
@@ -326,13 +392,15 @@ export async function getLatestMiswagSyncJob() {
   };
 }
 
-export async function runMiswagSyncPreview() {
+export async function runMiswagSyncPreview({ strategy = "full" } = {}) {
   const context = await prepareContext();
+  const requested = normalizeStrategy(strategy);
   const total = await Product.countDocuments({});
   const job = await MiswagSyncJob.create({
     partner: "miswag",
     status: "preview",
     mode: "preview",
+    strategy: requested,
     batchSize: MISWAG_SYNC_BATCH_SIZE,
     total,
     startedAt: new Date(),
@@ -343,6 +411,9 @@ export async function runMiswagSyncPreview() {
     ready: 0,
     inactive: 0,
     skipped: 0,
+    newCount: 0,
+    changedCount: 0,
+    unchangedCount: 0,
     missingCategory: 0,
     missingBrand: 0,
     missingColor: 0,
@@ -358,13 +429,19 @@ export async function runMiswagSyncPreview() {
     const batch = await Product.find(filter).sort({ ibsherId: 1 }).limit(MISWAG_SYNC_BATCH_SIZE).lean();
     if (!batch.length) break;
 
+    const evaluated = [];
     for (const doc of batch) {
-      const result = await evaluateOneProduct(doc, context);
+      evaluated.push(await evaluateOneProduct(doc, context));
+    }
+    const annotated = await annotateChangeTypes(evaluated);
+
+    for (const result of annotated) {
       counters.processed += 1;
-      cursor = String(doc.ibsherId || "");
+      cursor = String(result.ibsherId || "");
 
       if (result.status === "READY") {
         counters.ready += 1;
+        countChange(counters, result);
       } else if (result.status === "INACTIVE") {
         counters.inactive += 1;
       } else {
@@ -389,7 +466,11 @@ export async function runMiswagSyncPreview() {
         sku: result.sku,
         status: result.status === "READY" ? "READY" : result.status,
         httpStatus: 0,
-        reason: result.reason || "",
+        reason:
+          result.status === "READY" && result.changeType === "unchanged"
+            ? "Unchanged — checked locally, not sent to Miswag"
+            : result.reason || "",
+        ...(result.changeType ? { changeType: result.changeType } : {}),
       });
     }
 
@@ -397,6 +478,9 @@ export async function runMiswagSyncPreview() {
     job.ready = counters.ready;
     job.inactive = counters.inactive;
     job.skipped = counters.skipped;
+    job.newCount = counters.newCount;
+    job.changedCount = counters.changedCount;
+    job.unchangedCount = counters.unchangedCount;
     job.missingCategory = counters.missingCategory;
     job.missingBrand = counters.missingBrand;
     job.missingColor = counters.missingColor;
@@ -418,6 +502,8 @@ export async function runMiswagSyncPreview() {
   return {
     dryRun: true,
     sentToMiswag: 0,
+    strategy: requested,
+    scanned: job.processed,
     batchSize: MISWAG_SYNC_BATCH_SIZE,
     batchSizeReason:
       "No documented bulk-create max found; reused prior Miswag seller client BATCH_SIZE=15 (one item per POST /v1/items/bulk-create).",
@@ -436,13 +522,25 @@ async function processSyncBatch(job, context) {
     return { done: true };
   }
 
+  const evaluated = [];
   for (const doc of batch) {
-    const fresh = await MiswagSyncJob.findById(job._id);
+    const fresh = await MiswagSyncJob.findById(job._id).select("status");
+    if (!fresh || fresh.status !== "running") {
+      return { done: true, stopped: true };
+    }
+    evaluated.push(await evaluateOneProduct(doc, context));
+  }
+  const annotated = await annotateChangeTypes(evaluated);
+  const strategy = storedStrategy(job);
+
+  for (let index = 0; index < batch.length; index += 1) {
+    const doc = batch[index];
+    const result = annotated[index];
+    const fresh = await MiswagSyncJob.findById(job._id).select("status");
     if (!fresh || fresh.status !== "running") {
       return { done: true, stopped: true };
     }
 
-    const evaluated = await evaluateOneProduct(doc, context);
     job.processed += 1;
     job.cursorIbsherId = String(doc.ibsherId || "");
     job.categoryAttempted = context.stats.categoryAttempted;
@@ -450,69 +548,91 @@ async function processSyncBatch(job, context) {
     job.brandAttempted = context.stats.brandAttempted;
     job.brandResolved = context.stats.brandResolved;
 
-    if (evaluated.status === "INACTIVE") {
+    if (result.status === "INACTIVE") {
       job.inactive += 1;
-      await upsertResult(job._id, { ...evaluated, status: "INACTIVE" });
+      await upsertResult(job._id, { ...result, status: "INACTIVE" });
       await job.save();
       continue;
     }
 
-    if (evaluated.status !== "READY") {
+    if (result.status !== "READY") {
       job.skipped += 1;
-      const bucket = classifyBlocked(evaluated);
+      const bucket = classifyBlocked(result);
       job[bucket] = (job[bucket] || 0) + 1;
-      await upsertResult(job._id, { ...evaluated, status: "SKIPPED" });
+      await upsertResult(job._id, { ...result, status: "SKIPPED" });
       await job.save();
       continue;
     }
 
-    const sent = await sendWithRetry(evaluated.payload);
+    job.ready += 1;
+    countChange(job, result);
+
+    if (strategy === "changed" && result.changeType === "unchanged") {
+      await upsertResult(job._id, {
+        productId: result.productId,
+        ibsherId: result.ibsherId,
+        externalId: result.externalId,
+        sku: result.sku,
+        status: "READY",
+        httpStatus: 0,
+        reason: "Unchanged — checked locally, not sent to Miswag",
+        changeType: "unchanged",
+      });
+      await job.save();
+      continue;
+    }
+
+    const sent = await sendWithRetry(result.payload);
     if (sent.authFailed) {
       job.status = "auth_failed";
       job.pausedAt = new Date();
       job.failureSummary = sent.message || "Authentication/access failed";
       job.lastError = sent.message || "";
       await upsertResult(job._id, {
-        productId: evaluated.productId,
-        ibsherId: evaluated.ibsherId,
-        externalId: evaluated.externalId,
-        sku: evaluated.sku,
+        productId: result.productId,
+        ibsherId: result.ibsherId,
+        externalId: result.externalId,
+        sku: result.sku,
         status: "FAILED",
         httpStatus: sent.httpStatus,
         reason: sent.message,
+        ...(result.changeType ? { changeType: result.changeType } : {}),
       });
       await job.save();
       await logMiswagSafe("sync-all-auth-pause", {
         jobId: String(job._id),
         httpStatus: sent.httpStatus,
-        productId: evaluated.productId,
+        productId: result.productId,
       });
       return { done: true, authFailed: true };
     }
 
     if (sent.ok) {
       job.success += 1;
+      const miswagProductId = await recordAcceptedPayload(result, sent);
       await upsertResult(job._id, {
-        productId: evaluated.productId,
-        ibsherId: evaluated.ibsherId,
-        externalId: evaluated.externalId,
-        sku: evaluated.sku,
+        productId: result.productId,
+        ibsherId: result.ibsherId,
+        externalId: result.externalId,
+        sku: result.sku,
         status: "SYNCED",
         httpStatus: sent.httpStatus,
         reason: "",
-        miswagProductId: String(sent.data?.item_id || sent.data?.id || evaluated.externalId),
+        miswagProductId,
+        ...(result.changeType ? { changeType: result.changeType } : {}),
       });
     } else {
       job.failed += 1;
       job.lastError = sent.message || "";
       await upsertResult(job._id, {
-        productId: evaluated.productId,
-        ibsherId: evaluated.ibsherId,
-        externalId: evaluated.externalId,
-        sku: evaluated.sku,
+        productId: result.productId,
+        ibsherId: result.ibsherId,
+        externalId: result.externalId,
+        sku: result.sku,
         status: "FAILED",
         httpStatus: sent.httpStatus,
         reason: sent.message || "Miswag sync failed",
+        ...(result.changeType ? { changeType: result.changeType } : {}),
       });
     }
     await job.save();
@@ -552,7 +672,7 @@ async function runJobLoop(jobId) {
   }
 }
 
-export async function startMiswagSyncAll({ confirm = false } = {}) {
+export async function startMiswagSyncAll({ confirm = false, strategy = "full" } = {}) {
   if (confirm !== true) {
     throw new MiswagError("Confirm Start Sync after reviewing the dry-run preview.", {
       status: 400,
@@ -560,6 +680,7 @@ export async function startMiswagSyncAll({ confirm = false } = {}) {
     });
   }
   await assertMiswagSyncAllowed();
+  const requested = normalizeStrategy(strategy);
 
   const running = await MiswagSyncJob.findOne({
     partner: "miswag",
@@ -573,6 +694,12 @@ export async function startMiswagSyncAll({ confirm = false } = {}) {
     return { job: publicJob(running), message: "A Miswag sync job is already running." };
   }
   if (running?.status === "paused") {
+    if (storedStrategy(running) !== requested) {
+      throw new MiswagError(
+        "A Miswag sync job is already active. Resume or stop it before starting another.",
+        { status: 409, code: "sync_active" }
+      );
+    }
     running.status = "running";
     running.pausedAt = null;
     running.mode = "sync";
@@ -586,13 +713,20 @@ export async function startMiswagSyncAll({ confirm = false } = {}) {
     partner: "miswag",
     status: "running",
     mode: "sync",
+    strategy: requested,
     batchSize: MISWAG_SYNC_BATCH_SIZE,
     total,
     startedAt: new Date(),
     cursorIbsherId: "",
   });
   setImmediate(() => runJobLoop(job._id));
-  return { job: publicJob(job), message: "Miswag sync started." };
+  return {
+    job: publicJob(job),
+    message:
+      requested === "changed"
+        ? "Changed sync started. Unchanged products are checked locally and are not sent."
+        : "Miswag sync started.",
+  };
 }
 
 export async function pauseMiswagSyncAll() {

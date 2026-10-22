@@ -19,6 +19,8 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
   const [connected, setConnected] = useState(syncEnabledProp === true);
   const [job, setJob] = useState(null);
   const [preview, setPreview] = useState(null);
+  const [fullPreview, setFullPreview] = useState(null);
+  const [changedPreview, setChangedPreview] = useState(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -61,7 +63,11 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
     try {
       const data = await action();
       if (data.job) setJob(data.job);
-      if (data.dryRun) setPreview(data);
+      if (data.dryRun) {
+        setPreview(data);
+        if (data.strategy === "changed" || data.job?.strategy === "changed") setChangedPreview(data);
+        else setFullPreview(data);
+      }
       setMessage(data.message || t.miswagSyncAllUpdated);
     } catch (err) {
       setError(err.message);
@@ -83,8 +89,13 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
     );
   }
 
-  const current = preview?.job || job;
+  const live = job && ["running", "paused", "auth_failed"].includes(job.status) ? job : null;
+  const previewTime = preview?.job?.createdAt ? new Date(preview.job.createdAt).getTime() : 0;
+  const jobTime = job?.createdAt ? new Date(job.createdAt).getTime() : 0;
+  const current = live || (job && jobTime >= previewTime ? job : preview?.job) || job;
   const failures = current?.recentFailures || preview?.job?.blockedSamples || [];
+  const showingPreview = !live && current && current === preview?.job;
+  const changedView = current?.strategy === "changed";
 
   return (
     <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
@@ -100,28 +111,66 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
         </span>
       </div>
 
-      <div className="mt-5 flex flex-wrap gap-2">
-        <button
-          type="button"
-          disabled={Boolean(busy)}
-          className={BUTTON}
-          onClick={() => run(() => api.miswagSyncAllPreview(), "preview")}
-        >
-          {busy === "preview" ? t.loading : t.miswagRunSyncPreview}
-        </button>
-        <button
-          type="button"
-          disabled={Boolean(busy) || !preview?.dryRun}
-          className={BUTTON}
-          title={!preview?.dryRun ? t.miswagRunSyncPreview : undefined}
-          onClick={() => {
-            if (!preview?.dryRun) return;
-            if (!window.confirm(t.miswagStartSyncConfirm)) return;
-            run(() => api.miswagSyncAllStart(true), "start");
-          }}
-        >
-          {busy === "start" ? t.loading : t.miswagStartSync}
-        </button>
+      <div className="mt-5 grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl bg-cream px-4 py-4">
+          <p className="text-xs font-semibold tracking-wide text-brown/50 uppercase">{t.miswagFullSyncTitle}</p>
+          <p className="mt-1 text-sm text-brown/60">{t.miswagFullSyncHint}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={Boolean(busy)}
+              className={BUTTON}
+              onClick={() => run(() => api.miswagSyncAllPreview("full"), "full-preview")}
+            >
+              {busy === "full-preview" ? t.loading : t.miswagRunFullPreview}
+            </button>
+            <button
+              type="button"
+              disabled={Boolean(busy) || !fullPreview?.dryRun}
+              className={BUTTON}
+              title={!fullPreview?.dryRun ? t.miswagRunFullPreview : undefined}
+              onClick={() => {
+                if (!fullPreview?.dryRun) return;
+                if (!window.confirm(t.miswagStartSyncConfirm)) return;
+                run(() => api.miswagSyncAllStart(true, "full"), "full-start");
+              }}
+            >
+              {busy === "full-start" ? t.loading : t.miswagStartFullSync}
+            </button>
+          </div>
+        </div>
+        <div className="rounded-2xl bg-cream px-4 py-4">
+          <p className="text-xs font-semibold tracking-wide text-brown/50 uppercase">{t.miswagChangedSyncTitle}</p>
+          <p className="mt-1 text-sm text-brown/60">{t.miswagChangedSyncHint}</p>
+          <p className="mt-2 text-sm text-brown/70">{t.miswagUnchangedNote}</p>
+          <p className="mt-2 text-xs text-brown/50">{t.miswagFirstRunNote}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={Boolean(busy)}
+              className={BUTTON}
+              onClick={() => run(() => api.miswagSyncAllPreview("changed"), "changed-preview")}
+            >
+              {busy === "changed-preview" ? t.loading : t.miswagRunChangedPreview}
+            </button>
+            <button
+              type="button"
+              disabled={Boolean(busy) || !changedPreview?.dryRun}
+              className={BUTTON}
+              title={!changedPreview?.dryRun ? t.miswagRunChangedPreview : undefined}
+              onClick={() => {
+                if (!changedPreview?.dryRun) return;
+                if (!window.confirm(t.miswagStartChangedConfirm)) return;
+                run(() => api.miswagSyncAllStart(true, "changed"), "changed-start");
+              }}
+            >
+              {busy === "changed-start" ? t.loading : t.miswagStartChangedSync}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
         <button
           type="button"
           disabled={Boolean(busy)}
@@ -155,22 +204,26 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
         <div className="mt-6 space-y-4">
           <p className="text-sm text-brown/60">
             {t.status}: <span className="font-semibold text-brown">{current.status}</span>
+            {current.strategy ? ` · ${t.miswagSyncStrategy}: ${current.strategy}` : ""}
             {current.percent != null ? ` · ${current.percent}%` : ""}
           </p>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Stat label={t.miswagSyncProcessed} value={`${current.processed ?? 0} / ${current.total ?? 0}`} />
-            <Stat
-              label={t.miswagSyncReady}
-              value={preview?.dryRun ? current.ready ?? 0 : current.success ?? current.ready ?? 0}
-            />
+            <Stat label={t.miswagSyncScanned} value={`${current.scanned ?? current.processed ?? 0} / ${current.total ?? 0}`} />
+            <Stat label={t.miswagSyncSent} value={showingPreview ? 0 : current.sent ?? current.success ?? 0} />
+            <Stat label={t.miswagSyncReady} value={current.ready ?? 0} />
+            <Stat label={t.miswagSyncNew} value={current.newCount ?? 0} />
+            <Stat label={t.miswagSyncChanged} value={current.changedCount ?? 0} />
+            <Stat label={t.miswagSyncUnchanged} value={current.unchangedCount ?? 0} />
+            <Stat label={t.miswagSyncBlocked} value={current.skipped ?? 0} />
+            <Stat label={t.miswagSyncInactive} value={current.inactive ?? 0} />
+            <Stat label={t.miswagSyncFailed} value={current.failed ?? 0} />
             <Stat label={t.miswagSyncMissingMapping} value={current.missingCategory ?? 0} />
             <Stat label={t.miswagSyncMissingBrand} value={current.missingBrand ?? 0} />
             <Stat label={t.miswagSyncMissingColor} value={current.missingColor ?? 0} />
             <Stat label={t.miswagSyncMissingData} value={current.missingData ?? 0} />
-            <Stat label={t.miswagSyncInactive} value={current.inactive ?? 0} />
-            <Stat label={t.miswagSyncFailed} value={current.failed ?? 0} />
           </div>
-          {preview?.dryRun ? (
+          {changedView ? <p className="text-sm text-brown/70">{t.miswagUnchangedNote}</p> : null}
+          {showingPreview ? (
             <p className="text-xs text-brown/45">
               {t.miswagDryRunNote} · {t.miswagBatchSize}: {preview.batchSize}
             </p>

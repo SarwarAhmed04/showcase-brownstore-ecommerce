@@ -171,6 +171,17 @@ export function eligibilityMongoFilter(context, mode) {
     }
     return asAnd(clauses);
   }
+  if (normalized === "inactive" || normalized === "excluded") {
+    if (context?.partnerActive === false) return {};
+    const clauses = [];
+    for (const [scope, path] of SCOPE_PATHS) {
+      const ids = inactiveSet(context, scope);
+      if (!ids.size) continue;
+      clauses.push(exprIn(path, ids, true));
+    }
+    if (!clauses.length) return { _id: { $exists: false } };
+    return clauses.length === 1 ? clauses[0] : { $or: clauses };
+  }
   return null;
 }
 

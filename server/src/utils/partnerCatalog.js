@@ -1,5 +1,5 @@
 import { toResolvedProduct } from "./productView.js";
-import { applyCommissionRate, resolveCommissionRate } from "./commission.js";
+import { applyCommissionRate, resolveCommissionRate, winningCommission } from "./commission.js";
 
 const PRICE_KEYS = new Set(["price", "discountPrice", "sellingPrice", "overrides"]);
 
@@ -90,15 +90,39 @@ export function toPartnerProduct(doc, rules, origin, platformOverrides) {
   };
 }
 
+function rawCommissionPrice(price, percentage) {
+  const base = Number(price) || 0;
+  const rate = Number(percentage);
+  const safeRate = Number.isFinite(rate) ? rate : 0;
+  const raw = Math.max(0, base * (1 + safeRate / 100));
+  return Math.round(raw * 100) / 100;
+}
+
+function commissionSummary(rule, rate) {
+  if (!rule) return null;
+  return {
+    scope: rule.scope,
+    percentage: rate,
+    targetId: String(rule.targetId || ""),
+    targetName: rule.targetName || null,
+    filterPath: rule.scope === "filter" ? rule.filterPath || null : null,
+  };
+}
+
 export function partnerPricePreview(doc, rules) {
   const store = toResolvedProduct(doc);
-  if (!store) return { storePrice: 0, rate: 0, price: 0, customPrice: false };
+  if (!store) {
+    return { storePrice: 0, rate: 0, rawPrice: 0, price: 0, customPrice: false, commission: null };
+  }
   const storePrice = Number(store.sellingPrice) || 0;
-  const rate = resolveCommissionRate(doc, rules);
+  const rule = winningCommission(doc, rules);
+  const rate = rule && Number.isFinite(Number(rule.percentage)) ? Number(rule.percentage) : 0;
   return {
     storePrice,
     rate,
+    rawPrice: rawCommissionPrice(storePrice, rate),
     customPrice: false,
     price: applyCommissionRate(storePrice, rate),
+    commission: commissionSummary(rule, rate),
   };
 }

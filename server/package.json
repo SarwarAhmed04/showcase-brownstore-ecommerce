@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --max-old-space-size=4096 --watch src/index.js",
     "start": "node src/index.js",
-    "test": "node --test src/platformPrice.test.js src/platformManagement.test.js src/taxonomyNotices.test.js src/giniExport.test.js src/miswagConnection.test.js src/miswagSyncOne.test.js src/miswagDiscovery.test.js src/miswagBarcode.test.js src/miswagSyncAll.test.js src/miswagCategoryMapping.test.js src/miswagLargeProduct.test.js src/filterCommission.test.js",
+    "test": "node --test src/platformPrice.test.js src/platformManagement.test.js src/taxonomyNotices.test.js src/giniExport.test.js src/miswagConnection.test.js src/miswagSyncOne.test.js src/miswagDiscovery.test.js src/miswagBarcode.test.js src/miswagSyncAll.test.js src/miswagChangedSync.test.js src/miswagCategoryMapping.test.js src/miswagLargeProduct.test.js src/filterCommission.test.js src/platformProducts.test.js",
     "miswag:verify": "node src/scripts/verifyMiswagConnection.js"
   },
   "dependencies": {

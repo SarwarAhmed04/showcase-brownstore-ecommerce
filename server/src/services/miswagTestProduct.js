@@ -19,6 +19,7 @@ import {
   resolveMiswagCollectionIsLarge,
 } from "./miswagCategoryMapping.js";
 import { ensureProductVariationBarcodes } from "./miswagTestBarcodes.js";
+import { saveMiswagAcceptedPayload } from "./miswagSyncState.js";
 
 export const MISWAG_ITEM_CREATE_PATH = "/v1/items/bulk-create";
 export const MISWAG_CATEGORY_ID_RX = /^L[34]-\d+$/;
@@ -726,6 +727,17 @@ export async function sendMiswagTestProduct({
   const miswagProductId = String(
     responseData?.item_id || responseData?.id || payload.external_id || ""
   );
+
+  if (ok) {
+    await saveMiswagAcceptedPayload({
+      productId: preview.product?.id || String(productId),
+      ibsherId: preview.product?.ibsherId || "",
+      externalId: payload?.external_id,
+      payload,
+      httpStatus,
+      miswagProductId,
+    });
+  }
 
   await logMiswagSafe("sync-one", {
     timestamp: new Date().toISOString(),

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, Pencil } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { imgUrl } from "../../../lib/img";
 
 export const PLATFORM_SECTIONS = [
@@ -79,22 +79,16 @@ export function PlatformNavBody({ nav, t, onNavigate }) {
           <ArrowLeft className="h-4 w-4 rtl:rotate-180" strokeWidth={2} />
           {t.backToPlatforms}
         </Link>
-        <div className="mt-4 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={nav?.onEdit}
+          disabled={!nav?.onEdit}
+          aria-label={t.editPlatform}
+          className="mt-4 flex w-full items-center gap-3 rounded-xl text-start transition hover:bg-brown/[0.04] disabled:cursor-default disabled:hover:bg-transparent"
+        >
           <PlatformMark image={partner?.image} name={partner?.name} />
-          <div className="min-w-0 flex-1">
-            <p className="truncate font-display text-xl">{partner?.name || "…"}</p>
-          </div>
-          {nav?.onEdit ? (
-            <button
-              type="button"
-              onClick={nav.onEdit}
-              aria-label={t.editPlatform}
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-brown/50 transition hover:bg-brown/[0.04] hover:text-brown"
-            >
-              <Pencil className="h-4 w-4" strokeWidth={1.8} />
-            </button>
-          ) : null}
-        </div>
+          <span className="min-w-0 flex-1 truncate font-display text-xl">{partner?.name || "…"}</span>
+        </button>
       </div>
       <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 pb-6">
         {sections.map(([id, labelKey]) => (
@@ -120,7 +114,7 @@ export function PlatformNavBody({ nav, t, onNavigate }) {
 export default function PlatformSidebar({ nav, t, mobileOpen, onClose }) {
   return (
     <>
-      <aside className="fixed top-0 z-40 hidden h-svh w-[14.5rem] flex-col border-e border-brown/[0.06] bg-[#faf4ec] start-[15.5rem] lg:flex">
+      <aside className="fixed top-0 z-40 hidden h-svh w-[13.5rem] flex-col border-e border-brown/[0.06] bg-[#faf4ec] start-[13.5rem] lg:flex">
         <PlatformNavBody nav={nav} t={t} />
       </aside>
       {mobileOpen ? (
@@ -131,7 +125,7 @@ export default function PlatformSidebar({ nav, t, mobileOpen, onClose }) {
             className="fixed inset-0 z-40 bg-brown/25"
             onClick={onClose}
           />
-          <aside className="fixed inset-y-0 z-50 flex w-[16rem] flex-col bg-[#faf4ec] shadow-xl start-0">
+          <aside className="fixed inset-y-0 z-50 flex w-[13.5rem] flex-col bg-[#faf4ec] shadow-xl start-0">
             <PlatformNavBody nav={nav} t={t} onNavigate={onClose} />
           </aside>
         </div>

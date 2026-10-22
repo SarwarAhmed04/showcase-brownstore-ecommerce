@@ -222,32 +222,160 @@ function adminProductFilter(query) {
   return and.length ? { $and: and } : {};
 }
 
-async function productFacets() {
-  const [brands, categories] = await Promise.all([
-    Product.aggregate([
-      { $match: { "brand._id": { $exists: true, $ne: null } } },
-      {
-        $group: {
-          _id: { $toString: "$brand._id" },
-          name: { $first: "$brand.name" },
-        },
+function facetName(name) {
+  if (typeof name === "string") {
+    const value = name.trim();
+    return { en: value, ku: value, ar: value };
+  }
+  if (name && typeof name === "object") {
+    const fallback = String(name.en || name.ku || name.ar || "").trim();
+    return {
+      en: String(name.en || fallback),
+      ku: String(name.ku || fallback),
+      ar: String(name.ar || fallback),
+    };
+  }
+  return { en: "", ku: "", ar: "" };
+}
+
+function mapFacetRows(rows) {
+  return (rows || [])
+    .map((row) => ({
+      id: String(row?._id || "").trim(),
+      name: facetName(row?.name),
+    }))
+    .filter((row) => row.id)
+    .sort((a, b) =>
+      (a.name.en || a.id).localeCompare(b.name.en || b.id, "en", { sensitivity: "base" })
+    );
+}
+
+function facetIdMatch(path, id) {
+  const value = String(id || "").trim();
+  if (!value) return null;
+  return {
+    $expr: { $eq: [{ $toString: { $ifNull: [`$${path}`, ""] } }, value] },
+  };
+}
+
+function facetMatches(query, pairs) {
+  const stages = [];
+  for (const [key, path] of pairs) {
+    const match = facetIdMatch(path, query?.[key]);
+    if (match) stages.push({ $match: match });
+  }
+  return stages;
+}
+
+function facetBranch(matches, idPath, namePath) {
+  return [
+    ...matches,
+    { $match: { [idPath]: { $exists: true, $nin: [null, ""] } } },
+    {
+      $group: {
+        _id: { $toString: { $ifNull: [`$${idPath}`, ""] } },
+        name: { $first: `$${namePath}` },
       },
-      { $sort: { "name.en": 1, "name.ku": 1 } },
-    ]),
-    Product.aggregate([
-      { $match: { "category._id": { $exists: true, $ne: null } } },
-      {
-        $group: {
-          _id: { $toString: "$category._id" },
-          name: { $first: "$category.name" },
-        },
+    },
+  ];
+}
+
+async function platformCatalogFacets(query = {}) {
+  const [row] = await Product.aggregate([
+    {
+      $project: {
+        "createdBy._id": 1,
+        "createdBy.name": 1,
+        "brand._id": 1,
+        "brand.name": 1,
+        "category._id": 1,
+        "category.name": 1,
+        "subCategory._id": 1,
+        "subCategory.name": 1,
+        "collectionName._id": 1,
+        "collectionName.name": 1,
       },
-      { $sort: { "name.en": 1, "name.ku": 1 } },
-    ]),
+    },
+    {
+      $facet: {
+        vendors: facetBranch([], "createdBy._id", "createdBy.name"),
+        brands: facetBranch(
+          facetMatches(query, [["vendor", "createdBy._id"]]),
+          "brand._id",
+          "brand.name"
+        ),
+        categories: facetBranch(
+          facetMatches(query, [
+            ["vendor", "createdBy._id"],
+            ["brand", "brand._id"],
+          ]),
+          "category._id",
+          "category.name"
+        ),
+        subcategories: facetBranch(
+          facetMatches(query, [
+            ["vendor", "createdBy._id"],
+            ["brand", "brand._id"],
+            ["category", "category._id"],
+          ]),
+          "subCategory._id",
+          "subCategory.name"
+        ),
+        collections: facetBranch(
+          facetMatches(query, [
+            ["vendor", "createdBy._id"],
+            ["brand", "brand._id"],
+            ["category", "category._id"],
+            ["subCategory", "subCategory._id"],
+          ]),
+          "collectionName._id",
+          "collectionName.name"
+        ),
+      },
+    },
   ]);
   return {
-    brands: brands.map((item) => ({ id: item._id, name: item.name })),
-    categories: categories.map((item) => ({ id: item._id, name: item.name })),
+    vendors: mapFacetRows(row?.vendors),
+    brands: mapFacetRows(row?.brands),
+    categories: mapFacetRows(row?.categories),
+    subcategories: mapFacetRows(row?.subcategories),
+    collections: mapFacetRows(row?.collections),
+  };
+}
+
+async function productFacets() {
+  const catalog = await platformCatalogFacets({});
+  return { brands: catalog.brands, categories: catalog.categories };
+}
+
+const PLATFORM_PRODUCT_PAGE_DEFAULT = 50;
+const PLATFORM_PRODUCT_PAGE_MAX = 100;
+
+function platformProductLimit(value) {
+  const requested = Math.floor(Number(value));
+  if (!Number.isFinite(requested) || requested < 1) return PLATFORM_PRODUCT_PAGE_DEFAULT;
+  return Math.min(PLATFORM_PRODUCT_PAGE_MAX, requested);
+}
+
+function includePlatformFacets(query) {
+  const flag = String(query?.facets ?? "1").trim().toLowerCase();
+  return flag !== "0" && flag !== "false" && flag !== "no";
+}
+
+function productPageMeta(page, limit, total) {
+  const pages = Math.max(1, Math.ceil(total / limit) || 1);
+  const from = total === 0 ? 0 : (page - 1) * limit + 1;
+  const to = total === 0 ? 0 : Math.min(total, page * limit);
+  const past = from > total;
+  return {
+    page,
+    limit,
+    total,
+    pages,
+    hasNext: !past && page < pages,
+    hasPrev: page > 1 && total > 0,
+    from: past ? 0 : from,
+    to: past ? 0 : to,
   };
 }
 
@@ -1067,8 +1195,10 @@ function toPlatformProductDto(product, extra, rules) {
     customized: hasCustomOverrides(extra),
     commissionRate: preview.rate,
     storePrice: preview.storePrice,
+    rawPrice: preview.rawPrice,
     platformPrice: preview.price,
     customPrice: preview.customPrice,
+    commission: preview.commission,
   };
 }
 
@@ -1151,6 +1281,9 @@ function matchesEligibilityList(product, context, mode) {
   if (normalized === "unmapped" || normalized === "missing_setup") {
     return eligibilityBucket(result) === "missing_setup";
   }
+  if (normalized === "inactive" || normalized === "excluded") {
+    return eligibilityBucket(result) === "inactive";
+  }
   return true;
 }
 
@@ -1159,14 +1292,15 @@ adminRouter.get("/platforms/:slug/products", async (req, res) => {
     const partner = await loadPartnerOr404(req.params.slug, res);
     if (!partner) return;
     const page = Math.max(1, Number(req.query.page) || 1);
-    const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+    const limit = platformProductLimit(req.query.limit);
     const context = await loadEligibilityContext(partner.slug);
     const filter = combineFilters(
       adminProductFilter(req.query),
       eligibilityMongoFilter(context, req.query.eligibility)
     );
+    const withFacets = includePlatformFacets(req.query);
     const [facets, rules] = await Promise.all([
-      productFacets(),
+      withFacets ? platformCatalogFacets(req.query) : null,
       Commission.find({ partner: partner.slug, isActive: { $ne: false } }),
     ]);
 
@@ -1180,7 +1314,7 @@ adminRouter.get("/platforms/:slug/products", async (req, res) => {
         return res.json({
           platform: toAdminPartner(partner, req),
           products: [],
-          pagination: { page, limit, total: 0, pages: 1 },
+          pagination: productPageMeta(page, limit, 0),
           facets,
         });
       }
@@ -1204,12 +1338,7 @@ adminRouter.get("/platforms/:slug/products", async (req, res) => {
         products: pageItems.map(({ item, overrides }) =>
           decoratePlatformProduct(item, overrides, rules, context)
         ),
-        pagination: {
-          page,
-          limit,
-          total,
-          pages: Math.ceil(total / limit) || 1,
-        },
+        pagination: productPageMeta(page, limit, total),
         facets,
       });
     }
@@ -1231,12 +1360,7 @@ adminRouter.get("/platforms/:slug/products", async (req, res) => {
       products: items.map((item) =>
         decoratePlatformProduct(item, map.get(String(item._id)) || {}, rules, context)
       ),
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit) || 1,
-      },
+      pagination: productPageMeta(page, limit, total),
       facets,
     });
   } catch (err) {

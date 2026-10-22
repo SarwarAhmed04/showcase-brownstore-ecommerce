@@ -8,7 +8,7 @@ import { tName } from "../../i18n";
 import { imgUrl } from "../../lib/img";
 import Spinner from "../../components/Spinner";
 import AdminModal from "../../components/admin/AdminModal";
-import ProductEditor, { formatGrouped } from "../../components/admin/ProductEditor";
+import ProductEditor from "../../components/admin/ProductEditor";
 import AvailabilityPanel from "../../components/admin/platform/AvailabilityPanel";
 import CategorySetupPanel from "../../components/admin/platform/CategorySetupPanel";
 import MiswagApiConnection from "../../components/admin/platform/MiswagApiConnection";
@@ -37,6 +37,14 @@ const SCOPES = ["all", "category", "subcategory", "collection", "brand", "vendor
 const CONTROL =
   "rounded-full border border-brown/10 bg-cream px-4 py-2.5 text-sm font-semibold text-brown outline-none ring-tan/40 focus:ring-2";
 const SELECT = `w-full ${CONTROL} disabled:cursor-not-allowed disabled:opacity-50`;
+const EMPTY_PRODUCT_FILTERS = {
+  vendor: "",
+  brand: "",
+  category: "",
+  subCategory: "",
+  collection: "",
+};
+const PRODUCT_PAGE_SIZES = [25, 50, 100];
 
 function optionLabel(item, lang) {
   const name = tName(item.name, lang) || item.id;
@@ -292,36 +300,119 @@ function PartnerCards({ t }) {
   );
 }
 
-function PlatformProductRow({ item, t, lang, busy, onEdit, onToggle }) {
+function moneyText(value, t) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  const text = amount.toLocaleString("en-US", {
+    minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+  return `${text} ${t.iq || "IQD"}`;
+}
+
+function commissionKind(scope, t) {
+  return (
+    {
+      filter: t.commissionKindFilter,
+      vendor: t.commissionKindVendor,
+      collection: t.commissionKindCollection,
+      subcategory: t.commissionKindSubcategory,
+      brand: t.commissionKindBrand,
+      category: t.commissionKindCategory,
+      all: t.commissionKindAll,
+    }[scope] || ""
+  );
+}
+
+function commissionSummaryText(item, t) {
+  if (!item.commission) return "0%";
+  const rate = Number(item.commission.percentage ?? item.commissionRate) || 0;
+  const kind = commissionKind(item.commission.scope, t);
+  return kind ? `${kind} ${rate}%` : `${rate}%`;
+}
+
+function winningRuleLabel(item, t) {
+  if (!item.commission) return t.noCommission;
+  return (
+    {
+      filter: t.filterCommission,
+      vendor: t.vendor,
+      collection: t.collection,
+      subcategory: t.subCategory,
+      brand: t.productBrand,
+      category: t.category,
+      all: t.allCommission,
+    }[item.commission.scope] || item.commission.scope
+  );
+}
+
+function pageWindow(page, pages) {
+  const set = new Set([1, pages, page - 2, page - 1, page, page + 1, page + 2]);
+  return [...set].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+}
+
+function fillTemplate(template, values) {
+  return Object.entries(values).reduce(
+    (text, [key, value]) => text.replaceAll(`{${key}}`, String(value)),
+    String(template || "")
+  );
+}
+
+function PriceDetails({ item, t, lang }) {
+  const path = tName(item.commission?.targetName, lang);
+  const rows = [
+    [t.brownstorePrice, moneyText(item.storePrice, t)],
+    [t.winningRule, winningRuleLabel(item, t)],
+    [t.matchingPath, path || "—"],
+    [t.columnCommission, item.commission ? `${Number(item.commission.percentage) || 0}%` : "0%"],
+    [t.rawPlatformPrice, moneyText(item.rawPrice ?? item.storePrice, t)],
+    [t.finalPlatformPrice, moneyText(item.platformPrice, t)],
+  ];
+  return (
+    <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {rows.map(([label, value]) => (
+        <div key={label}>
+          <dt className="text-[11px] font-semibold tracking-wide text-brown/40 uppercase">{label}</dt>
+          <dd className="mt-0.5 text-sm font-semibold text-brown">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function ProductStatus({ item, t }) {
   const eligible = item.eligibility ? item.eligibility.eligible : item.platformActive !== false;
   const reasons = item.eligibility?.reasons || [];
   return (
-    <div className="flex items-center gap-3 py-3">
-      <img
-        src={imgUrl(item.image) || "/logo.png"}
-        alt=""
-        className="h-12 w-12 rounded-xl bg-cream object-cover"
-      />
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="truncate font-medium">{tName(item.name, lang)}</p>
-          <StatusBadge kind={eligible ? "ready" : "blocked"} t={t} />
-          <StatusBadge kind={item.platformActive === false ? "inactive" : "active"} t={t} />
-        </div>
-        <p className="text-xs text-brown/45">
-          {item.sku || "—"} · {formatGrouped(item.platformPrice || item.sellingPrice || 0)}
+    <div className="flex flex-col items-start gap-1">
+      <StatusBadge kind={eligible ? "ready" : "blocked"} t={t} />
+      <StatusBadge kind={item.platformActive === false ? "inactive" : "active"} t={t} />
+      {reasons.length ? (
+        <p className="max-w-48 text-[11px] leading-4 text-brown/50">
+          {reasons.map((reason) => reasonLabel(t, reason)).join(" · ")}
         </p>
-        {!eligible && reasons.length ? (
-          <p className="mt-1 text-xs text-red-800">
-            {reasons.map((reason) => reasonLabel(t, reason)).join(" · ")}
-          </p>
-        ) : null}
-      </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ProductActions({ item, t, busy, onEdit, onToggle, open, onDetails }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <button
+        type="button"
+        onClick={onDetails}
+        className={`whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-semibold ${
+          open ? "bg-brown text-cream" : "bg-cream text-brown"
+        }`}
+      >
+        {t.priceDetails}
+      </button>
       <button
         type="button"
         disabled={busy}
         onClick={onToggle}
-        className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold disabled:opacity-50 ${
+        className={`whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50 ${
           item.platformActive === false
             ? "bg-brown/10 text-brown/55"
             : "bg-emerald-50 text-emerald-800"
@@ -332,11 +423,111 @@ function PlatformProductRow({ item, t, lang, busy, onEdit, onToggle }) {
       <button
         type="button"
         onClick={onEdit}
-        className="shrink-0 rounded-full bg-brown px-3 py-1.5 text-xs font-semibold text-cream"
+        className="whitespace-nowrap rounded-full bg-brown px-2.5 py-1.5 text-xs font-semibold text-cream"
       >
         {t.editProduct}
       </button>
     </div>
+  );
+}
+
+function PlatformTableProduct({ item, t, lang, busy, open, onEdit, onToggle, onDetails }) {
+  return (
+    <>
+      <tr className="border-b border-brown/10 align-top">
+        <td className="overflow-hidden py-3 pr-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <img
+              src={imgUrl(item.image) || "/logo.png"}
+              alt=""
+              className="h-10 w-10 shrink-0 rounded-lg bg-cream object-cover"
+            />
+            <p className="truncate font-medium text-brown">{tName(item.name, lang)}</p>
+          </div>
+        </td>
+        <td className="overflow-hidden py-3 pr-2 font-medium text-brown/70">
+          <p className="truncate">{item.sku || item.itemCode || "—"}</p>
+        </td>
+        <td className="overflow-hidden py-3 pr-2 text-brown/70">
+          <p className="truncate">{tName(item.brand?.name, lang) || "—"}</p>
+        </td>
+        <td className="overflow-hidden py-3 pr-2 font-semibold text-brown">{moneyText(item.storePrice, t)}</td>
+        <td className="overflow-hidden py-3 pr-2 font-semibold text-brown">{commissionSummaryText(item, t)}</td>
+        <td className="overflow-hidden py-3 pr-2 font-semibold text-brown">{moneyText(item.platformPrice, t)}</td>
+        <td className="overflow-hidden py-3 pr-2">
+          <ProductStatus item={item} t={t} />
+        </td>
+        <td className="overflow-hidden py-3">
+          <ProductActions
+            item={item}
+            t={t}
+            busy={busy}
+            open={open}
+            onEdit={onEdit}
+            onToggle={onToggle}
+            onDetails={onDetails}
+          />
+        </td>
+      </tr>
+      {open ? (
+        <tr className="border-b border-brown/10">
+          <td colSpan={8} className="bg-cream/60 px-4 py-4">
+            <PriceDetails item={item} t={t} lang={lang} />
+          </td>
+        </tr>
+      ) : null}
+    </>
+  );
+}
+
+function PlatformProductCard({ item, t, lang, busy, open, onEdit, onToggle, onDetails }) {
+  const fields = [
+    [t.sku, item.sku || item.itemCode || "—"],
+    [t.productBrand, tName(item.brand?.name, lang) || "—"],
+    [t.brownstorePrice, moneyText(item.storePrice, t)],
+    [t.columnCommission, commissionSummaryText(item, t)],
+    [t.platformPriceLabel, moneyText(item.platformPrice, t)],
+  ];
+  return (
+    <article className="py-4">
+      <div className="flex items-start gap-3">
+        <img
+          src={imgUrl(item.image) || "/logo.png"}
+          alt=""
+          className="h-12 w-12 rounded-xl bg-cream object-cover"
+        />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-brown">{tName(item.name, lang)}</p>
+          <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+            {fields.map(([label, value]) => (
+              <div key={label}>
+                <dt className="text-brown/40">{label}</dt>
+                <dd className="font-semibold text-brown">{value}</dd>
+              </div>
+            ))}
+          </dl>
+          <div className="mt-2">
+            <ProductStatus item={item} t={t} />
+          </div>
+          <div className="mt-3">
+            <ProductActions
+              item={item}
+              t={t}
+              busy={busy}
+              open={open}
+              onEdit={onEdit}
+              onToggle={onToggle}
+              onDetails={onDetails}
+            />
+          </div>
+          {open ? (
+            <div className="mt-3 rounded-2xl bg-cream/70 p-3">
+              <PriceDetails item={item} t={t} lang={lang} />
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </article>
   );
 }
 
@@ -640,8 +831,18 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState("");
   const [products, setProducts] = useState({ products: [], pagination: { pages: 1, total: 0 } });
+  const [productSearch, setProductSearch] = useState("");
   const [productQ, setProductQ] = useState("");
   const [productPage, setProductPage] = useState(1);
+  const [productLimit, setProductLimit] = useState(50);
+  const [productFilters, setProductFilters] = useState(EMPTY_PRODUCT_FILTERS);
+  const [catalogFacets, setCatalogFacets] = useState(null);
+  const [priceDetailId, setPriceDetailId] = useState(null);
+  const [previewTotal, setPreviewTotal] = useState(null);
+  const [eligibility, setEligibility] = useState("all");
+  const facetKeyRef = useRef("");
+  const productLoadRef = useRef(0);
+  const productRequestRef = useRef({});
   const [editing, setEditing] = useState(null);
   const [editBusy, setEditBusy] = useState(false);
   const [editMessage, setEditMessage] = useState("");
@@ -663,7 +864,6 @@ function PartnerCommission({ partnerSlug, t, lang }) {
       ignore = true;
     };
   }, [partnerSlug]);
-  const [eligibility, setEligibility] = useState("all");
   const [excelTotal, setExcelTotal] = useState(null);
   const [excelGini, setExcelGini] = useState(null);
   const [excelColumns, setExcelColumns] = useState([]);
@@ -705,10 +905,38 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     return {};
   }, [scope, filterSelection, categoryId, subCategoryId, collectionId, brandId, vendorId]);
   const previewKey = JSON.stringify(preview);
-  const productListKey = `${partnerSlug}|${productQ}|${previewKey}|${eligibility}`;
-  const [seenProductListKey, setSeenProductListKey] = useState(productListKey);
-  if (productListKey !== seenProductListKey) {
-    setSeenProductListKey(productListKey);
+  const productFilterKey = `${productFilters.vendor}|${productFilters.brand}|${productFilters.category}|${productFilters.subCategory}|${productFilters.collection}`;
+  const productFacetKey = `${partnerSlug}|${productFilterKey}`;
+  productRequestRef.current = {
+    partnerSlug,
+    q: productQ,
+    limit: productLimit,
+    page: productPage,
+    eligibility,
+    filters: productFilters,
+    facetKey: productFacetKey,
+  };
+
+  function changeProductFilter(field, value) {
+    setProductFilters((current) => {
+      const next = { ...current, [field]: value };
+      if (field === "vendor") {
+        next.brand = "";
+        next.category = "";
+        next.subCategory = "";
+        next.collection = "";
+      } else if (field === "brand") {
+        next.category = "";
+        next.subCategory = "";
+        next.collection = "";
+      } else if (field === "category") {
+        next.subCategory = "";
+        next.collection = "";
+      } else if (field === "subCategory") {
+        next.collection = "";
+      }
+      return next;
+    });
     setProductPage(1);
   }
 
@@ -729,21 +957,33 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     });
   }
 
-  function loadProducts() {
-    return api
-      .adminPlatformProducts(partnerSlug, {
-        q: productQ,
-        limit: 20,
-        page: productPage,
-        eligibility,
-        ...preview,
-      })
-      .then((data) => {
-        setProducts(data);
-        const pages = Number(data.pagination?.pages) || 1;
-        setProductPage((current) => (current > pages ? pages : current));
-      });
-  }
+  const loadProducts = useCallback(async () => {
+    const requestId = productLoadRef.current + 1;
+    productLoadRef.current = requestId;
+    const current = productRequestRef.current;
+    const includeFacets = facetKeyRef.current !== current.facetKey;
+    const data = await api.adminPlatformProducts(current.partnerSlug, {
+      q: current.q,
+      limit: current.limit,
+      page: current.page,
+      eligibility: current.eligibility,
+      vendor: current.filters.vendor,
+      brand: current.filters.brand,
+      category: current.filters.category,
+      subCategory: current.filters.subCategory,
+      collection: current.filters.collection,
+      facets: includeFacets ? "1" : "0",
+    });
+    if (productLoadRef.current !== requestId) return data;
+    setProducts(data);
+    if (data.facets) {
+      setCatalogFacets(data.facets);
+      facetKeyRef.current = current.facetKey;
+    }
+    const pages = Number(data.pagination?.pages) || 1;
+    setProductPage((page) => (page > pages ? pages : page));
+    return data;
+  }, []);
 
   function load() {
     return Promise.all([loadDetail(), loadProducts()]);
@@ -759,13 +999,37 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     }
   }
 
+  async function togglePlatformProduct(item) {
+    setBusy(true);
+    setError("");
+    try {
+      await api.setPlatformAvailability(partnerSlug, {
+        scope: "product",
+        targetId: item.id,
+        isActive: item.platformActive === false,
+      });
+      await loadProducts();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     setLoading(true);
     setPlainKey("");
     setError("");
     setMessage("");
+    setProductSearch("");
     setProductQ("");
     setProductPage(1);
+    setProductLimit(50);
+    setProductFilters(EMPTY_PRODUCT_FILTERS);
+    setCatalogFacets(null);
+    setPriceDetailId(null);
+    setEligibility("all");
+    facetKeyRef.current = "";
     setTab("overview");
     setExcelColumns([]);
     setExcelSaved(false);
@@ -777,29 +1041,52 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   }, [partnerSlug]);
 
   useEffect(() => {
-    let ignore = false;
     const id = setTimeout(() => {
-      api
-        .adminPlatformProducts(partnerSlug, {
-          q: productQ,
-          limit: 20,
-          page: productPage,
-          eligibility,
-          ...preview,
-        })
-        .then((data) => {
-          if (ignore) return;
-          setProducts(data);
-          const pages = Number(data.pagination?.pages) || 1;
-          setProductPage((current) => (current > pages ? pages : current));
-        })
-        .catch(() => {});
-    }, 220);
+      const next = productSearch.trim();
+      setProductQ((current) => {
+        if (current === next) return current;
+        setProductPage(1);
+        return next;
+      });
+    }, 400);
+    return () => clearTimeout(id);
+  }, [productSearch]);
+
+  useEffect(() => {
+    if (!Object.keys(preview).length) {
+      setPreviewTotal(null);
+      return undefined;
+    }
+    let ignore = false;
+    api
+      .adminPlatformProducts(partnerSlug, { ...preview, limit: 1, page: 1, facets: "0" })
+      .then((data) => {
+        if (!ignore) setPreviewTotal(Number(data.pagination?.total) || 0);
+      })
+      .catch(() => {
+        if (!ignore) setPreviewTotal(null);
+      });
     return () => {
       ignore = true;
-      clearTimeout(id);
     };
-  }, [partnerSlug, productQ, productPage, previewKey, eligibility]);
+  }, [partnerSlug, previewKey, preview]);
+
+  useEffect(() => {
+    if (tab !== "products") return undefined;
+    loadProducts().catch((err) => setError(err.message));
+    return () => {
+      productLoadRef.current += 1;
+    };
+  }, [
+    tab,
+    partnerSlug,
+    productQ,
+    productPage,
+    productLimit,
+    eligibility,
+    productFilterKey,
+    loadProducts,
+  ]);
 
   useEffect(() => {
     if (tab !== "excel") return undefined;
@@ -1775,11 +2062,11 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                     {t.save}
                   </button>
                 </div>
-                {vendorId ? (
+                {previewTotal != null ? (
                   <p className="text-sm font-semibold text-brown">
                     {t.commissionPreviewCount.replace(
                       "{count}",
-                      Number(products.pagination?.total || 0).toLocaleString("en-US")
+                      Number(previewTotal).toLocaleString("en-US")
                     )}
                   </p>
                 ) : null}
@@ -1988,28 +2275,58 @@ function PartnerCommission({ partnerSlug, t, lang }) {
       ) : null}
 
       {tab === "products" ? (
-      <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
+      <section className="overflow-hidden rounded-3xl bg-white p-4 shadow-sm ring-1 ring-brown/5 sm:p-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
               {t.products}
             </p>
             <p className="mt-1 text-sm text-brown/50">{t.platformProductsHint}</p>
-            {Object.keys(preview).length ? (
-              <p className="mt-1 text-sm font-semibold text-brown">
-                {t.commissionPreviewCount.replace(
-                  "{count}",
-                  Number(products.pagination?.total || 0).toLocaleString("en-US")
-                )}
-              </p>
-            ) : null}
+            <p className="mt-1 text-sm font-semibold text-brown">
+              {fillTemplate(t.showingRange, {
+                from: products.pagination?.from || 0,
+                to: products.pagination?.to || 0,
+                total: Number(products.pagination?.total || 0).toLocaleString("en-US"),
+              })}
+            </p>
+            <p className="text-xs text-brown/45">
+              {fillTemplate(t.pageOf, {
+                page: products.pagination?.page || productPage,
+                pages: products.pagination?.pages || 1,
+              })}
+            </p>
           </div>
           <input
-            value={productQ}
-            onChange={(e) => setProductQ(e.target.value)}
+            value={productSearch}
+            onChange={(e) => setProductSearch(e.target.value)}
             placeholder={t.search}
-            className="rounded-full border border-brown/10 bg-cream px-4 py-2 text-sm"
+            className="w-full rounded-full border border-brown/10 bg-cream px-4 py-2 text-sm sm:w-64"
           />
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          {[
+            ["vendor", t.vendor, t.allVendors, catalogFacets?.vendors],
+            ["brand", t.productBrand, t.allBrands, catalogFacets?.brands],
+            ["category", t.category, t.allCategories, catalogFacets?.categories],
+            ["subCategory", t.subCategory, t.allSubCategories, catalogFacets?.subcategories],
+            ["collection", t.collection, t.allCollections, catalogFacets?.collections],
+          ].map(([field, label, placeholder, options]) => (
+            <label key={field} className="block">
+              <span className="mb-1 block text-xs font-semibold text-brown/50">{label}</span>
+              <select
+                value={productFilters[field]}
+                onChange={(e) => changeProductFilter(field, e.target.value)}
+                className={SELECT}
+              >
+                <option value="">{placeholder}</option>
+                {(options || []).map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {optionLabel(option, lang)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
         </div>
         <div className="mt-3 flex flex-wrap gap-1">
           {[
@@ -2017,11 +2334,15 @@ function PartnerCommission({ partnerSlug, t, lang }) {
             ["ready", t.ready],
             ["blocked", t.blocked],
             ["missing_setup", t.unmapped],
+            ["inactive", t.inactiveExcluded],
           ].map(([id, label]) => (
             <button
               key={id}
               type="button"
-              onClick={() => setEligibility(id)}
+              onClick={() => {
+                setEligibility(id);
+                setProductPage(1);
+              }}
               className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
                 eligibility === id ? "bg-brown text-cream" : "bg-cream text-brown/60"
               }`}
@@ -2031,60 +2352,125 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           ))}
         </div>
         {(products.products || []).length ? (
-          <div className="mt-5 divide-y divide-brown/5">
-            {(products.products || []).map((item) => (
-              <PlatformProductRow
-                key={item.id}
-                item={item}
-                t={t}
-                lang={lang}
-                busy={busy}
-                onEdit={() => openPlatformProduct(item)}
-                onToggle={async () => {
-                  setBusy(true);
-                  setError("");
-                  try {
-                    await api.setPlatformAvailability(partnerSlug, {
-                      scope: "product",
-                      targetId: item.id,
-                      isActive: item.platformActive === false,
-                    });
-                    await loadProducts();
-                  } catch (err) {
-                    setError(err.message);
-                  } finally {
-                    setBusy(false);
+          <>
+            <div className="mt-5 hidden md:block">
+              <table className="w-full table-fixed text-left text-sm">
+                <colgroup>
+                  <col className="w-[18%]" />
+                  <col className="w-[11%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[20%]" />
+                </colgroup>
+                <thead>
+                  <tr className="border-b border-brown/10 text-[11px] tracking-wide text-brown/45 uppercase">
+                    <th className="py-2 pr-2 font-semibold">{t.products}</th>
+                    <th className="py-2 pr-2 font-semibold">{t.sku}</th>
+                    <th className="py-2 pr-2 font-semibold">{t.productBrand}</th>
+                    <th className="py-2 pr-2 font-semibold">{t.brownstorePrice}</th>
+                    <th className="py-2 pr-2 font-semibold">{t.columnCommission}</th>
+                    <th className="py-2 pr-2 font-semibold">{t.platformPriceLabel}</th>
+                    <th className="py-2 pr-2 font-semibold">{t.status}</th>
+                    <th className="py-2 font-semibold">{t.columnActions}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(products.products || []).map((item) => (
+                    <PlatformTableProduct
+                      key={item.id}
+                      item={item}
+                      t={t}
+                      lang={lang}
+                      busy={busy}
+                      open={priceDetailId === item.id}
+                      onEdit={() => openPlatformProduct(item)}
+                      onDetails={() =>
+                        setPriceDetailId((current) => (current === item.id ? null : item.id))
+                      }
+                      onToggle={() => togglePlatformProduct(item)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-2 divide-y divide-brown/10 md:hidden">
+              {(products.products || []).map((item) => (
+                <PlatformProductCard
+                  key={item.id}
+                  item={item}
+                  t={t}
+                  lang={lang}
+                  busy={busy}
+                  open={priceDetailId === item.id}
+                  onEdit={() => openPlatformProduct(item)}
+                  onDetails={() =>
+                    setPriceDetailId((current) => (current === item.id ? null : item.id))
                   }
-                }}
-              />
-            ))}
-          </div>
+                  onToggle={() => togglePlatformProduct(item)}
+                />
+              ))}
+            </div>
+          </>
         ) : (
           <p className="mt-8 text-sm text-brown/45">{t.noProducts}</p>
         )}
-        {products.pagination?.pages > 1 ? (
-          <div className="mt-4 flex justify-center gap-2">
-            {Array.from({ length: products.pagination.pages }, (_, i) => i + 1)
-              .filter(
-                (n) =>
-                  n === 1 ||
-                  n === products.pagination.pages ||
-                  Math.abs(n - productPage) <= 2
-              )
-              .map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  onClick={() => setProductPage(n)}
-                  className={`h-9 min-w-9 rounded-full ${
-                    n === productPage ? "bg-brown text-cream" : "bg-cream"
-                  }`}
-                >
-                  {n}
-                </button>
-              ))}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-brown/45">{t.pageSize}</span>
+            {PRODUCT_PAGE_SIZES.map((size) => (
+              <button
+                key={size}
+                type="button"
+                onClick={() => {
+                  setProductLimit(size);
+                  setProductPage(1);
+                }}
+                className={`h-8 min-w-8 rounded-full px-2 text-xs font-semibold ${
+                  productLimit === size ? "bg-brown text-cream" : "bg-cream text-brown"
+                }`}
+              >
+                {size}
+              </button>
+            ))}
           </div>
-        ) : null}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              disabled={productPage <= 1}
+              onClick={() => setProductPage((current) => Math.max(1, current - 1))}
+              className="rounded-full bg-cream px-3 py-1.5 text-xs font-semibold text-brown disabled:opacity-40"
+            >
+              {t.platformPrevious}
+            </button>
+            {pageWindow(productPage, products.pagination?.pages || 1).map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setProductPage(n)}
+                className={`h-9 min-w-9 rounded-full text-sm ${
+                  n === productPage ? "bg-brown text-cream" : "bg-cream text-brown"
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+            <button
+              type="button"
+              disabled={productPage >= (products.pagination?.pages || 1)}
+              onClick={() =>
+                setProductPage((current) =>
+                  Math.min(products.pagination?.pages || current, current + 1)
+                )
+              }
+              className="rounded-full bg-cream px-3 py-1.5 text-xs font-semibold text-brown disabled:opacity-40"
+            >
+              {t.platformNext}
+            </button>
+          </div>
+        </div>
       </section>
       ) : null}
 
