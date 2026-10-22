@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { Commission } from "../models/Commission.js";
 import { MiswagSyncJob } from "../models/MiswagSyncJob.js";
 import { MiswagSyncProductResult } from "../models/MiswagSyncProductResult.js";
@@ -319,6 +320,45 @@ function storedStrategy(job) {
   return job?.strategy === "changed" ? "changed" : "full";
 }
 
+const CHANGED_PREVIEW_REQUIRED_MESSAGE =
+  "Run and complete Changed Preview before starting Changed Sync.";
+
+function changedPreviewRequiredError() {
+  return new MiswagError(CHANGED_PREVIEW_REQUIRED_MESSAGE, {
+    status: 409,
+    code: "changed_preview_required",
+  });
+}
+
+/**
+ * A finished Changed Preview stays status "preview" with finishedAt set.
+ * It is not status "completed" — that status belongs to a finished sync.
+ * This check only authorizes a new Changed Sync. It does not read or write payloads.
+ */
+function isCompletedChangedPreview(job) {
+  if (!job) return false;
+  if (job.partner !== "miswag") return false;
+  if (job.mode !== "preview") return false;
+  if (job.strategy !== "changed") return false;
+  if (job.status !== "preview") return false;
+  if (!job.finishedAt) return false;
+  return true;
+}
+
+async function assertCompletedChangedPreview(previewJobId) {
+  const id = String(previewJobId ?? "").trim();
+  if (!mongoose.isValidObjectId(id)) throw changedPreviewRequiredError();
+  let job = null;
+  try {
+    job = await MiswagSyncJob.findById(id)
+      .select("partner mode strategy status finishedAt")
+      .lean();
+  } catch {
+    throw changedPreviewRequiredError();
+  }
+  if (!isCompletedChangedPreview(job)) throw changedPreviewRequiredError();
+}
+
 function countChange(target, result) {
   if (result?.changeType === "new") target.newCount += 1;
   else if (result?.changeType === "changed") target.changedCount += 1;
@@ -358,7 +398,11 @@ async function recordAcceptedPayload(result, sent) {
 
 /** Re-attach runner after process restart if a job is still marked running. */
 export async function ensureMiswagSyncRunner() {
-  const job = await MiswagSyncJob.findOne({ partner: "miswag", status: "running" }).sort({
+  const job = await MiswagSyncJob.findOne({
+    partner: "miswag",
+    mode: { $ne: "preview" },
+    status: "running",
+  }).sort({
     createdAt: -1,
   });
   if (!job) return null;
@@ -672,7 +716,11 @@ async function runJobLoop(jobId) {
   }
 }
 
-export async function startMiswagSyncAll({ confirm = false, strategy = "full" } = {}) {
+export async function startMiswagSyncAll({
+  confirm = false,
+  strategy = "full",
+  previewJobId,
+} = {}) {
   if (confirm !== true) {
     throw new MiswagError("Confirm Start Sync after reviewing the dry-run preview.", {
       status: 400,
@@ -682,8 +730,10 @@ export async function startMiswagSyncAll({ confirm = false, strategy = "full" } 
   await assertMiswagSyncAllowed();
   const requested = normalizeStrategy(strategy);
 
+  // Preview-mode jobs are not the single active sync, so a running preview cannot be sent.
   const running = await MiswagSyncJob.findOne({
     partner: "miswag",
+    mode: { $ne: "preview" },
     status: { $in: ["running", "paused"] },
   });
   if (running?.status === "running") {
@@ -707,6 +757,9 @@ export async function startMiswagSyncAll({ confirm = false, strategy = "full" } 
     setImmediate(() => runJobLoop(running._id));
     return { job: publicJob(running), message: "Resumed paused Miswag sync job." };
   }
+
+  // Authorization only. The new sync still classifies the current payload itself.
+  if (requested === "changed") await assertCompletedChangedPreview(previewJobId);
 
   const total = await Product.countDocuments({});
   const job = await MiswagSyncJob.create({

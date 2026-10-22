@@ -6,6 +6,15 @@ const BUTTON =
 const GHOST =
   "rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-brown ring-1 ring-brown/10 disabled:opacity-50";
 
+function completedChangedPreviewId(preview) {
+  const job = preview?.job;
+  if (!preview?.dryRun || !job?.id) return "";
+  if ((job.strategy || preview.strategy) !== "changed") return "";
+  if (job.mode && job.mode !== "preview") return "";
+  if (job.status !== "preview" || !job.finishedAt) return "";
+  return String(job.id);
+}
+
 function Stat({ label, value }) {
   return (
     <div className="rounded-2xl bg-cream px-4 py-3">
@@ -96,6 +105,7 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
   const failures = current?.recentFailures || preview?.job?.blockedSamples || [];
   const showingPreview = !live && current && current === preview?.job;
   const changedView = current?.strategy === "changed";
+  const changedPreviewJobId = completedChangedPreviewId(changedPreview);
 
   return (
     <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
@@ -155,13 +165,13 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
             </button>
             <button
               type="button"
-              disabled={Boolean(busy) || !changedPreview?.dryRun}
+              disabled={Boolean(busy) || !changedPreviewJobId}
               className={BUTTON}
-              title={!changedPreview?.dryRun ? t.miswagRunChangedPreview : undefined}
+              title={!changedPreviewJobId ? t.miswagRunChangedPreview : undefined}
               onClick={() => {
-                if (!changedPreview?.dryRun) return;
+                if (!changedPreviewJobId) return;
                 if (!window.confirm(t.miswagStartChangedConfirm)) return;
-                run(() => api.miswagSyncAllStart(true, "changed"), "changed-start");
+                run(() => api.miswagSyncAllStart(true, "changed", changedPreviewJobId), "changed-start");
               }}
             >
               {busy === "changed-start" ? t.loading : t.miswagStartChangedSync}

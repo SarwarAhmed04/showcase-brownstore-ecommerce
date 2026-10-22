@@ -226,6 +226,30 @@ async function waitJob(id, accepted, attempts = 50, delay = 50) {
   return job;
 }
 
+function postedBody(options) {
+  const raw = options?.body;
+  return typeof raw === "string" ? JSON.parse(raw) : raw;
+}
+
+async function completedChangedPreview() {
+  const preview = await runMiswagSyncPreview({ strategy: "changed" });
+  assert.equal(preview.dryRun, true);
+  assert.equal(preview.sentToMiswag, 0);
+  assert.equal(preview.job.mode, "preview");
+  assert.equal(preview.job.strategy, "changed");
+  assert.equal(preview.job.status, "preview");
+  assert.ok(preview.job.finishedAt);
+  return preview;
+}
+
+function startChanged(previewJobId) {
+  return startMiswagSyncAll({
+    confirm: true,
+    strategy: "changed",
+    previewJobId,
+  });
+}
+
 describe("Miswag payload fingerprint", () => {
   const doc = plainProduct();
 
@@ -530,7 +554,7 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
     assert.equal(preview.job.missingCategory, 1);
     assert.equal(miswagSyncStateLookupCount(), 1);
 
-    const started = await startMiswagSyncAll({ confirm: true, strategy: "changed" });
+    const started = await startChanged(preview.job.id);
     const done = await waitJob(started.job.id, ["completed", "failed", "auth_failed"]);
     assert.equal(done.status, "completed");
     assert.equal(done.strategy, "changed");
@@ -578,7 +602,9 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
       posts += 1;
       return mockResponse(400, { message: "bad product" });
     });
-    const started = await startMiswagSyncAll({ confirm: true, strategy: "changed" });
+    const preview = await completedChangedPreview();
+    assert.equal(posts, 0);
+    const started = await startChanged(preview.job.id);
     const failed = await waitJob(started.job.id, ["completed", "failed"]);
     assert.equal(failed.status, "completed");
     assert.equal(failed.failed, 1);
@@ -592,7 +618,7 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
     assert.equal(again.sentToMiswag, 0);
 
     installFetch(() => mockResponse(201, { data: { item_id: "mw-retry" } }));
-    const retried = await startMiswagSyncAll({ confirm: true, strategy: "changed" });
+    const retried = await startChanged(again.job.id);
     const done = await waitJob(retried.job.id, ["completed", "failed"]);
     assert.equal(done.success, 1);
     const saved = await MiswagProductSyncState.findOne({ externalId: "bs-ibs-fail" }).lean();
@@ -638,7 +664,9 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
     assert.equal(state.lastPayloadHash, current.hash);
 
     posted.length = 0;
-    const changed = await startMiswagSyncAll({ confirm: true, strategy: "changed" });
+    const changedPreview = await completedChangedPreview();
+    assert.equal(posted.length, 0);
+    const changed = await startChanged(changedPreview.job.id);
     const second = await waitJob(changed.job.id, ["completed", "failed"]);
     assert.equal(second.success, 0);
     assert.equal(second.unchangedCount, 2);
@@ -689,7 +717,8 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
         })
     );
     try {
-      const started = await startMiswagSyncAll({ confirm: true, strategy: "changed" });
+      const preview = await completedChangedPreview();
+      const started = await startChanged(preview.job.id);
       let paused = null;
       for (let i = 0; i < 30; i += 1) {
         try {
@@ -774,8 +803,9 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
     await markConnected();
     await Product.create(sampleProduct("auth"));
     await mapDefaultCollection();
+    const authPreview = await completedChangedPreview();
     installFetch(() => mockResponse(401, { message: "Unauthorized" }));
-    const authStart = await startMiswagSyncAll({ confirm: true, strategy: "changed" });
+    const authStart = await startChanged(authPreview.job.id);
     const paused = await waitJob(authStart.job.id, ["auth_failed", "completed", "failed"], 40, 40);
     assert.equal(paused.status, "auth_failed");
     assert.equal(paused.strategy, "changed");
@@ -787,8 +817,9 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
     await MiswagProductSyncState.deleteMany({});
     await Product.create(sampleProduct("auth403"));
     await mapDefaultCollection();
+    const forbiddenPreview = await completedChangedPreview();
     installFetch(() => mockResponse(403, { message: "Forbidden" }));
-    const forbiddenStart = await startMiswagSyncAll({ confirm: true, strategy: "changed" });
+    const forbiddenStart = await startChanged(forbiddenPreview.job.id);
     const forbidden = await waitJob(forbiddenStart.job.id, ["auth_failed", "completed", "failed"], 40, 40);
     assert.equal(forbidden.status, "auth_failed");
     assert.equal(forbidden.strategy, "changed");
@@ -806,7 +837,8 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
       if (attempts === 2) return mockResponse(503, { message: "down" });
       return mockResponse(201, { data: { item_id: "mw-retry-ok" } });
     });
-    const started = await startMiswagSyncAll({ confirm: true, strategy: "changed" });
+    const retryPreview = await completedChangedPreview();
+    const started = await startChanged(retryPreview.job.id);
     const done = await waitJob(started.job.id, ["completed", "failed", "auth_failed"], 40, 100);
     assert.equal(done.status, "completed");
     assert.equal(done.success, 1);
@@ -851,7 +883,8 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
       hashVersion: 1,
     });
     const methods = installFetch(() => mockResponse(201, { data: { item_id: "mw" } }));
-    const started = await startMiswagSyncAll({ confirm: true, strategy: "changed" });
+    const preview = await completedChangedPreview();
+    const started = await startChanged(preview.job.id);
     const done = await waitJob(started.job.id, ["completed", "failed"]);
     assert.equal(done.status, "completed");
     assert.equal(done.success, 0);
@@ -930,5 +963,348 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
       (err) => err?.code === "sync_active" && err.status === 409
     );
     assert.equal(await MiswagSyncJob.countDocuments({ status: "running" }), 0);
+  });
+
+  const PREVIEW_REQUIRED = "Run and complete Changed Preview before starting Changed Sync.";
+
+  async function guardProduct(id = "guard") {
+    await markConnected();
+    const product = await Product.create(sampleProduct(id));
+    await mapDefaultCollection();
+    const externalId = `bs-ibs-${id}`;
+    await MiswagProductSyncState.create({
+      partner: "miswag",
+      productId: String(product._id),
+      ibsherId: `ibs-${id}`,
+      externalId,
+      lastPayloadHash: "c".repeat(64),
+      lastHttpStatus: 201,
+      miswagProductId: "mw-guard",
+      hashVersion: 1,
+    });
+    return { product, externalId };
+  }
+
+  async function rejectChangedStart(previewJobId, { sendId = true, externalId = "bs-ibs-guard" } = {}) {
+    const posts = [];
+    installFetch((_url, options) => {
+      posts.push(postedBody(options));
+      return mockResponse(201, { data: { item_id: "should-not-send" } });
+    });
+    const jobsBefore = await MiswagSyncJob.countDocuments();
+    const syncBefore = await MiswagSyncJob.countDocuments({ mode: "sync" });
+    const hashBefore = await MiswagProductSyncState.findOne({ externalId }).lean();
+    const body = { confirm: true, strategy: "changed" };
+    if (sendId) body.previewJobId = previewJobId;
+    const response = await call("POST", "/api/admin/platforms/miswag/sync-all/start", { body });
+    assert.equal(response.status, 409);
+    assert.equal(response.json.error, "changed_preview_required");
+    assert.equal(response.json.code, "changed_preview_required");
+    assert.equal(response.json.message, PREVIEW_REQUIRED);
+    assert.equal(response.json.job, undefined);
+    assert.equal(response.json.endpoint, undefined);
+    assert.equal(response.json.stack, undefined);
+    assert.equal(JSON.stringify(response.json).includes(String(previewJobId || "missing-id")), false);
+    assert.equal(await MiswagSyncJob.countDocuments(), jobsBefore);
+    assert.equal(await MiswagSyncJob.countDocuments({ mode: "sync" }), syncBefore);
+    assert.equal(posts.length, 0);
+    const hashAfter = await MiswagProductSyncState.findOne({ externalId }).lean();
+    assert.equal(hashAfter.lastPayloadHash, hashBefore.lastPayloadHash);
+    assert.equal(hashAfter.miswagProductId, hashBefore.miswagProductId);
+    assert.equal(hashAfter.lastHttpStatus, hashBefore.lastHttpStatus);
+    return response;
+  }
+
+  it("rejects changed sync without previewJobId and creates nothing", async () => {
+    const { externalId } = await guardProduct();
+    await assert.rejects(
+      () => startMiswagSyncAll({ confirm: true, strategy: "changed" }),
+      (err) => err?.code === "changed_preview_required" && err.status === 409 && err.message === PREVIEW_REQUIRED
+    );
+    assert.equal(await MiswagSyncJob.countDocuments({ mode: "sync" }), 0);
+    assert.equal(
+      (await MiswagProductSyncState.findOne({ externalId }).lean()).lastPayloadHash,
+      "c".repeat(64)
+    );
+    await rejectChangedStart(undefined, { sendId: false, externalId });
+    await rejectChangedStart("", { externalId });
+  });
+
+  it("rejects a missing or unknown changed preview id", async () => {
+    const { externalId } = await guardProduct("missing");
+    await rejectChangedStart("not-a-preview-id", { externalId });
+    await rejectChangedStart(new mongoose.Types.ObjectId().toString(), { externalId });
+  });
+
+  it("rejects a full preview and a sync job used as previewJobId", async () => {
+    const { externalId } = await guardProduct("full-id");
+    const fullPreview = await runMiswagSyncPreview({ strategy: "full" });
+    assert.equal(fullPreview.job.strategy, "full");
+    assert.equal(fullPreview.job.mode, "preview");
+    assert.ok(fullPreview.job.finishedAt);
+    await rejectChangedStart(fullPreview.job.id, { externalId });
+
+    const syncJob = await MiswagSyncJob.create({
+      partner: "miswag",
+      status: "completed",
+      mode: "sync",
+      strategy: "changed",
+      finishedAt: new Date(),
+      startedAt: new Date(),
+    });
+    await rejectChangedStart(String(syncJob._id), { externalId });
+
+    const otherPartner = await MiswagSyncJob.create({
+      partner: "other",
+      status: "preview",
+      mode: "preview",
+      strategy: "changed",
+      finishedAt: new Date(),
+      startedAt: new Date(),
+    });
+    const response = await rejectChangedStart(String(otherPartner._id), { externalId });
+    assert.equal(JSON.stringify(response.json).includes("other"), false);
+  });
+
+  it("rejects a running or unfinished changed preview", async () => {
+    const { externalId } = await guardProduct("running");
+    const running = await MiswagSyncJob.create({
+      partner: "miswag",
+      status: "running",
+      mode: "preview",
+      strategy: "changed",
+      startedAt: new Date(),
+    });
+    await rejectChangedStart(String(running._id), { externalId });
+
+    const unfinished = await MiswagSyncJob.create({
+      partner: "miswag",
+      status: "preview",
+      mode: "preview",
+      strategy: "changed",
+      startedAt: new Date(),
+      finishedAt: null,
+    });
+    await rejectChangedStart(String(unfinished._id), { externalId });
+    assert.equal(await MiswagSyncJob.countDocuments({ mode: "sync" }), 0);
+  });
+
+  it("rejects a failed changed preview", async () => {
+    const { externalId } = await guardProduct("failed-preview");
+    const failed = await MiswagSyncJob.create({
+      partner: "miswag",
+      status: "failed",
+      mode: "preview",
+      strategy: "changed",
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      lastError: "preview failed",
+    });
+    const response = await rejectChangedStart(String(failed._id), { externalId });
+    assert.equal(JSON.stringify(response.json).includes("preview failed"), false);
+  });
+
+  it("rejects a stopped or cancelled changed preview", async () => {
+    const { externalId } = await guardProduct("stopped-preview");
+    const stopped = await MiswagSyncJob.create({
+      partner: "miswag",
+      status: "stopped",
+      mode: "preview",
+      strategy: "changed",
+      startedAt: new Date(),
+      finishedAt: new Date(),
+    });
+    await rejectChangedStart(String(stopped._id), { externalId });
+
+    const cancelled = await MiswagSyncJob.collection.insertOne({
+      partner: "miswag",
+      status: "cancelled",
+      mode: "preview",
+      strategy: "changed",
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await rejectChangedStart(String(cancelled.insertedId), { externalId });
+  });
+
+  it("accepts a successfully completed changed preview and still sends the current payload", async () => {
+    await markConnected();
+    await Product.create(sampleProduct("accepted"));
+    await mapDefaultCollection();
+    const posted = [];
+    installFetch((_url, options) => {
+      posted.push(postedId(options));
+      return mockResponse(201, { data: { item_id: "mw-accepted" } });
+    });
+    const preview = await completedChangedPreview();
+    assert.equal(posted.length, 0);
+    assert.equal(await MiswagProductSyncState.countDocuments({ externalId: "bs-ibs-accepted" }), 0);
+    const response = await call("POST", "/api/admin/platforms/miswag/sync-all/start", {
+      body: { confirm: true, strategy: "changed", previewJobId: preview.job.id },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.json.job.mode, "sync");
+    assert.equal(response.json.job.strategy, "changed");
+    assert.notEqual(response.json.job.id, preview.job.id);
+    const done = await waitJob(response.json.job.id, ["completed", "failed"]);
+    assert.equal(done.status, "completed");
+    assert.equal(done.success, 1);
+    assert.equal(done.newCount, 1);
+    assert.deepEqual(posted, ["bs-ibs-accepted"]);
+    const previewJob = await MiswagSyncJob.findById(preview.job.id).lean();
+    assert.equal(previewJob.mode, "preview");
+    assert.equal(previewJob.status, "preview");
+    const state = await MiswagProductSyncState.findOne({ externalId: "bs-ibs-accepted" }).lean();
+    assert.equal(state.lastHttpStatus, 201);
+    assert.equal(state.lastPayloadHash.length, 64);
+  });
+
+  it("recalculates the current payload after the authorizing changed preview", async () => {
+    await markConnected();
+    const product = await Product.create(sampleProduct("recalc"));
+    await mapDefaultCollection();
+    const before = await currentHash("ibs-recalc");
+    await MiswagProductSyncState.create({
+      partner: "miswag",
+      productId: String(product._id),
+      ibsherId: "ibs-recalc",
+      externalId: before.result.externalId,
+      lastPayloadHash: before.hash,
+      lastHttpStatus: 201,
+      miswagProductId: "mw-old",
+      hashVersion: 1,
+    });
+    const posted = [];
+    installFetch((_url, options) => {
+      posted.push(postedBody(options));
+      return mockResponse(201, { data: { item_id: "mw-now" } });
+    });
+    const preview = await completedChangedPreview();
+    assert.equal(posted.length, 0);
+    assert.equal(preview.job.unchangedCount, 1);
+    assert.equal(preview.sentToMiswag, 0);
+    const afterPreview = await MiswagProductSyncState.findOne({ externalId: before.result.externalId }).lean();
+    assert.equal(afterPreview.lastPayloadHash, before.hash);
+
+    await Product.updateOne({ _id: product._id }, { $set: { price: 180000 } });
+    const started = await startChanged(preview.job.id);
+    const done = await waitJob(started.job.id, ["completed", "failed"]);
+    assert.equal(done.status, "completed");
+    assert.equal(done.success, 1);
+    assert.equal(done.changedCount, 1);
+    assert.equal(done.unchangedCount, 0);
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0].external_id, before.result.externalId);
+    assert.notEqual(posted[0].price, before.result.payload.price);
+    assert.equal(posted[0].price, applyCommissionRate(180000, 10));
+    const row = await MiswagSyncProductResult.findOne({
+      jobId: done._id,
+      externalId: before.result.externalId,
+    }).lean();
+    assert.equal(row.changeType, "changed");
+    assert.equal(row.status, "SYNCED");
+    const saved = await MiswagProductSyncState.findOne({ externalId: before.result.externalId }).lean();
+    assert.equal(saved.lastPayloadHash, miswagPayloadHash(posted[0]));
+    assert.notEqual(saved.lastPayloadHash, before.hash);
+    assert.equal(saved.miswagProductId, "mw-now");
+  });
+
+  it("starts full sync without a changed preview", async () => {
+    await markConnected();
+    await Product.create(sampleProduct("full-guard"));
+    await mapDefaultCollection();
+    const posted = [];
+    installFetch((_url, options) => {
+      posted.push(postedId(options));
+      return mockResponse(201, { data: { item_id: "mw-full-guard" } });
+    });
+    assert.equal(await MiswagSyncJob.countDocuments({ strategy: "changed", mode: "preview" }), 0);
+    const response = await call("POST", "/api/admin/platforms/miswag/sync-all/start", {
+      body: { confirm: true, strategy: "full" },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.json.job.strategy, "full");
+    assert.equal(response.json.job.mode, "sync");
+    assert.equal(response.json.error, undefined);
+    const done = await waitJob(response.json.job.id, ["completed", "failed"]);
+    assert.equal(done.status, "completed");
+    assert.equal(done.success, 1);
+    assert.deepEqual(posted, ["bs-ibs-full-guard"]);
+  });
+
+  it("resumes an existing changed sync without asking for preview again", async () => {
+    await markConnected();
+    await Product.create(sampleProduct("resume-start"));
+    await mapDefaultCollection();
+    const paused = await MiswagSyncJob.create({
+      partner: "miswag",
+      status: "paused",
+      mode: "sync",
+      strategy: "changed",
+      batchSize: 15,
+      total: 1,
+      cursorIbsherId: "",
+      startedAt: new Date(),
+    });
+    installFetch(() => mockResponse(201, { data: { item_id: "mw-resume-start" } }));
+    assert.equal(await MiswagSyncJob.countDocuments({ mode: "preview" }), 0);
+    const viaStart = await startMiswagSyncAll({ confirm: true, strategy: "changed" });
+    assert.equal(viaStart.job.id, String(paused._id));
+    assert.equal(viaStart.job.status, "running");
+    const done = await waitJob(paused._id, ["completed", "failed"]);
+    assert.equal(done.status, "completed");
+    assert.equal(done.success, 1);
+    assert.equal(await MiswagSyncJob.countDocuments({ mode: "sync", strategy: "changed" }), 1);
+  });
+
+  it("pauses, resumes, and stops a changed sync without a preview id", async () => {
+    await markConnected();
+    await Product.create(sampleProduct("controls"));
+    await mapDefaultCollection();
+    let release = () => {};
+    const hold = new Promise((resolve) => {
+      release = resolve;
+    });
+    installFetch(
+      () =>
+        new Promise((resolve) => {
+          hold.then(() => resolve(mockResponse(201, { data: { item_id: "mw-controls" } })));
+        })
+    );
+    const job = await MiswagSyncJob.create({
+      partner: "miswag",
+      status: "paused",
+      mode: "sync",
+      strategy: "changed",
+      batchSize: 15,
+      total: 1,
+      cursorIbsherId: "",
+      startedAt: new Date(),
+    });
+    try {
+      const resumed = await resumeMiswagSyncAll();
+      assert.equal(resumed.job.id, String(job._id));
+      assert.equal(resumed.job.status, "running");
+      assert.equal(resumed.job.strategy, "changed");
+      let paused = null;
+      for (let i = 0; i < 30; i += 1) {
+        try {
+          paused = await pauseMiswagSyncAll();
+          break;
+        } catch {
+          await sleep(20);
+        }
+      }
+      assert.equal(paused.job.status, "paused");
+      const stopped = await stopMiswagSyncAll();
+      assert.equal(stopped.job.status, "stopped");
+      assert.equal(stopped.job.strategy, "changed");
+      assert.equal(await MiswagProductSyncState.countDocuments({ externalId: "bs-ibs-controls" }), 0);
+    } finally {
+      release();
+    }
+    await sleep(200);
   });
 });

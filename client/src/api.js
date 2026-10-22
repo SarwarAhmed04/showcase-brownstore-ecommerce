@@ -301,14 +301,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ strategy: strategy === "changed" ? "changed" : "full" }),
     }),
-  miswagSyncAllStart: (confirm = false, strategy = "full") =>
-    request("/api/admin/platforms/miswag/sync-all/start", {
+  miswagSyncAllStart: (confirm = false, strategy = "full", previewJobId) => {
+    const normalized = strategy === "changed" ? "changed" : "full";
+    const body = {
+      confirm: confirm === true,
+      strategy: normalized,
+    };
+    if (normalized === "changed") body.previewJobId = previewJobId ? String(previewJobId) : "";
+    return request("/api/admin/platforms/miswag/sync-all/start", {
       method: "POST",
-      body: JSON.stringify({
-        confirm: confirm === true,
-        strategy: strategy === "changed" ? "changed" : "full",
-      }),
-    }),
+      body: JSON.stringify(body),
+    });
+  },
   miswagSyncAllPause: () =>
     request("/api/admin/platforms/miswag/sync-all/pause", { method: "POST", body: "{}" }),
   miswagSyncAllResume: () =>

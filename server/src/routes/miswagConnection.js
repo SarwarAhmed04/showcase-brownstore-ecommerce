@@ -44,6 +44,13 @@ function fail(res, err, fallback) {
         code: err.code,
       });
     }
+    if (err.code === "changed_preview_required") {
+      return res.status(err.status === 400 || err.status === 409 ? err.status : 409).json({
+        error: "changed_preview_required",
+        code: "changed_preview_required",
+        message: err.message || "Run and complete Changed Preview before starting Changed Sync.",
+      });
+    }
     const miswagAuth = err.status === 401 || err.status === 403;
     const status = miswagAuth
       ? 502
@@ -273,6 +280,7 @@ miswagConnectionRouter.post("/platforms/miswag/sync-all/start", async (req, res)
       await startMiswagSyncAll({
         confirm: req.body?.confirm === true,
         strategy: req.body?.strategy,
+        previewJobId: req.body?.previewJobId,
       })
     );
   } catch (err) {
