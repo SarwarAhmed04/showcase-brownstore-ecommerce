@@ -246,3 +246,14 @@ html.admin-dark select:-webkit-autofill {
   caret-color: #f5f5f5;
   box-shadow: 0 0 0 1000px #141414 inset;
 }
+
+html.admin-dark select.filter-select {
+  color: #f5f5f5;
+  background-color: #141414;
+}
+
+html.admin-dark select.filter-select:disabled {
+  color: rgb(245 245 245 / 0.55);
+  background-color: #101010;
+  opacity: 0.85;
+}

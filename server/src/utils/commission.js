@@ -1,11 +1,29 @@
+import mongoose from "mongoose";
 import { Product } from "../models/Product.js";
-import {
-  ALL_TARGET_ID,
-  COMMISSION_SCOPES,
-} from "../models/Commission.js";
+import { ALL_TARGET_ID, COMMISSION_SCOPES, Commission } from "../models/Commission.js";
 import { fetchIbsherVendors } from "../services/ibsher.js";
+import {
+  FILTER_COLLECTION_MESSAGE,
+  FILTER_NO_MATCH_MESSAGE,
+  FILTER_REQUIRED_MESSAGE,
+  filterCommissionTargetId,
+  filterIdsError,
+  filterNoMatchMessage,
+  filterSpecificity,
+  normalizeFilterIds,
+} from "./commissionIds.js";
 
 export { ALL_TARGET_ID, COMMISSION_SCOPES };
+export {
+  FILTER_COLLECTION_MESSAGE,
+  FILTER_NO_MATCH_MESSAGE,
+  FILTER_REQUIRED_MESSAGE,
+  filterCommissionTargetId,
+  filterIdsError,
+  filterNoMatchMessage,
+  filterSpecificity,
+  normalizeFilterIds,
+};
 
 export const ALL_TARGET_NAME = {
   ku: "هەموو بەرهەمەکان",
@@ -13,7 +31,21 @@ export const ALL_TARGET_NAME = {
   ar: "كل المنتجات",
 };
 
+const ALL_SUBCATEGORIES_NAME = {
+  ku: "هەموو ژێرپۆلەکان",
+  en: "All Sub-categories",
+  ar: "كل الأقسام الفرعية",
+};
+
+const ALL_COLLECTIONS_NAME = {
+  ku: "هەموو کۆلێکشنەکان",
+  en: "All Collections",
+  ar: "كل المجموعات",
+};
+
+// The most specific matching filter wins, then these existing scopes in order.
 const SCOPE_RANK = {
+  filter: 6,
   vendor: 5,
   collection: 4,
   subcategory: 3,
@@ -21,6 +53,25 @@ const SCOPE_RANK = {
   category: 1,
   all: 0,
 };
+
+const FILTER_OPTION_FIELDS = {
+  brands: { id: "$brand._id", name: "$brand.name", match: "brand._id" },
+  categories: { id: "$category._id", name: "$category.name", match: "category._id" },
+  subcategories: { id: "$subCategory._id", name: "$subCategory.name", match: "subCategory._id" },
+  collections: {
+    id: "$collectionName._id",
+    name: "$collectionName.name",
+    match: "collectionName._id",
+  },
+};
+
+export class CommissionInputError extends Error {
+  constructor(message, status = 400) {
+    super(message);
+    this.name = "CommissionInputError";
+    this.status = status;
+  }
+}
 
 function localizedName(name) {
   if (typeof name === "string") {
@@ -32,6 +83,17 @@ function localizedName(name) {
     ku: String(name?.ku || fallback),
     en: String(name?.en || fallback),
     ar: String(name?.ar || fallback),
+  };
+}
+
+function storedFilterPath(path) {
+  if (!path || typeof path !== "object") return null;
+  return {
+    vendor: localizedName(path.vendor),
+    brand: localizedName(path.brand),
+    category: localizedName(path.category),
+    subCategory: localizedName(path.subCategory),
+    collection: localizedName(path.collection),
   };
 }
 
@@ -47,6 +109,10 @@ export function toAdminCommission(doc) {
       raw.scope === "all" ? { ...ALL_TARGET_NAME } : localizedName(raw.targetName),
     categoryId: raw.categoryId || "",
     subCategoryId: raw.subCategoryId || "",
+    vendorId: raw.vendorId || "",
+    brandId: raw.brandId || "",
+    collectionId: raw.collectionId || "",
+    filterPath: raw.scope === "filter" ? storedFilterPath(raw.filterPath) : null,
     percentage: Number.isFinite(percentage) ? percentage : 0,
     isActive: raw.isActive !== false,
     updatedAt: raw.updatedAt,
@@ -63,6 +129,12 @@ function mapRows(rows) {
       subCategoryId: row.subCategoryId ? String(row.subCategoryId) : "",
       products: Number(row.products) || 0,
     }));
+}
+
+function optionSort(a, b) {
+  const left = a.name?.en || a.name?.ku || a.name?.ar || a.id;
+  const right = b.name?.en || b.name?.ku || b.name?.ar || b.id;
+  return String(left).localeCompare(String(right), "en", { sensitivity: "base" });
 }
 
 function vendorLabel(row, directory) {
@@ -180,6 +252,7 @@ export function findTarget(targets, scope, targetId) {
   if (scope === "all") {
     return { id: ALL_TARGET_ID, name: { ...ALL_TARGET_NAME } };
   }
+  if (scope === "filter") return null;
   const list =
     scope === "category"
       ? targets.categories
@@ -191,6 +264,183 @@ export function findTarget(targets, scope, targetId) {
             ? targets.brands
             : targets.collections;
   return list.find((item) => item.id === String(targetId)) || null;
+}
+
+function productIdMatch(path, id) {
+  const value = String(id || "").trim();
+  const choices = [{ [path]: value }];
+  if (
+    mongoose.Types.ObjectId.isValid(value) &&
+    String(new mongoose.Types.ObjectId(value)) === value
+  ) {
+    choices.push({ [path]: new mongoose.Types.ObjectId(value) });
+  }
+  return choices.length === 1 ? choices[0] : { $or: choices };
+}
+
+function filterOptionLevel(ids) {
+  if (ids.subCategoryId) return "collections";
+  if (ids.categoryId) return "subcategories";
+  if (ids.brandId) return "categories";
+  if (ids.vendorId) return "brands";
+  return "vendors";
+}
+
+export async function filterCommissionOptions(query = {}) {
+  const vendorId = String(query.vendorId || "").trim();
+  const brandId = String(query.brandId || "").trim();
+  const categoryId = String(query.categoryId || "").trim();
+  const subCategoryId = String(query.subCategoryId || "").trim();
+
+  if (brandId && !vendorId) {
+    throw new CommissionInputError("Select a vendor before a brand.");
+  }
+  if (categoryId && (!vendorId || !brandId)) {
+    throw new CommissionInputError("Select a vendor and brand before a category.");
+  }
+  if (subCategoryId && (!vendorId || !brandId || !categoryId)) {
+    throw new CommissionInputError("Select a vendor, brand, and category before a sub-category.");
+  }
+
+  const level = filterOptionLevel({ vendorId, brandId, categoryId, subCategoryId });
+  if (level === "vendors") {
+    return { level, vendors: await catalogGroups("vendor") };
+  }
+
+  const parents = [productIdMatch("createdBy._id", vendorId)];
+  if (brandId) parents.push(productIdMatch("brand._id", brandId));
+  if (categoryId) parents.push(productIdMatch("category._id", categoryId));
+  if (subCategoryId) parents.push(productIdMatch("subCategory._id", subCategoryId));
+
+  const field = FILTER_OPTION_FIELDS[level];
+  const rows = await Product.aggregate([
+    {
+      $match: {
+        $and: [{ [field.match]: { $exists: true, $nin: [null, ""] } }, ...parents],
+      },
+    },
+    {
+      $group: {
+        _id: { $toString: field.id },
+        name: { $first: field.name },
+        products: { $sum: 1 },
+      },
+    },
+  ]);
+  return { level, [level]: mapRows(rows).sort(optionSort) };
+}
+
+async function vendorDirectory() {
+  try {
+    const directory = await fetchIbsherVendors();
+    return new Map((directory || []).map((vendor) => [String(vendor.id), vendor.name]));
+  } catch (err) {
+    console.warn("Vendor names unavailable:", err.message);
+    return new Map();
+  }
+}
+
+function filterTargetName(path) {
+  const build = (lang) =>
+    ["vendor", "brand", "category", "subCategory", "collection"]
+      .map((key) => {
+        const name = path[key] || {};
+        return String(name[lang] || name.en || name.ku || name.ar || "").trim();
+      })
+      .filter(Boolean)
+      .join(" → ");
+  return { ku: build("ku"), en: build("en"), ar: build("ar") };
+}
+
+function filterProductClauses(ids) {
+  const clauses = [
+    productIdMatch("createdBy._id", ids.vendorId),
+    productIdMatch("brand._id", ids.brandId),
+    productIdMatch("category._id", ids.categoryId),
+  ];
+  if (ids.subCategoryId) clauses.push(productIdMatch("subCategory._id", ids.subCategoryId));
+  if (ids.collectionId) clauses.push(productIdMatch("collectionName._id", ids.collectionId));
+  return clauses;
+}
+
+async function matchedFilterPath(ids) {
+  const [row] = await Product.aggregate([
+    {
+      $match: { $and: filterProductClauses(ids) },
+    },
+    {
+      $group: {
+        _id: null,
+        products: { $sum: 1 },
+        vendorName: { $first: "$createdBy.name" },
+        vendorEmail: { $first: "$createdBy.email" },
+        brandName: { $first: "$brand.name" },
+        categoryName: { $first: "$category.name" },
+        subCategoryName: { $first: "$subCategory.name" },
+        collectionName: { $first: "$collectionName.name" },
+      },
+    },
+  ]);
+  if (!row?.products) return null;
+  const directory = await vendorDirectory();
+  const vendorName =
+    directory.get(ids.vendorId) ||
+    row.vendorName ||
+    (typeof row.vendorEmail === "string" ? row.vendorEmail.trim() : "") ||
+    ids.vendorId;
+  return {
+    vendor: localizedName(vendorName),
+    brand: localizedName(row.brandName),
+    category: localizedName(row.categoryName),
+    subCategory: ids.subCategoryId ? localizedName(row.subCategoryName) : { ...ALL_SUBCATEGORIES_NAME },
+    collection: ids.collectionId ? localizedName(row.collectionName) : { ...ALL_COLLECTIONS_NAME },
+  };
+}
+
+export async function saveFilterCommission({
+  partner,
+  vendorId,
+  brandId,
+  categoryId,
+  subCategoryId,
+  collectionId,
+  percentage,
+  isActive = true,
+}) {
+  const slug = String(partner || "").trim().toLowerCase();
+  if (!slug) throw new CommissionInputError("Unknown partner");
+  const rawIds = { vendorId, brandId, categoryId, subCategoryId, collectionId };
+  const error = filterIdsError(rawIds);
+  if (error) throw new CommissionInputError(error);
+  const ids = normalizeFilterIds(rawIds);
+  const rate = Number(percentage);
+  if (!Number.isFinite(rate) || rate < -99 || rate > 500) {
+    throw new CommissionInputError("Invalid percentage");
+  }
+  const filterPath = await matchedFilterPath(ids);
+  if (!filterPath) throw new CommissionInputError(filterNoMatchMessage(ids));
+  const targetId = filterCommissionTargetId(ids);
+  const item = await Commission.findOneAndUpdate(
+    { partner: slug, scope: "filter", targetId },
+    {
+      $set: {
+        partner: slug,
+        scope: "filter",
+        targetId,
+        targetName: filterTargetName(filterPath),
+        vendorId: ids.vendorId,
+        brandId: ids.brandId,
+        categoryId: ids.categoryId,
+        subCategoryId: ids.subCategoryId || null,
+        collectionId: ids.collectionId || null,
+        filterPath,
+        percentage: Math.round(rate * 100) / 100,
+        isActive: isActive !== false,
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+  );
+  return item;
 }
 
 export const PLATFORM_PRICE_STEP = 250;
@@ -219,6 +469,23 @@ function entityId(value) {
   return String(value);
 }
 
+function sameId(ruleId, productId) {
+  const left = String(ruleId || "").trim();
+  const right = String(productId || "").trim();
+  return left !== "" && left === right;
+}
+
+function filterRuleScore(rule, productIds) {
+  const ids = normalizeFilterIds(rule);
+  if (!ids) return 0;
+  if (!sameId(ids.vendorId, productIds.vendorId)) return 0;
+  if (!sameId(ids.brandId, productIds.brandId)) return 0;
+  if (!sameId(ids.categoryId, productIds.categoryId)) return 0;
+  if (ids.subCategoryId && !sameId(ids.subCategoryId, productIds.subCategoryId)) return 0;
+  if (ids.collectionId && !sameId(ids.collectionId, productIds.collectionId)) return 0;
+  return filterSpecificity(ids);
+}
+
 export function winningCommission(product, rules) {
   const raw = typeof product?.toObject === "function" ? product.toObject() : product;
   const collectionId = entityId(raw.collectionName);
@@ -226,9 +493,23 @@ export function winningCommission(product, rules) {
   const brandId = entityId(raw.brand);
   const categoryId = entityId(raw.category);
   const vendorId = entityId(raw.createdBy);
+  const productIds = { vendorId, brandId, categoryId, subCategoryId, collectionId };
 
   const active = (rules || []).filter((rule) => rule.isActive !== false);
+  let bestFilter = null;
+  let bestScore = 0;
+  for (const rule of active) {
+    if (rule.scope !== "filter") continue;
+    const score = filterRuleScore(rule, productIds);
+    if (score > bestScore) {
+      bestScore = score;
+      bestFilter = rule;
+    }
+  }
+  if (bestFilter) return bestFilter;
+
   const ranked = active
+    .filter((rule) => rule.scope !== "filter")
     .map((rule) => ({ rule, rank: SCOPE_RANK[rule.scope] ?? -1 }))
     .filter((item) => item.rank >= 0)
     .sort((a, b) => b.rank - a.rank);
@@ -264,13 +545,19 @@ export function commissionMatchFilter(rules) {
     brand: [],
     vendor: [],
   };
+  const or = [];
   for (const rule of active) {
+    if (rule.scope === "filter") {
+      const ids = normalizeFilterIds(rule);
+      if (!ids) continue;
+      or.push({ $and: filterProductClauses(ids) });
+      continue;
+    }
     const id = String(rule.targetId || "");
     if (!id || !buckets[rule.scope]) continue;
     buckets[rule.scope].push(id);
   }
 
-  const or = [];
   const push = (path, ids) => {
     if (!ids.length) return;
     or.push({

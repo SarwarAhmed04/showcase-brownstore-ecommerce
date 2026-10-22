@@ -36,6 +36,7 @@ function scopeLabel(t, scope) {
   if (scope === "collection") return t.collection;
   if (scope === "brand") return t.productBrand;
   if (scope === "vendor") return t.vendor;
+  if (scope === "filter") return t.filterCommission;
   return t.category;
 }
 

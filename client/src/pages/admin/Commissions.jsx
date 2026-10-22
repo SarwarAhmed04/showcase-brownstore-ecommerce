@@ -17,11 +17,26 @@ import MiswagSyncAll from "../../components/admin/platform/MiswagSyncAll";
 import PlatformOverview from "../../components/admin/platform/PlatformOverview";
 import { reasonLabel, StatusBadge } from "../../components/admin/platform/platformUi";
 import { usePlatformNav } from "../../components/admin/platform/platformNav";
+import {
+  applyFilterChange,
+  clearChildOptions,
+  emptyFilterOptions,
+  emptyFilterSelection,
+  ensureOption,
+  filterFieldsEnabled,
+  filterOptionsLevel,
+  filterOptionsQueryForChange,
+  filterPathParts,
+  filterPreviewParams,
+  filterSelectionIssue,
+  selectionFromCommission,
+  staleOptionLevels,
+} from "../../lib/filterCommissionForm";
 
-const SCOPES = ["all", "category", "subcategory", "collection", "brand", "vendor"];
+const SCOPES = ["all", "category", "subcategory", "collection", "brand", "vendor", "filter"];
 const CONTROL =
   "rounded-full border border-brown/10 bg-cream px-4 py-2.5 text-sm font-semibold text-brown outline-none ring-tan/40 focus:ring-2";
-const SELECT = `w-full ${CONTROL}`;
+const SELECT = `w-full ${CONTROL} disabled:cursor-not-allowed disabled:opacity-50`;
 
 function optionLabel(item, lang) {
   const name = tName(item.name, lang) || item.id;
@@ -35,7 +50,48 @@ function scopeLabel(t, scope) {
   if (scope === "collection") return t.collection;
   if (scope === "brand") return t.productBrand;
   if (scope === "vendor") return t.vendor;
+  if (scope === "filter") return t.filterCommission;
   return t.category;
+}
+
+const FILTER_LABEL_KEY = {
+  vendor: "vendor",
+  brand: "productBrand",
+  category: "category",
+  subCategory: "subCategory",
+  collection: "collection",
+};
+
+function filterPartText(part, t, lang) {
+  const stored = tName(part.name, lang);
+  if (stored) return stored;
+  if (!part.id && part.key === "subCategory") return t.allSubCategories;
+  if (!part.id && part.key === "collection") return t.allCollections;
+  return part.id;
+}
+
+function FilterSelect({ label, value, onChange, options, placeholder, disabled, lang, required = false }) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-semibold text-brown/50">
+        {label}
+        {required ? " *" : ""}
+      </label>
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className={`${SELECT} filter-select max-w-xl`}
+      >
+        <option value="">{placeholder}</option>
+        {(options || []).map((item) => (
+          <option key={item.id} value={item.id}>
+            {optionLabel(item, lang)}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
 }
 
 function formatRate(value) {
@@ -568,7 +624,12 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   const [collectionId, setCollectionId] = useState("");
   const [brandId, setBrandId] = useState("");
   const [vendorId, setVendorId] = useState("");
+  const [filterOptions, setFilterOptions] = useState(emptyFilterOptions);
+  const [filterLabels, setFilterLabels] = useState(null);
+  const [filterRestoring, setFilterRestoring] = useState(false);
   const [percentage, setPercentage] = useState("");
+  const filterRequest = useRef(0);
+  const optionRequest = useRef({ brands: 0, categories: 0, subcategories: 0, collections: 0 });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -629,14 +690,20 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     [targets.collections, categoryId, subCategoryId]
   );
 
+  const filterSelection = useMemo(
+    () => ({ vendorId, brandId, categoryId, subCategoryId, collectionId }),
+    [vendorId, brandId, categoryId, subCategoryId, collectionId]
+  );
+  const filterEnabled = filterFieldsEnabled(filterSelection);
   const preview = useMemo(() => {
+    if (scope === "filter") return filterPreviewParams(filterSelection);
     if (scope === "category" && categoryId) return { category: categoryId };
     if (scope === "subcategory" && subCategoryId) return { subCategory: subCategoryId };
     if (scope === "collection" && collectionId) return { collection: collectionId };
     if (scope === "brand" && brandId) return { brand: brandId };
     if (scope === "vendor" && vendorId) return { vendor: vendorId };
     return {};
-  }, [scope, categoryId, subCategoryId, collectionId, brandId, vendorId]);
+  }, [scope, filterSelection, categoryId, subCategoryId, collectionId, brandId, vendorId]);
   const previewKey = JSON.stringify(preview);
   const productListKey = `${partnerSlug}|${productQ}|${previewKey}|${eligibility}`;
   const [seenProductListKey, setSeenProductListKey] = useState(productListKey);
@@ -755,6 +822,20 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     };
   }, [tab, partnerSlug, commissions]);
 
+  function invalidateOptionLevels(levels) {
+    for (const level of levels) {
+      if (optionRequest.current[level] != null) optionRequest.current[level] += 1;
+    }
+  }
+
+  function resetFilterControls() {
+    filterRequest.current += 1;
+    invalidateOptionLevels(["brands", "categories", "subcategories", "collections"]);
+    setFilterRestoring(false);
+    setFilterLabels(null);
+    setFilterOptions(emptyFilterOptions());
+  }
+
   function resetForm() {
     setCategoryId("");
     setSubCategoryId("");
@@ -762,9 +843,119 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     setBrandId("");
     setVendorId("");
     setPercentage("");
+    setFilterLabels(null);
+    setFilterOptions(emptyFilterOptions());
+  }
+
+  async function loadFilterLevel(query) {
+    const level = filterOptionsLevel(query);
+    if (optionRequest.current[level] == null) return;
+    const token = ++optionRequest.current[level];
+    try {
+      const data = await api.commissionFilterOptions(query);
+      if (optionRequest.current[level] !== token) return;
+      const resolved = data.level || level;
+      setFilterOptions((current) => ({ ...current, [resolved]: data[resolved] || [] }));
+    } catch (err) {
+      if (optionRequest.current[level] === token) setError(err.message);
+    }
+  }
+
+  function onFilterField(field, value) {
+    const next = applyFilterChange(filterSelection, field, value);
+    if (next === filterSelection) return;
+    setVendorId(next.vendorId);
+    setBrandId(next.brandId);
+    setCategoryId(next.categoryId);
+    setSubCategoryId(next.subCategoryId);
+    setCollectionId(next.collectionId);
+    setFilterOptions((options) => clearChildOptions(options, field));
+    const query = filterOptionsQueryForChange(next, field);
+    const fetchLevel = query ? filterOptionsLevel(query) : "";
+    invalidateOptionLevels(staleOptionLevels(field, fetchLevel));
+    setError("");
+    if (query) void loadFilterLevel(query);
+  }
+
+  async function restoreFilterRule(rule) {
+    const seq = ++filterRequest.current;
+    invalidateOptionLevels(["brands", "categories", "subcategories", "collections"]);
+    const selection = selectionFromCommission(rule) || emptyFilterSelection();
+    setScope("filter");
+    setPercentage(String(rule.percentage ?? ""));
+    setFilterLabels(rule.filterPath || null);
+    setVendorId(selection.vendorId);
+    setBrandId(selection.brandId);
+    setCategoryId(selection.categoryId);
+    setSubCategoryId(selection.subCategoryId);
+    setCollectionId(selection.collectionId);
+    setFilterOptions({
+      brands: ensureOption([], selection.brandId, rule.filterPath?.brand),
+      categories: ensureOption([], selection.categoryId, rule.filterPath?.category),
+      subcategories: ensureOption([], selection.subCategoryId, rule.filterPath?.subCategory),
+      collections: ensureOption([], selection.collectionId, rule.filterPath?.collection),
+    });
+    setFilterRestoring(true);
+    setError("");
+    try {
+      const [brands, categories, subcategories, collections] = await Promise.all([
+        selection.vendorId
+          ? api.commissionFilterOptions({ vendorId: selection.vendorId })
+          : Promise.resolve({ brands: [] }),
+        selection.vendorId && selection.brandId
+          ? api.commissionFilterOptions({
+              vendorId: selection.vendorId,
+              brandId: selection.brandId,
+            })
+          : Promise.resolve({ categories: [] }),
+        selection.vendorId && selection.brandId && selection.categoryId
+          ? api.commissionFilterOptions({
+              vendorId: selection.vendorId,
+              brandId: selection.brandId,
+              categoryId: selection.categoryId,
+            })
+          : Promise.resolve({ subcategories: [] }),
+        selection.vendorId &&
+        selection.brandId &&
+        selection.categoryId &&
+        selection.subCategoryId
+          ? api.commissionFilterOptions({
+              vendorId: selection.vendorId,
+              brandId: selection.brandId,
+              categoryId: selection.categoryId,
+              subCategoryId: selection.subCategoryId,
+            })
+          : Promise.resolve({ collections: [] }),
+      ]);
+      if (filterRequest.current !== seq) return;
+      invalidateOptionLevels(["brands", "categories", "subcategories", "collections"]);
+      setFilterOptions({
+        brands: ensureOption(brands.brands, selection.brandId, rule.filterPath?.brand),
+        categories: ensureOption(categories.categories, selection.categoryId, rule.filterPath?.category),
+        subcategories: ensureOption(
+          subcategories.subcategories,
+          selection.subCategoryId,
+          rule.filterPath?.subCategory
+        ),
+        collections: ensureOption(
+          collections.collections,
+          selection.collectionId,
+          rule.filterPath?.collection
+        ),
+      });
+    } catch (err) {
+      if (filterRequest.current === seq) setError(err.message);
+    } finally {
+      if (filterRequest.current === seq) setFilterRestoring(false);
+    }
   }
 
   function fillFromRule(rule) {
+    if (rule?.scope === "filter") {
+      void restoreFilterRule(rule);
+      return;
+    }
+    resetFilterControls();
     setScope(rule.scope);
     setCategoryId(rule.scope === "category" ? rule.targetId : rule.categoryId || "");
     setSubCategoryId(
@@ -791,8 +982,44 @@ function PartnerCommission({ partnerSlug, t, lang }) {
 
   async function onSave(event) {
     event.preventDefault();
-    const targetId = targetIdForSave();
     const rate = Number(percentage);
+    if (scope === "filter") {
+      if (filterRestoring) return;
+      const issue = filterSelectionIssue(filterSelection);
+      if (issue === "required") {
+        setError(t.filterCommissionRequired);
+        return;
+      }
+      if (issue === "collection") {
+        setError(t.filterCollectionNeedsSub);
+        return;
+      }
+      setBusy(true);
+      setError("");
+      setMessage("");
+      try {
+        await api.saveCommission({
+          partner: partnerSlug,
+          scope,
+          vendorId,
+          brandId,
+          categoryId,
+          subCategoryId: subCategoryId || "",
+          collectionId: subCategoryId ? collectionId || "" : "",
+          percentage: rate,
+          isActive: true,
+        });
+        setMessage(t.commissionSaved);
+        resetForm();
+        await load();
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    const targetId = targetIdForSave();
     if (scope !== "all" && !targetId) {
       setError(
         scope === "vendor"
@@ -1415,6 +1642,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                       key={item}
                       type="button"
                       onClick={() => {
+                        resetFilterControls();
                         setScope(item);
                         setCategoryId("");
                         setSubCategoryId("");
@@ -1431,6 +1659,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                   ))}
                 </div>
               </div>
+              {scope !== "filter" ? (
               <div className="ms-auto flex items-end gap-3">
                 <div className="w-28 shrink-0">
                   <label className="mb-1 block text-xs font-semibold text-brown/50">
@@ -1457,9 +1686,105 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                   {t.save}
                 </button>
               </div>
+              ) : null}
             </div>
 
-            {scope === "vendor" ? (
+            {scope === "filter" ? (
+              <div className="grid max-w-xl gap-3">
+                <p className="text-sm text-brown/50">{t.filterCommissionHint}</p>
+                {filterRestoring ? <p className="text-sm text-brown/50">{t.loading}</p> : null}
+                <FilterSelect
+                  label={t.vendor}
+                  required
+                  value={vendorId}
+                  disabled={filterRestoring}
+                  placeholder={t.selectVendor}
+                  lang={lang}
+                  options={ensureOption(targets.vendors, vendorId, filterLabels?.vendor)}
+                  onChange={(value) => onFilterField("vendorId", value)}
+                />
+                <FilterSelect
+                  label={t.productBrand}
+                  required
+                  value={brandId}
+                  disabled={filterRestoring || !filterEnabled.brand}
+                  placeholder={t.selectBrand}
+                  lang={lang}
+                  options={ensureOption(filterOptions.brands, brandId, filterLabels?.brand)}
+                  onChange={(value) => onFilterField("brandId", value)}
+                />
+                <FilterSelect
+                  label={t.category}
+                  required
+                  value={categoryId}
+                  disabled={filterRestoring || !filterEnabled.category}
+                  placeholder={t.selectCategory}
+                  lang={lang}
+                  options={ensureOption(filterOptions.categories, categoryId, filterLabels?.category)}
+                  onChange={(value) => onFilterField("categoryId", value)}
+                />
+                <FilterSelect
+                  label={t.subCategory}
+                  value={subCategoryId}
+                  disabled={filterRestoring || !filterEnabled.subCategory}
+                  placeholder={t.allSubCategories}
+                  lang={lang}
+                  options={ensureOption(
+                    filterOptions.subcategories,
+                    subCategoryId,
+                    filterLabels?.subCategory
+                  )}
+                  onChange={(value) => onFilterField("subCategoryId", value)}
+                />
+                <FilterSelect
+                  label={t.collection}
+                  value={collectionId}
+                  disabled={filterRestoring || !filterEnabled.collection}
+                  placeholder={t.allCollections}
+                  lang={lang}
+                  options={ensureOption(
+                    filterOptions.collections,
+                    collectionId,
+                    filterLabels?.collection
+                  )}
+                  onChange={(value) => onFilterField("collectionId", value)}
+                />
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                  <div className="sm:w-40">
+                    <label className="mb-1 block text-xs font-semibold text-brown/50">
+                      {t.commissionPercentage}
+                    </label>
+                    <input
+                      type="number"
+                      min="-99"
+                      max="500"
+                      step="0.1"
+                      required
+                      dir="ltr"
+                      placeholder="+10 / -10"
+                      value={percentage}
+                      onChange={(e) => setPercentage(e.target.value)}
+                      className={`${CONTROL} w-full font-medium tabular-nums`}
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={busy || filterRestoring}
+                    className="shrink-0 rounded-full bg-brown px-5 py-2.5 text-sm font-semibold text-cream disabled:opacity-50"
+                  >
+                    {t.save}
+                  </button>
+                </div>
+                {vendorId ? (
+                  <p className="text-sm font-semibold text-brown">
+                    {t.commissionPreviewCount.replace(
+                      "{count}",
+                      Number(products.pagination?.total || 0).toLocaleString("en-US")
+                    )}
+                  </p>
+                ) : null}
+              </div>
+            ) : scope === "vendor" ? (
               <div>
                 <label className="mb-1 block text-xs font-semibold text-brown/50">
                   {t.vendor}
@@ -1495,7 +1820,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                   ))}
                 </select>
               </div>
-            ) : scope !== "all" ? (
+            ) : scope === "category" || scope === "subcategory" || scope === "collection" ? (
               <div
                 className={`grid gap-3 ${
                   scope === "collection" ? "sm:grid-cols-3" : "sm:grid-cols-2"
@@ -1577,21 +1902,50 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           {commissions.length ? (
             <div className="mt-4 divide-y divide-brown/5">
               {commissions.map((rule) => (
-                <article key={rule.id} className="flex items-center gap-3 py-3">
+                <article
+                  key={rule.id}
+                  className={`flex gap-3 py-3 ${
+                    rule.scope === "filter"
+                      ? "flex-col items-stretch sm:flex-row sm:items-start"
+                      : "items-center"
+                  }`}
+                >
                   <button
                     type="button"
                     onClick={() => fillFromRule(rule)}
-                    className="min-w-0 flex-1 text-start"
+                    className={`min-w-0 text-start ${
+                      rule.scope === "filter" ? "w-full sm:flex-1" : "flex-1"
+                    }`}
                   >
                     <p className="text-[11px] font-semibold tracking-wide text-tan uppercase">
                       {scopeLabel(t, rule.scope)}
                     </p>
-                    <p className="mt-0.5 truncate font-medium">
-                      {rule.scope === "all"
-                        ? t.allProducts
-                        : tName(rule.targetName, lang) || rule.targetId}
-                    </p>
+                    {rule.scope === "filter" ? (
+                      <dl className="mt-1 space-y-1">
+                        {filterPathParts(rule).map((part) => (
+                          <div key={part.key} className="min-w-0 sm:flex sm:gap-2">
+                            <dt className="shrink-0 text-xs font-semibold text-brown/45">
+                              {t[FILTER_LABEL_KEY[part.key]]}
+                            </dt>
+                            <dd className="break-words font-medium text-brown">
+                              {filterPartText(part, t, lang)}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    ) : (
+                      <p className="mt-0.5 truncate font-medium">
+                        {rule.scope === "all"
+                          ? t.allProducts
+                          : tName(rule.targetName, lang) || rule.targetId}
+                      </p>
+                    )}
                   </button>
+                  <div
+                    className={`flex shrink-0 items-center gap-3 ${
+                      rule.scope === "filter" ? "justify-between sm:justify-end" : ""
+                    }`}
+                  >
                   <p
                     className={`shrink-0 font-display text-xl tabular-nums ${
                       Number(rule.percentage) < 0 ? "text-red-800" : ""
@@ -1621,6 +1975,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                     >
                       {t.deleteAccount}
                     </button>
+                  </div>
                   </div>
                 </article>
               ))}

@@ -47,8 +47,11 @@ import { PlatformProduct } from "../models/PlatformProduct.js";
 import {
   ALL_TARGET_ID,
   ALL_TARGET_NAME,
+  CommissionInputError,
   commissionTargets,
+  filterCommissionOptions,
   findTarget,
+  saveFilterCommission,
   sortCommissions,
   toAdminCommission,
 } from "../utils/commission.js";
@@ -1441,6 +1444,19 @@ adminRouter.get("/commissions", async (req, res) => {
   }
 });
 
+adminRouter.get("/commissions/filter-options", async (req, res) => {
+  try {
+    const options = await filterCommissionOptions(req.query);
+    res.json(options);
+  } catch (err) {
+    if (err instanceof CommissionInputError) {
+      return res.status(err.status || 400).json({ message: err.message });
+    }
+    console.error(err);
+    res.status(500).json({ message: "Failed to load filter options" });
+  }
+});
+
 adminRouter.post("/commissions", async (req, res) => {
   try {
     const partnerSlug = String(req.body.partner || req.query.partner || "").toLowerCase();
@@ -1454,6 +1470,35 @@ adminRouter.post("/commissions", async (req, res) => {
     }
     if (percentage == null) {
       return res.status(400).json({ message: "Invalid percentage" });
+    }
+
+    if (scope === "filter") {
+      try {
+        const item = await saveFilterCommission({
+          partner: partner.slug,
+          vendorId: req.body.vendorId,
+          brandId: req.body.brandId,
+          categoryId: req.body.categoryId,
+          subCategoryId: req.body.subCategoryId,
+          collectionId: req.body.collectionId,
+          percentage,
+          isActive: req.body.isActive !== false,
+        });
+        await logActivity(req, "commission.save", {
+          partner: partner.slug,
+          partnerName: partnerDisplayName(partner.slug),
+          scope,
+          targetName: localizedName(item.targetName),
+          percentage: item.percentage,
+          isActive: item.isActive !== false,
+        });
+        return res.json({ commission: toAdminCommission(item) });
+      } catch (err) {
+        if (err instanceof CommissionInputError) {
+          return res.status(err.status || 400).json({ message: err.message });
+        }
+        throw err;
+      }
     }
 
     let targetId = String(req.body.targetId || "").trim();

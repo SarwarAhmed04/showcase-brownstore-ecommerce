@@ -133,6 +133,15 @@ export const api = {
         ? `/api/admin/commissions?partner=${encodeURIComponent(partner)}`
         : "/api/admin/commissions"
     ),
+  commissionFilterOptions: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.fromEntries(
+        Object.entries(params).filter(([, v]) => v !== "" && v != null)
+      )
+    );
+    const suffix = qs.toString();
+    return request(`/api/admin/commissions/filter-options${suffix ? `?${suffix}` : ""}`);
+  },
   saveCommission: (body) =>
     request("/api/admin/commissions", {
       method: "POST",
