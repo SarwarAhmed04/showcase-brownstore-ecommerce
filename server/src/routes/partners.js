@@ -3,7 +3,8 @@ import { Product } from "../models/Product.js";
 import { Category, categoryListSort } from "../models/Category.js";
 import { Commission } from "../models/Commission.js";
 import { PlatformProduct } from "../models/PlatformProduct.js";
-import { publicProductFilter, isPubliclyVisible } from "../utils/productView.js";
+import { loadCatalogBlocks } from "../utils/catalogBlocks.js";
+import { loadPublicProductFilter, isPubliclyVisible } from "../utils/productView.js";
 import { toPublicCategory } from "../utils/categoryView.js";
 import { requirePartner, requestOrigin } from "../utils/partnerAuth.js";
 import { toPartnerProduct } from "../utils/partnerCatalog.js";
@@ -46,7 +47,7 @@ partnersRouter.get("/:slug/products", async (req, res) => {
     const origin = requestOrigin(req);
     const slug = req.partner.slug;
 
-    const filter = publicProductFilter();
+    const [filter, blocks] = await Promise.all([loadPublicProductFilter(), loadCatalogBlocks()]);
     if (category) {
       filter["category._id"] = category;
     }
@@ -79,7 +80,7 @@ partnersRouter.get("/:slug/products", async (req, res) => {
     const products = items
       .map((item) => {
         const extra = overrides.get(String(item._id));
-        if (!isPubliclyVisible(item, extra)) return null;
+        if (!isPubliclyVisible(item, extra, blocks)) return null;
         return toPartnerProduct(item, rules, origin, extra);
       })
       .filter(Boolean);
@@ -104,9 +105,12 @@ partnersRouter.get("/:slug/products/:id", async (req, res) => {
   try {
     const origin = requestOrigin(req);
     const slug = req.partner.slug;
-    const product =
-      (await Product.findById(req.params.id).catch(() => null)) ||
-      (await Product.findOne({ ibsherId: req.params.id }));
+    const [product, blocks] = await Promise.all([
+      (async () =>
+        (await Product.findById(req.params.id).catch(() => null)) ||
+        (await Product.findOne({ ibsherId: req.params.id })))(),
+      loadCatalogBlocks(),
+    ]);
 
     if (!product) {
       return res.status(404).json({ message: "Product not found" });
@@ -114,7 +118,7 @@ partnersRouter.get("/:slug/products/:id", async (req, res) => {
 
     const row = await PlatformProduct.findOne({ partner: slug, product: product._id });
     const extra = row?.overrides || {};
-    if (!isPubliclyVisible(product, extra)) {
+    if (!isPubliclyVisible(product, extra, blocks)) {
       return res.status(404).json({ message: "Product not found" });
     }
 

@@ -3,6 +3,11 @@ import {
   asObject,
   snapshotOverrides,
 } from "./overrides.js";
+import {
+  isCatalogBlocked,
+  loadCatalogBlocks,
+  mergeCatalogBlocksIntoFilter,
+} from "./catalogBlocks.js";
 
 const CDN = process.env.IBSHER_CDN || "https://cdn.ibsher.com";
 const MEDIA_PREFIX = "/api/media";
@@ -55,8 +60,8 @@ function mapVariants(variants = []) {
   }));
 }
 
-export function publicProductFilter() {
-  return {
+export function publicProductFilter(blocks = null) {
+  const base = {
     "overrides.outOfStock": { $ne: true },
     $and: [
       {
@@ -72,13 +77,20 @@ export function publicProductFilter() {
       },
     ],
   };
+  return mergeCatalogBlocksIntoFilter(base, blocks);
 }
 
-export function isPubliclyVisible(doc, extraOverrides) {
+export async function loadPublicProductFilter() {
+  const blocks = await loadCatalogBlocks();
+  return publicProductFilter(blocks);
+}
+
+export function isPubliclyVisible(doc, extraOverrides, blocks = null) {
   const full = toResolvedProduct(doc, extraOverrides);
   if (!full) return false;
   if (full.isActive === false) return false;
   if (full.outOfStock === true) return false;
+  if (isCatalogBlocked(doc, blocks)) return false;
   return true;
 }
 

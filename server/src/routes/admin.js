@@ -76,8 +76,13 @@ import {
   partnerDisplayName,
   toAdminActivity,
 } from "../utils/activity.js";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { platformManagementRouter } from "./platformManagement.js";
 import { miswagConnectionRouter } from "./miswagConnection.js";
+import { giniConnectionRouter } from "./giniConnection.js";
+import { vendorControlsRouter } from "./vendorControls.js";
 import {
   applyAvailability,
   combineFilters,
@@ -96,6 +101,15 @@ export const adminRouter = Router();
 adminRouter.use(requireAdmin);
 adminRouter.use(platformManagementRouter);
 adminRouter.use(miswagConnectionRouter);
+adminRouter.use(giniConnectionRouter);
+adminRouter.use(vendorControlsRouter);
+
+// Elryan WIP stays out of GINI-only deploys: mount only when the local module file exists.
+const elryanConnectionPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "elryanConnection.js");
+if (existsSync(elryanConnectionPath)) {
+  const { elryanConnectionRouter } = await import(pathToFileURL(elryanConnectionPath).href);
+  adminRouter.use(elryanConnectionRouter);
+}
 
 adminRouter.get("/stats", async (_req, res) => {
   try {

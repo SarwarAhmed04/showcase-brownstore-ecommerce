@@ -361,6 +361,13 @@
   }
 }
 
+/* Native <option> highlight for vendors that already have a commission rule */
+option.commission-vendor-marked {
+  background-color: #ecfdf5;
+  color: #065f46;
+  font-weight: 600;
+}
+
 @layer utilities {
   .container-x { @apply mx-auto w-full max-w-[1400px] px-4 sm:px-6 lg:px-10; }
   .clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }

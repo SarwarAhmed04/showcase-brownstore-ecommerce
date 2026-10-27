@@ -254,7 +254,7 @@ describe("platform management", { concurrency: 1 }, () => {
     });
     assert.equal(imported.status, 404);
 
-    const saved = await call("PUT", "/api/admin/platforms/gini/category-setup/col-unmapped", {
+    const blocked = await call("PUT", "/api/admin/platforms/gini/category-setup/col-unmapped", {
       body: {
         values: {
           categoryName: "الجمال والعناية",
@@ -264,19 +264,19 @@ describe("platform management", { concurrency: 1 }, () => {
         },
       },
     });
-    assert.equal(saved.status, 200);
-    assert.equal(saved.json.setup.configured, true);
-    const updated = await call("PUT", "/api/admin/platforms/gini/category-setup/col-unmapped", {
-      body: {
-        values: {
-          categoryName: "الجمال والعناية",
-          categoryId: "7",
-          subcategoryName: "العناية بالبشرة",
-          subcategoryId: "32",
-        },
+    assert.equal(blocked.status, 409);
+    assert.equal(blocked.json.code, "connection_required");
+    assert.equal(await PlatformTaxonomyConfig.countDocuments({ partner: "gini", brownCollectionId: "col-unmapped" }), 0);
+    await PlatformTaxonomyConfig.create({
+      partner: "gini",
+      brownCollectionId: "col-unmapped",
+      values: {
+        categoryName: "الجمال والعناية",
+        categoryId: "7",
+        subcategoryName: "العناية بالبشرة",
+        subcategoryId: "32",
       },
     });
-    assert.equal(updated.status, 200);
     assert.equal(await PlatformTaxonomyConfig.countDocuments({ partner: "gini", brownCollectionId: "col-unmapped" }), 1);
     const reloaded = await call("GET", "/api/admin/platforms/gini/category-setup?q=Other");
     assert.equal(reloaded.json.rows[0].values.subcategoryId, "32");

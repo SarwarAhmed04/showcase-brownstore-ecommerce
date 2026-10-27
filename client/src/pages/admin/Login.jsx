@@ -10,7 +10,7 @@ export default function AdminLogin() {
   const { t } = useLang();
   const { user, login } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("karim@brown.com");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);

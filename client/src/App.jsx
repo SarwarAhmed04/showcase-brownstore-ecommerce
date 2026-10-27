@@ -19,6 +19,7 @@ import AdminDashboard from "./pages/admin/Dashboard";
 import AdminProducts from "./pages/admin/Products";
 import AdminCategories from "./pages/admin/Categories";
 import AdminCommissions from "./pages/admin/Commissions";
+import AdminVendorControls from "./pages/admin/VendorControls";
 import AdminActivity from "./pages/admin/Activity";
 import AdminBanners from "./pages/admin/Banners";
 import AdminAccounts from "./pages/admin/Accounts";
@@ -49,6 +50,7 @@ export default function App() {
                   <Route index element={<AdminDashboard />} />
                   <Route path="products" element={<AdminProducts />} />
                   <Route path="categories" element={<AdminCategories />} />
+                  <Route path="vendors" element={<AdminVendorControls />} />
                   <Route path="platforms" element={<AdminCommissions />} />
                   <Route path="platforms/:partner" element={<AdminCommissions />} />
                   <Route path="commissions" element={<AdminCommissions />} />

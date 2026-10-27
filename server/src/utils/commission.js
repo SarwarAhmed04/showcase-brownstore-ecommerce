@@ -3,6 +3,7 @@ import { Product } from "../models/Product.js";
 import { ALL_TARGET_ID, COMMISSION_SCOPES, Commission } from "../models/Commission.js";
 import { fetchIbsherVendors } from "../services/ibsher.js";
 import {
+  FILTER_BRAND_BEFORE_CATEGORY_MESSAGE,
   FILTER_COLLECTION_MESSAGE,
   FILTER_NO_MATCH_MESSAGE,
   FILTER_REQUIRED_MESSAGE,
@@ -15,6 +16,7 @@ import {
 
 export { ALL_TARGET_ID, COMMISSION_SCOPES };
 export {
+  FILTER_BRAND_BEFORE_CATEGORY_MESSAGE,
   FILTER_COLLECTION_MESSAGE,
   FILTER_NO_MATCH_MESSAGE,
   FILTER_REQUIRED_MESSAGE,
@@ -29,6 +31,18 @@ export const ALL_TARGET_NAME = {
   ku: "هەموو بەرهەمەکان",
   en: "All products",
   ar: "كل المنتجات",
+};
+
+const ALL_BRANDS_NAME = {
+  ku: "هەموو براندەکان",
+  en: "All Brands",
+  ar: "كل العلامات",
+};
+
+const ALL_CATEGORIES_NAME = {
+  ku: "هەموو پۆلەکان",
+  en: "All Categories",
+  ar: "كل الأقسام",
 };
 
 const ALL_SUBCATEGORIES_NAME = {
@@ -353,11 +367,9 @@ function filterTargetName(path) {
 }
 
 function filterProductClauses(ids) {
-  const clauses = [
-    productIdMatch("createdBy._id", ids.vendorId),
-    productIdMatch("brand._id", ids.brandId),
-    productIdMatch("category._id", ids.categoryId),
-  ];
+  const clauses = [productIdMatch("createdBy._id", ids.vendorId)];
+  if (ids.brandId) clauses.push(productIdMatch("brand._id", ids.brandId));
+  if (ids.categoryId) clauses.push(productIdMatch("category._id", ids.categoryId));
   if (ids.subCategoryId) clauses.push(productIdMatch("subCategory._id", ids.subCategoryId));
   if (ids.collectionId) clauses.push(productIdMatch("collectionName._id", ids.collectionId));
   return clauses;
@@ -390,8 +402,8 @@ async function matchedFilterPath(ids) {
     ids.vendorId;
   return {
     vendor: localizedName(vendorName),
-    brand: localizedName(row.brandName),
-    category: localizedName(row.categoryName),
+    brand: ids.brandId ? localizedName(row.brandName) : { ...ALL_BRANDS_NAME },
+    category: ids.categoryId ? localizedName(row.categoryName) : { ...ALL_CATEGORIES_NAME },
     subCategory: ids.subCategoryId ? localizedName(row.subCategoryName) : { ...ALL_SUBCATEGORIES_NAME },
     collection: ids.collectionId ? localizedName(row.collectionName) : { ...ALL_COLLECTIONS_NAME },
   };
@@ -429,8 +441,8 @@ export async function saveFilterCommission({
         targetId,
         targetName: filterTargetName(filterPath),
         vendorId: ids.vendorId,
-        brandId: ids.brandId,
-        categoryId: ids.categoryId,
+        brandId: ids.brandId || null,
+        categoryId: ids.categoryId || null,
         subCategoryId: ids.subCategoryId || null,
         collectionId: ids.collectionId || null,
         filterPath,
@@ -479,8 +491,8 @@ function filterRuleScore(rule, productIds) {
   const ids = normalizeFilterIds(rule);
   if (!ids) return 0;
   if (!sameId(ids.vendorId, productIds.vendorId)) return 0;
-  if (!sameId(ids.brandId, productIds.brandId)) return 0;
-  if (!sameId(ids.categoryId, productIds.categoryId)) return 0;
+  if (ids.brandId && !sameId(ids.brandId, productIds.brandId)) return 0;
+  if (ids.categoryId && !sameId(ids.categoryId, productIds.categoryId)) return 0;
   if (ids.subCategoryId && !sameId(ids.subCategoryId, productIds.subCategoryId)) return 0;
   if (ids.collectionId && !sameId(ids.collectionId, productIds.collectionId)) return 0;
   return filterSpecificity(ids);

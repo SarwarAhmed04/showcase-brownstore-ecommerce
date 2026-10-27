@@ -24,6 +24,28 @@ import {
   taxonomyGatesEligibility,
 } from "./platformTaxonomyFields.js";
 import { listOpenTaxonomyNotices, resolveTaxonomyNotices } from "./taxonomyNotices.js";
+import { loadCatalogBlocks } from "./catalogBlocks.js";
+
+/** Optional Elryan helpers — present in local WIP, absent from GINI-only deploys. */
+async function loadElryanTaxonomyHelpers() {
+  try {
+    return await import("./elryanTaxonomyMapping.js");
+  } catch {
+    return null;
+  }
+}
+
+async function resolveElryanActiveEnvironment() {
+  const helpers = await loadElryanTaxonomyHelpers();
+  if (!helpers) return "staging";
+  try {
+    const { getElryanConnectionPublic } = await import("../services/elryanConnection.js");
+    const connection = await getElryanConnectionPublic();
+    return helpers.normalizeElryanMappingEnvironment(connection?.environment);
+  } catch {
+    return "staging";
+  }
+}
 
 export { evaluatePlatformEligibility, eligibilityMongoFilter, LARGE_BULK_COUNT };
 
@@ -45,9 +67,10 @@ function escapeRegex(value) {
 export async function loadEligibilityContext(partnerSlug) {
   const slug = cleanText(partnerSlug).toLowerCase();
   const partner = await Partner.findOne({ slug }).select("slug isActive").lean();
-  const [rules, configs] = await Promise.all([
+  const [rules, configs, catalogBlocks] = await Promise.all([
     PlatformVisibilityRule.find({ partner: slug, isActive: false }).select("scope targetId").lean(),
     PlatformTaxonomyConfig.find({ partner: slug }).select("brownCollectionId values").lean(),
+    loadCatalogBlocks(),
   ]);
 
   const inactive = emptyInactiveSets();
@@ -55,21 +78,33 @@ export async function loadEligibilityContext(partnerSlug) {
     const targetId = cleanText(rule.targetId);
     if (targetId && inactive[rule.scope]) inactive[rule.scope].add(targetId);
   }
+  for (const vendorId of catalogBlocks.vendors || []) {
+    if (vendorId) inactive.vendor.add(String(vendorId));
+  }
 
+  const elryanHelpers = slug === "elryan" ? await loadElryanTaxonomyHelpers() : null;
+  const elryanEnv = elryanHelpers ? await resolveElryanActiveEnvironment() : "staging";
   const configuredCollectionIds = new Set();
   const taxonomyByCollection = new Map();
   for (const row of configs) {
     const collectionId = cleanText(row.brownCollectionId);
     if (!collectionId) continue;
     const values = row.values || {};
-    taxonomyByCollection.set(collectionId, values);
-    if (isTaxonomyComplete(slug, values)) configuredCollectionIds.add(collectionId);
+    if (slug === "elryan" && elryanHelpers) {
+      const resolved = elryanHelpers.elryanValuesForEnvironment(values, elryanEnv);
+      taxonomyByCollection.set(collectionId, { ...values, ...resolved });
+      if (elryanHelpers.elryanMappingIsComplete(values, elryanEnv)) configuredCollectionIds.add(collectionId);
+    } else {
+      taxonomyByCollection.set(collectionId, values);
+      if (isTaxonomyComplete(slug, values)) configuredCollectionIds.add(collectionId);
+    }
   }
 
   return {
     partnerSlug: slug,
     partnerActive: partner ? partner.isActive !== false : false,
     inactive,
+    blockedVendorBrands: catalogBlocks.vendorBrands || new Set(),
     taxonomyRequired: taxonomyGatesEligibility(slug) && requiredTaxonomyKeys(slug).length > 0,
     configuredCollectionIds,
     taxonomyByCollection,
@@ -383,9 +418,20 @@ export async function listCategorySetup({ partner, q, status, page, limit }) {
   ]);
   const byCollection = new Map(configs.map((row) => [String(row.brownCollectionId), row.values || {}]));
   const schemaReady = requiredTaxonomyKeys(partner).length > 0;
+  const isElryan = String(partner).toLowerCase() === "elryan";
+  const elryanHelpers = isElryan ? await loadElryanTaxonomyHelpers() : null;
+  const elryanEnv = elryanHelpers ? await resolveElryanActiveEnvironment() : "staging";
   let rows = collections.map((row) => {
-    const values = byCollection.get(String(row.brownCollectionId)) || {};
-    const configured = schemaReady && isTaxonomyComplete(partner, values);
+    const rawValues = byCollection.get(String(row.brownCollectionId)) || {};
+    const values =
+      isElryan && elryanHelpers
+        ? { ...rawValues, ...elryanHelpers.elryanValuesForEnvironment(rawValues, elryanEnv) }
+        : rawValues;
+    const configured =
+      schemaReady &&
+      (isElryan && elryanHelpers
+        ? elryanHelpers.elryanMappingIsComplete(rawValues, elryanEnv)
+        : isTaxonomyComplete(partner, values));
     return {
       id: String(row.brownCollectionId),
       name: row.brownCollectionName,
@@ -395,6 +441,7 @@ export async function listCategorySetup({ partner, q, status, page, limit }) {
       configured,
       status: !schemaReady ? "unavailable" : configured ? "configured" : "missing",
       values,
+      ...(isElryan && elryanHelpers ? { elryanEnvironment: elryanEnv } : {}),
     };
   });
   const configuredCount = rows.filter((row) => row.configured).length;
@@ -430,14 +477,14 @@ export async function listCategorySetup({ partner, q, status, page, limit }) {
 export async function saveCategorySetup(partner, brownCollectionId, input) {
   const collectionId = cleanText(brownCollectionId);
   if (!collectionId) throw inputError("Choose a BrownStore collection");
-  const values = sanitizeTaxonomyValues(partner, input);
+  let values = sanitizeTaxonomyValues(partner, input);
+  const previous = await PlatformTaxonomyConfig.findOne({
+    partner,
+    brownCollectionId: collectionId,
+  })
+    .select("values")
+    .lean();
   if (String(partner || "").toLowerCase() === "miswag") {
-    const previous = await PlatformTaxonomyConfig.findOne({
-      partner,
-      brownCollectionId: collectionId,
-    })
-      .select("values")
-      .lean();
     const source = input && typeof input === "object" ? input : {};
     const provided =
       Object.prototype.hasOwnProperty.call(source, "isLarge") ||
@@ -446,6 +493,13 @@ export async function saveCategorySetup(partner, brownCollectionId, input) {
       ? source.isLarge
       : source.is_large;
     values.isLarge = provided ? miswagIsLargeFlag(raw) : miswagIsLargeFlag(previous?.values?.isLarge);
+  }
+  if (String(partner || "").toLowerCase() === "elryan") {
+    const elryanHelpers = await loadElryanTaxonomyHelpers();
+    if (elryanHelpers) {
+      const elryanEnv = await resolveElryanActiveEnvironment();
+      values = elryanHelpers.mergeElryanEnvironmentMapping(previous?.values, elryanEnv, values);
+    }
   }
   const collection = await Product.exists({
     $expr: {
@@ -464,11 +518,21 @@ export async function saveCategorySetup(partner, brownCollectionId, input) {
     console.error("Taxonomy notice resolve failed:", err?.message || err);
   }
   const noticeCount = await PlatformTaxonomyNotice.countDocuments({ partner, status: "open" });
+  const elryanHelpers =
+    String(partner || "").toLowerCase() === "elryan" ? await loadElryanTaxonomyHelpers() : null;
+  const elryanEnv = elryanHelpers ? await resolveElryanActiveEnvironment() : null;
   return {
     id: collectionId,
-    configured: isTaxonomyComplete(partner, saved.values),
-    values: saved.values || {},
+    configured:
+      elryanHelpers && elryanEnv
+        ? elryanHelpers.elryanMappingIsComplete(saved.values, elryanEnv)
+        : isTaxonomyComplete(partner, saved.values),
+    values:
+      elryanHelpers && elryanEnv
+        ? { ...saved.values, ...elryanHelpers.elryanValuesForEnvironment(saved.values, elryanEnv) }
+        : saved.values || {},
     noticeCount,
+    ...(elryanEnv ? { elryanEnvironment: elryanEnv } : {}),
   };
 }
 

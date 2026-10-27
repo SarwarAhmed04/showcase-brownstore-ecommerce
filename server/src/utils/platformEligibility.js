@@ -25,6 +25,7 @@ const REASON_TEXT = {
   collection_inactive: "Collection is inactive",
   brand_inactive: "Brand is inactive",
   vendor_inactive: "Vendor is inactive",
+  vendor_brand_inactive: "Vendor brand is inactive",
   product_inactive: "Product is inactive",
   taxonomy_config_missing: "Platform category setup is missing",
 };
@@ -88,6 +89,20 @@ export function evaluatePlatformEligibility(product, context = {}) {
     });
   }
 
+  const vendorBrandBlocks =
+    context?.blockedVendorBrands instanceof Set ? context.blockedVendorBrands : null;
+  if (vendorBrandBlocks && ids.vendor && ids.brand) {
+    const key = `${ids.vendor}\0${ids.brand}`;
+    if (vendorBrandBlocks.has(key)) {
+      reasons.push({
+        code: "vendor_brand_inactive",
+        scope: "vendor_brand",
+        targetId: key,
+        message: REASON_TEXT.vendor_brand_inactive,
+      });
+    }
+  }
+
   if (context.taxonomyRequired === true) {
     const configured =
       context.configuredCollectionIds instanceof Set ? context.configuredCollectionIds : new Set();
@@ -128,6 +143,26 @@ function exprIn(path, ids, shouldMatch) {
   return { $expr: { $not: { $in: [idExpr(path), list] } } };
 }
 
+function vendorBrandNorClause(context) {
+  const pairs = [...(context?.blockedVendorBrands || [])]
+    .map((key) => {
+      const [vendorId, brandId] = String(key).split("\0");
+      return { vendorId: String(vendorId || "").trim(), brandId: String(brandId || "").trim() };
+    })
+    .filter((row) => row.vendorId && row.brandId);
+  if (!pairs.length) return null;
+  return {
+    $nor: pairs.map((pair) => ({
+      $expr: {
+        $and: [
+          { $eq: [idExpr("createdBy._id"), pair.vendorId] },
+          { $eq: [idExpr("brand._id"), pair.brandId] },
+        ],
+      },
+    })),
+  };
+}
+
 function readyClauses(context) {
   if (context?.partnerActive === false) return [{ _id: { $exists: false } }];
   const clauses = [];
@@ -138,6 +173,8 @@ function readyClauses(context) {
     const clause = exprIn(path, inactiveSet(context, scope), false);
     if (clause) clauses.push(clause);
   }
+  const vendorBrandClause = vendorBrandNorClause(context);
+  if (vendorBrandClause) clauses.push(vendorBrandClause);
   return clauses;
 }
 

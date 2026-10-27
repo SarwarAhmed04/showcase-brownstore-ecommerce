@@ -1,6 +1,11 @@
 import { Router } from "express";
 import { Product } from "../models/Product.js";
-import { toPublicProduct, publicProductFilter, isPubliclyVisible } from "../utils/productView.js";
+import { loadCatalogBlocks } from "../utils/catalogBlocks.js";
+import {
+  toPublicProduct,
+  loadPublicProductFilter,
+  isPubliclyVisible,
+} from "../utils/productView.js";
 
 export const productsRouter = Router();
 
@@ -69,9 +74,11 @@ productsRouter.get("/", async (req, res) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 24));
     const sort = String(req.query.sort || "newest");
-    const filter = applyCatalogFilters(publicProductFilter(), req.query);
+    const baseFilter = await loadPublicProductFilter();
+    const cloneFilter = () => JSON.parse(JSON.stringify(baseFilter));
+    const filter = applyCatalogFilters(cloneFilter(), req.query);
 
-    const facetFilter = applyCatalogFilters(publicProductFilter(), {
+    const facetFilter = applyCatalogFilters(cloneFilter(), {
       q: req.query.q,
       ids: req.query.ids,
       category: listParam(req.query.category).length <= 1 ? req.query.category : undefined,
@@ -146,17 +153,21 @@ productsRouter.get("/", async (req, res) => {
 
 productsRouter.get("/:id", async (req, res) => {
   try {
-    const product =
-      (await Product.findById(req.params.id).catch(() => null)) ||
-      (await Product.findOne({ ibsherId: req.params.id }));
+    const [product, blocks, baseFilter] = await Promise.all([
+      (async () =>
+        (await Product.findById(req.params.id).catch(() => null)) ||
+        (await Product.findOne({ ibsherId: req.params.id })))(),
+      loadCatalogBlocks(),
+      loadPublicProductFilter(),
+    ]);
 
-    if (!product || !isPubliclyVisible(product)) {
+    if (!product || !isPubliclyVisible(product, undefined, blocks)) {
       return res.status(404).json({ message: "Product not found" });
     }
 
     const related = await Product.find({
       _id: { $ne: product._id },
-      ...publicProductFilter(),
+      ...baseFilter,
       "category._id": product.category?._id,
     }).limit(8);
 

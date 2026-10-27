@@ -7,9 +7,16 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "@gini-category-tree": fileURLToPath(new URL("../server/src/utils/giniCategoryTree.js", import.meta.url)),
     },
   },
   server: {
+    fs: {
+      allow: [
+        fileURLToPath(new URL(".", import.meta.url)),
+        fileURLToPath(new URL("../server/src/utils", import.meta.url)),
+      ],
+    },
     proxy: {
       "/api": {
         target: "http://localhost:5000",

@@ -26,6 +26,7 @@ import {
   applyCommissionRate,
   commissionMatchFilter,
   filterCommissionOptions,
+  FILTER_BRAND_BEFORE_CATEGORY_MESSAGE,
   FILTER_COLLECTION_MESSAGE,
   FILTER_REQUIRED_MESSAGE,
   filterCommissionTargetId,
@@ -172,7 +173,7 @@ describe("filter commission rules", () => {
     ]);
   });
 
-  it("keeps a five-id target key and requires only vendor, brand, and category", () => {
+  it("keeps a five-id target key and requires only vendor", () => {
     const key = filterCommissionTargetId(PATH);
     assert.equal(filterCommissionTargetId(PATH), key);
     assert.equal(key.includes("_ALL_"), false);
@@ -186,18 +187,34 @@ describe("filter commission rules", () => {
       filterCommissionTargetId({ ...PATH, vendorId: "a|b", brandId: "c" }),
       filterCommissionTargetId({ ...PATH, vendorId: "a", brandId: "b|c" })
     );
+    const vendorOnly = { vendorId: ID.v1 };
+    const vendorBrand = { vendorId: ID.v1, brandId: ID.zilan };
     const broad = { vendorId: ID.v1, brandId: ID.zilan, categoryId: ID.home };
     const mid = { ...broad, subCategoryId: ID.kitchen };
+    assert.equal(filterCommissionTargetId(vendorOnly), `${ID.v1}|_ALL_|_ALL_|_ALL_|_ALL_`);
+    assert.equal(filterCommissionTargetId(vendorBrand), `${ID.v1}|${ID.zilan}|_ALL_|_ALL_|_ALL_`);
     assert.equal(filterCommissionTargetId(broad), `${ID.v1}|${ID.zilan}|${ID.home}|_ALL_|_ALL_`);
     assert.equal(filterCommissionTargetId(mid), `${ID.v1}|${ID.zilan}|${ID.home}|${ID.kitchen}|_ALL_`);
-    assert.equal(new Set([filterCommissionTargetId(broad), filterCommissionTargetId(mid), key]).size, 3);
+    assert.equal(
+      new Set([
+        filterCommissionTargetId(vendorOnly),
+        filterCommissionTargetId(vendorBrand),
+        filterCommissionTargetId(broad),
+        filterCommissionTargetId(mid),
+        key,
+      ]).size,
+      5
+    );
+    assert.equal(filterSpecificity(vendorOnly), 1);
+    assert.equal(filterSpecificity(vendorBrand), 2);
     assert.equal(filterSpecificity(broad), 3);
     assert.equal(filterSpecificity(mid), 4);
     assert.equal(filterSpecificity(PATH), 5);
     assert.equal(filterSpecificity({ ...broad, collectionId: ID.fridge }), 0);
-    assert.equal(filterIdsError({ vendorId: ID.v1 }), FILTER_REQUIRED_MESSAGE);
-    assert.equal(filterIdsError({ vendorId: ID.v1, brandId: ID.zilan }), FILTER_REQUIRED_MESSAGE);
-    assert.equal(filterIdsError({ vendorId: ID.v1, categoryId: ID.home }), FILTER_REQUIRED_MESSAGE);
+    assert.equal(filterIdsError({}), FILTER_REQUIRED_MESSAGE);
+    assert.equal(filterIdsError({ vendorId: ID.v1 }), "");
+    assert.equal(filterIdsError({ vendorId: ID.v1, brandId: ID.zilan }), "");
+    assert.equal(filterIdsError({ vendorId: ID.v1, categoryId: ID.home }), FILTER_BRAND_BEFORE_CATEGORY_MESSAGE);
     assert.equal(filterIdsError({ ...broad, collectionId: ID.fridge }), FILTER_COLLECTION_MESSAGE);
     assert.equal(filterIdsError(broad), "");
     assert.equal(filterIdsError(PATH), "");
@@ -205,10 +222,12 @@ describe("filter commission rules", () => {
     assert.equal(filterSelectionComplete({ ...PATH, collectionId: "" }), true);
     assert.equal(filterSelectionComplete({ ...PATH, subCategoryId: "", collectionId: "" }), true);
     assert.equal(filterSelectionComplete({ ...PATH, vendorId: "  " }), false);
-    assert.equal(filterSelectionComplete({ vendorId: ID.v1, brandId: ID.zilan }), false);
+    assert.equal(filterSelectionComplete({ vendorId: ID.v1 }), true);
+    assert.equal(filterSelectionComplete({ vendorId: ID.v1, brandId: ID.zilan }), true);
     assert.equal(filterSelectionComplete({ vendorId: ID.v1, categoryId: ID.home }), false);
     assert.equal(filterSelectionIssue({ ...broad, collectionId: ID.fridge }), "collection");
-    assert.equal(filterSelectionIssue({ vendorId: ID.v1 }), "required");
+    assert.equal(filterSelectionIssue({ vendorId: ID.v1 }), "");
+    assert.equal(filterSelectionIssue({}), "required");
     assert.equal(filterSelectionIssue(broad), "");
     assert.deepEqual(selectionFromCommission({ scope: "filter", ...broad, subCategoryId: null, collectionId: null }), {
       ...broad,
@@ -782,7 +801,7 @@ describe("filter commission catalog", { concurrency: 1, timeout: 180000 }, () =>
     return Commission.find({ partner, isActive: { $ne: false } });
   }
 
-  it("requires vendor, brand, and category, and rejects a collection without a sub-category", async () => {
+  it("requires only vendor and rejects a collection without a sub-category", async () => {
     await assert.rejects(
       () =>
         Commission.create({
@@ -791,7 +810,7 @@ describe("filter commission catalog", { concurrency: 1, timeout: 180000 }, () =>
           targetId: "incomplete",
           percentage: 10,
         }),
-      /Select a vendor, brand, and category/
+      /Select a vendor/
     );
     await assert.rejects(
       () =>
@@ -834,6 +853,17 @@ describe("filter commission catalog", { concurrency: 1, timeout: 180000 }, () =>
     assert.equal(schemaOnly.scope, "filter");
     await schemaOnly.deleteOne();
 
+    const vendorOnlyKey = filterCommissionTargetId({ vendorId: ID.v1 });
+    const vendorOnlySchema = await Commission.create({
+      partner: "schema-check",
+      scope: "filter",
+      targetId: vendorOnlyKey,
+      vendorId: ID.v1,
+      percentage: 10,
+    });
+    assert.equal(vendorOnlySchema.targetId, vendorOnlyKey);
+    await vendorOnlySchema.deleteOne();
+
     const broadKey = filterCommissionTargetId({
       vendorId: ID.v1,
       brandId: ID.zilan,
@@ -851,20 +881,26 @@ describe("filter commission catalog", { concurrency: 1, timeout: 180000 }, () =>
     assert.equal(broadSchema.targetId, broadKey);
     await broadSchema.deleteOne();
 
-    await assert.rejects(
-      () => saveFilterCommission({ partner: "miswag", vendorId: ID.v1, percentage: 10 }),
-      (err) => err.message === FILTER_REQUIRED_MESSAGE
-    );
-    await assert.rejects(
-      () =>
-        saveFilterCommission({
-          partner: "miswag",
-          vendorId: ID.v1,
-          brandId: ID.zilan,
-          percentage: 10,
-        }),
-      (err) => err.message === FILTER_REQUIRED_MESSAGE
-    );
+    const vendorOnlySaved = await saveFilterCommission({
+      partner: "miswag",
+      vendorId: ID.v1,
+      percentage: 10,
+    });
+    assert.equal(vendorOnlySaved.vendorId, ID.v1);
+    assert.equal(vendorOnlySaved.brandId, null);
+    assert.equal(vendorOnlySaved.categoryId, null);
+    await vendorOnlySaved.deleteOne();
+
+    const vendorBrandSaved = await saveFilterCommission({
+      partner: "miswag",
+      vendorId: ID.v1,
+      brandId: ID.zilan,
+      percentage: 10,
+    });
+    assert.equal(vendorBrandSaved.brandId, ID.zilan);
+    assert.equal(vendorBrandSaved.categoryId, null);
+    await vendorBrandSaved.deleteOne();
+
     await assert.rejects(
       () =>
         saveFilterCommission({
@@ -873,7 +909,7 @@ describe("filter commission catalog", { concurrency: 1, timeout: 180000 }, () =>
           categoryId: ID.home,
           percentage: 10,
         }),
-      (err) => err.message === FILTER_REQUIRED_MESSAGE
+      (err) => err.message === FILTER_BRAND_BEFORE_CATEGORY_MESSAGE
     );
     await assert.rejects(
       () =>

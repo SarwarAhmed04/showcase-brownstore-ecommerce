@@ -6,12 +6,17 @@ export const FILTER_ID_FIELDS = [
   "collectionId",
 ];
 
-export const FILTER_REQUIRED_FIELDS = ["vendorId", "brandId", "categoryId"];
+export const FILTER_REQUIRED_FIELDS = ["vendorId"];
 
 // Only the target key uses this token. Optional ids are stored as null.
 export const FILTER_WILDCARD = "_ALL_";
 
-export const FILTER_REQUIRED_MESSAGE = "Select a vendor, brand, and category.";
+export const FILTER_REQUIRED_MESSAGE = "Select a vendor.";
+
+export const FILTER_BRAND_BEFORE_CATEGORY_MESSAGE = "Select a brand before a category.";
+
+export const FILTER_CATEGORY_BEFORE_SUB_MESSAGE =
+  "Select a brand and category before a sub-category.";
 
 export const FILTER_COLLECTION_MESSAGE = "Select a sub-category before a collection.";
 
@@ -22,7 +27,13 @@ export function filterNoMatchMessage(ids) {
   if (ids?.subCategoryId) {
     return "No product matches this vendor, brand, category, and sub-category.";
   }
-  return "No product matches this vendor, brand, and category.";
+  if (ids?.categoryId) {
+    return "No product matches this vendor, brand, and category.";
+  }
+  if (ids?.brandId) {
+    return "No product matches this vendor and brand.";
+  }
+  return "No product matches this vendor.";
 }
 
 export const FILTER_NO_MATCH_MESSAGE = filterNoMatchMessage({});
@@ -44,7 +55,9 @@ export function readFilterIds(input) {
 
 export function filterIdsError(input) {
   const ids = readFilterIds(input);
-  if (!ids.vendorId || !ids.brandId || !ids.categoryId) return FILTER_REQUIRED_MESSAGE;
+  if (!ids.vendorId) return FILTER_REQUIRED_MESSAGE;
+  if (ids.categoryId && !ids.brandId) return FILTER_BRAND_BEFORE_CATEGORY_MESSAGE;
+  if (ids.subCategoryId && (!ids.brandId || !ids.categoryId)) return FILTER_CATEGORY_BEFORE_SUB_MESSAGE;
   if (ids.collectionId && !ids.subCategoryId) return FILTER_COLLECTION_MESSAGE;
   return "";
 }
@@ -80,5 +93,7 @@ export function filterSpecificity(input) {
   if (!ids) return 0;
   if (ids.collectionId) return 5;
   if (ids.subCategoryId) return 4;
-  return 3;
+  if (ids.categoryId) return 3;
+  if (ids.brandId) return 2;
+  return 1;
 }

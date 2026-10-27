@@ -2,6 +2,7 @@ import { Router } from "express";
 import { Product } from "../models/Product.js";
 import { Partner } from "../models/Partner.js";
 import { isPartnerSlug } from "../utils/partnerAuth.js";
+import { fetchGiniCategoryTree } from "../services/giniConnection.js";
 import {
   applyAvailability,
   listAvailability,
@@ -10,6 +11,7 @@ import {
   productEligibility,
   saveCategorySetup,
 } from "../utils/platformTaxonomy.js";
+import { giniMappingValues } from "../utils/giniCategoryTree.js";
 import { listOpenTaxonomyNotices } from "../utils/taxonomyNotices.js";
 
 export const platformManagementRouter = Router();
@@ -37,10 +39,10 @@ function sendError(res, err, fallback) {
   });
 }
 
-function pageQuery(query, fallbackLimit = 20) {
+function pageQuery(query, fallbackLimit = 20, maxLimit = 100) {
   return {
     page: Math.max(1, Number(query.page) || 1),
-    limit: Math.min(100, Math.max(1, Number(query.limit) || fallbackLimit)),
+    limit: Math.min(maxLimit, Math.max(1, Number(query.limit) || fallbackLimit)),
     q: String(query.q || ""),
     status: String(query.status || "all"),
   };
@@ -110,7 +112,7 @@ platformManagementRouter.get("/platforms/:slug/category-setup", async (req, res)
   try {
     const partner = await loadPartnerOr404(req.params.slug, res);
     if (!partner) return;
-    res.json(await listCategorySetup({ partner: partner.slug, ...pageQuery(req.query) }));
+    res.json(await listCategorySetup({ partner: partner.slug, ...pageQuery(req.query, 20, 1000) }));
   } catch (err) {
     sendError(res, err, "Failed to load category setup");
   }
@@ -120,11 +122,23 @@ platformManagementRouter.put("/platforms/:slug/category-setup/:brownCollectionId
   try {
     const partner = await loadPartnerOr404(req.params.slug, res);
     if (!partner) return;
-    const setup = await saveCategorySetup(
-      partner.slug,
-      req.params.brownCollectionId,
-      req.body?.values || req.body
-    );
+    let input = req.body?.values || req.body;
+    if (partner.slug === "gini") {
+      let live;
+      try {
+        live = await fetchGiniCategoryTree();
+      } catch (err) {
+        return sendError(res, err, "Failed to load GINI categories");
+      }
+      if (live.connectionRequired) {
+        return res.status(409).json({
+          code: "connection_required",
+          message: "Connect GINI API first",
+        });
+      }
+      input = giniMappingValues(live.categories, input);
+    }
+    const setup = await saveCategorySetup(partner.slug, req.params.brownCollectionId, input);
     res.json({ setup });
   } catch (err) {
     sendError(res, err, "Failed to save category setup");

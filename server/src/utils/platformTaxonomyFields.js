@@ -14,6 +14,13 @@ const PLATFORM_TAXONOMY_FIELDS = {
     { key: "categoryLevel", label: "Miswag category level", required: false },
     // isLarge is stored on the same values object. It is not a completeness field.
   ],
+  // Elryan marketplace-api leaf category + hierarchy (partner-scoped; does not affect Miswag/GINI).
+  elryan: [
+    { key: "categoryId", label: "Elryan categoryId", required: true },
+    { key: "categoryName", label: "Elryan category name", required: false },
+    { key: "categoryHierarchy", label: "Elryan Name with hierarchy", required: false },
+    { key: "attributeSetId", label: "Elryan attribute set id", required: false },
+  ],
 };
 
 /** Only Gini blocks export/eligibility when taxonomy setup is incomplete. */

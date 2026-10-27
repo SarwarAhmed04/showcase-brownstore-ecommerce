@@ -11,7 +11,29 @@ import AdminModal from "../../components/admin/AdminModal";
 import ProductEditor from "../../components/admin/ProductEditor";
 import AvailabilityPanel from "../../components/admin/platform/AvailabilityPanel";
 import CategorySetupPanel from "../../components/admin/platform/CategorySetupPanel";
+import GiniApiConnection from "../../components/admin/platform/GiniApiConnection";
+import GiniSyncOneProduct from "../../components/admin/platform/GiniSyncOneProduct";
 import MiswagApiConnection from "../../components/admin/platform/MiswagApiConnection";
+
+/** Optional local Elryan WIP panels (file absent on GINI-only deploys). */
+function useOptionalElryanHost() {
+  const [Host, setHost] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    import(
+      /* @vite-ignore */
+      "../../components/admin/platform/elryanPlatformHost.jsx"
+    )
+      .then((mod) => {
+        if (!cancelled && mod?.default) setHost(() => mod.default);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return Host;
+}
 import MiswagMappingCategories from "../../components/admin/platform/MiswagMappingCategories";
 import MiswagSyncAll from "../../components/admin/platform/MiswagSyncAll";
 import PlatformOverview from "../../components/admin/platform/PlatformOverview";
@@ -102,9 +124,154 @@ function FilterSelect({ label, value, onChange, options, placeholder, disabled, 
   );
 }
 
+/** Custom list so name stays left and commission-rule count sits on the far right. */
+function VendorRuleSelect({
+  label,
+  value,
+  onChange,
+  options,
+  placeholder,
+  disabled,
+  lang,
+  required = false,
+  markedIds,
+  ruleCounts,
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const list = options || [];
+  const selected = list.find((item) => String(item.id) === String(value));
+  const selectedMarked = Boolean(value && markedIds?.has(String(value)));
+  const selectedCount = value ? Number(ruleCounts?.get(String(value)) || 0) : 0;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function onDoc(event) {
+      if (!rootRef.current?.contains(event.target)) setOpen(false);
+    }
+    function onKey(event) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative max-w-xl">
+      <label className="mb-1 block text-xs font-semibold text-brown/50">
+        {label}
+        {required ? " *" : ""}
+      </label>
+      <button
+        type="button"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        className={`${SELECT} filter-select flex items-center justify-between gap-4 text-start disabled:cursor-not-allowed disabled:opacity-50 ${
+          selectedMarked ? "border-emerald-200 bg-emerald-50 text-emerald-800" : ""
+        }`}
+      >
+        <span className={`min-w-0 truncate ${selected ? "" : "text-brown/45"}`}>
+          {selected ? tName(selected.name, lang) || selected.id : placeholder}
+        </span>
+        {selectedCount > 0 ? (
+          <span className="shrink-0 tabular-nums font-semibold text-emerald-800">
+            {selectedCount.toLocaleString("en-US")}
+          </span>
+        ) : null}
+      </button>
+      {open ? (
+        <ul
+          role="listbox"
+          className="absolute z-30 mt-2 max-h-64 w-full overflow-y-auto rounded-2xl border border-brown/10 bg-cream py-1 shadow-lg"
+        >
+          <li>
+            <button
+              type="button"
+              role="option"
+              aria-selected={!value}
+              className={`flex w-full items-center justify-between gap-4 px-4 py-2.5 text-start text-sm ${
+                !value ? "bg-brown/10 font-semibold text-brown" : "text-brown/70 hover:bg-brown/[0.04]"
+              }`}
+              onClick={() => {
+                onChange("");
+                setOpen(false);
+              }}
+            >
+              <span>{placeholder}</span>
+            </button>
+          </li>
+          {list.map((item) => {
+            const id = String(item.id);
+            const marked = Boolean(markedIds?.has(id));
+            const ruleCount = Number(ruleCounts?.get(id) || 0);
+            const active = String(value) === id;
+            return (
+              <li key={id}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  className={`flex w-full items-center justify-between gap-4 px-4 py-2.5 text-start text-sm ${
+                    marked
+                      ? "bg-emerald-50 font-semibold text-emerald-800 hover:bg-emerald-100"
+                      : active
+                        ? "bg-brown/10 font-semibold text-brown"
+                        : "text-brown hover:bg-brown/[0.04]"
+                  }`}
+                  onClick={() => {
+                    onChange(id);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="min-w-0 truncate">{tName(item.name, lang) || item.id}</span>
+                  {ruleCount > 0 ? (
+                    <span className="shrink-0 tabular-nums">{ruleCount.toLocaleString("en-US")}</span>
+                  ) : null}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function formatRate(value) {
   const n = Number(value) || 0;
   return n > 0 ? `+${n}%` : `${n}%`;
+}
+
+function commissionSortLabel(rule, t, lang) {
+  if (rule?.scope === "all") return t.allProducts || "";
+  if (rule?.scope === "filter") {
+    const vendor = filterPathParts(rule).find((part) => part.key === "vendor");
+    return filterPartText(vendor || { key: "vendor" }, t, lang) || rule.vendorId || "";
+  }
+  return tName(rule?.targetName, lang) || rule?.targetId || "";
+}
+
+function sortCommissionRules(items, mode, t, lang) {
+  const list = [...(items || [])];
+  if (mode === "az" || mode === "za") {
+    list.sort((a, b) => {
+      const cmp = String(commissionSortLabel(a, t, lang)).localeCompare(
+        String(commissionSortLabel(b, t, lang)),
+        undefined,
+        { sensitivity: "base", numeric: true }
+      );
+      return mode === "az" ? cmp : -cmp;
+    });
+    return list;
+  }
+  list.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+  return list;
 }
 
 async function copyText(value) {
@@ -799,6 +966,7 @@ function ExcelColumnOrder({ columns, onReorder, onRemove, removeLabel }) {
 function PartnerCommission({ partnerSlug, t, lang }) {
   const { user } = useAuth();
   const { setNav } = usePlatformNav();
+  const ElryanHost = useOptionalElryanHost();
   const isPrimary = Boolean(user?.isPrimary);
   const [partner, setPartner] = useState(null);
   const [targets, setTargets] = useState({
@@ -809,6 +977,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     vendors: [],
   });
   const [commissions, setCommissions] = useState([]);
+  const [commissionSort, setCommissionSort] = useState("date");
   const [scope, setScope] = useState("all");
   const [categoryId, setCategoryId] = useState("");
   const [subCategoryId, setSubCategoryId] = useState("");
@@ -895,6 +1064,26 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     [vendorId, brandId, categoryId, subCategoryId, collectionId]
   );
   const filterEnabled = filterFieldsEnabled(filterSelection);
+  // Per-vendor commission rule counts (Vendor + Filter scopes) for green marker + select labels
+  const vendorCommissionCounts = useMemo(() => {
+    const counts = new Map();
+    for (const rule of commissions) {
+      let id = "";
+      if (rule.scope === "vendor") id = String(rule.targetId || "");
+      else if (rule.scope === "filter") id = String(rule.vendorId || "");
+      if (!id) continue;
+      counts.set(id, (counts.get(id) || 0) + 1);
+    }
+    return counts;
+  }, [commissions]);
+  const vendorsWithCommission = useMemo(
+    () => new Set(vendorCommissionCounts.keys()),
+    [vendorCommissionCounts]
+  );
+  const sortedCommissions = useMemo(
+    () => sortCommissionRules(commissions, commissionSort, t, lang),
+    [commissions, commissionSort, t, lang]
+  );
   const preview = useMemo(() => {
     if (scope === "filter") return filterPreviewParams(filterSelection);
     if (scope === "category" && categoryId) return { category: categoryId };
@@ -1275,6 +1464,14 @@ function PartnerCommission({ partnerSlug, t, lang }) {
       const issue = filterSelectionIssue(filterSelection);
       if (issue === "required") {
         setError(t.filterCommissionRequired);
+        return;
+      }
+      if (issue === "brand") {
+        setError(t.selectBrand);
+        return;
+      }
+      if (issue === "category") {
+        setError(t.selectCategory);
         return;
       }
       if (issue === "collection") {
@@ -1892,6 +2089,12 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         />
       ) : null}
 
+      {tab === "connection" && partnerSlug === "gini" ? <GiniApiConnection t={t} /> : null}
+
+      {tab === "syncOne" && partnerSlug === "gini" ? <GiniSyncOneProduct t={t} lang={lang} /> : null}
+
+      {ElryanHost ? <ElryanHost tab={tab} partnerSlug={partnerSlug} t={t} lang={lang} /> : null}
+
       {tab === "connection" && partnerSlug === "miswag" ? <MiswagApiConnection t={t} /> : null}
 
       {tab === "syncAll" && partnerSlug === "miswag" ? <MiswagSyncAll t={t} /> : null}
@@ -1906,6 +2109,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           t={t}
           lang={lang}
           onNotices={setNoticeCount}
+          onOpenConnection={() => setTab("connection")}
         />
       ) : null}
 
@@ -1980,19 +2184,20 @@ function PartnerCommission({ partnerSlug, t, lang }) {
               <div className="grid max-w-xl gap-3">
                 <p className="text-sm text-brown/50">{t.filterCommissionHint}</p>
                 {filterRestoring ? <p className="text-sm text-brown/50">{t.loading}</p> : null}
-                <FilterSelect
+                <VendorRuleSelect
                   label={t.vendor}
                   required
                   value={vendorId}
                   disabled={filterRestoring}
                   placeholder={t.selectVendor}
                   lang={lang}
+                  markedIds={vendorsWithCommission}
+                  ruleCounts={vendorCommissionCounts}
                   options={ensureOption(targets.vendors, vendorId, filterLabels?.vendor)}
                   onChange={(value) => onFilterField("vendorId", value)}
                 />
                 <FilterSelect
                   label={t.productBrand}
-                  required
                   value={brandId}
                   disabled={filterRestoring || !filterEnabled.brand}
                   placeholder={t.selectBrand}
@@ -2002,7 +2207,6 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                 />
                 <FilterSelect
                   label={t.category}
-                  required
                   value={categoryId}
                   disabled={filterRestoring || !filterEnabled.category}
                   placeholder={t.selectCategory}
@@ -2072,23 +2276,16 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                 ) : null}
               </div>
             ) : scope === "vendor" ? (
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-brown/50">
-                  {t.vendor}
-                </label>
-                <select
-                  value={vendorId}
-                  onChange={(e) => setVendorId(e.target.value)}
-                  className={`${SELECT} max-w-xl`}
-                >
-                  <option value="">{t.selectVendor}</option>
-                  {(targets.vendors || []).map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {optionLabel(item, lang)}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <VendorRuleSelect
+                label={t.vendor}
+                value={vendorId}
+                placeholder={t.selectVendor}
+                lang={lang}
+                markedIds={vendorsWithCommission}
+                ruleCounts={vendorCommissionCounts}
+                options={targets.vendors || []}
+                onChange={setVendorId}
+              />
             ) : scope === "brand" ? (
               <div>
                 <label className="mb-1 block text-xs font-semibold text-brown/50">
@@ -2183,12 +2380,30 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         </section>
 
         <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
-          <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
-            {t.existingCommissions}
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
+              {t.existingCommissions}
+            </p>
+            {commissions.length ? (
+              <label className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold tracking-wide text-brown/45 uppercase">
+                  {t.sort}
+                </span>
+                <select
+                  value={commissionSort}
+                  onChange={(e) => setCommissionSort(e.target.value)}
+                  className="rounded-full border border-brown/10 bg-cream px-3 py-1.5 text-xs font-semibold text-brown outline-none ring-tan/40 focus:ring-2"
+                >
+                  <option value="date">{t.commissionSortDate}</option>
+                  <option value="az">{t.sortAZ}</option>
+                  <option value="za">{t.sortZA}</option>
+                </select>
+              </label>
+            ) : null}
+          </div>
           {commissions.length ? (
             <div className="mt-4 divide-y divide-brown/5">
-              {commissions.map((rule) => (
+              {sortedCommissions.map((rule) => (
                 <article
                   key={rule.id}
                   className={`flex gap-3 py-3 ${

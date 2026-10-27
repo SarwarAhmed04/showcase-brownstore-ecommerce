@@ -166,6 +166,25 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ pin }),
     }),
+  vendorControls: (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set("q", String(params.q));
+    const suffix = qs.toString();
+    return request(`/api/admin/vendor-controls${suffix ? `?${suffix}` : ""}`);
+  },
+  setVendorControl: (vendorId, body) =>
+    request(`/api/admin/vendor-controls/vendors/${encodeURIComponent(vendorId)}`, {
+      method: "PUT",
+      body: JSON.stringify(body || {}),
+    }),
+  setVendorBrandControl: (vendorId, brandId, body) =>
+    request(
+      `/api/admin/vendor-controls/vendors/${encodeURIComponent(vendorId)}/brands/${encodeURIComponent(brandId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body || {}),
+      }
+    ),
   adminPlatforms: () => request("/api/admin/platforms"),
   adminPlatform: (slug) => request(`/api/admin/platforms/${encodeURIComponent(slug)}`),
   platformExcelMeta: (slug) =>
@@ -229,6 +248,172 @@ export const api = {
     ),
   taxonomyNotices: (slug) =>
     request(`/api/admin/platforms/${encodeURIComponent(slug)}/taxonomy-notices`),
+  giniCategories: ({ refresh = false } = {}) =>
+    request(`/api/admin/platforms/gini/categories${refresh ? "?refresh=1" : ""}`),
+  giniSyncOneSearch: (q = "", limit = 20) => {
+    const qs = new URLSearchParams({ q, limit: String(limit) });
+    return request(`/api/admin/platforms/gini/sync-one/products?${qs}`);
+  },
+  giniSyncOnePreview: (productId) =>
+    request("/api/admin/platforms/gini/sync-one/preview", {
+      method: "POST",
+      body: JSON.stringify({ productId }),
+    }),
+  giniSyncOneSend: (body) =>
+    request("/api/admin/platforms/gini/sync-one/send", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  giniConnection: () => request("/api/admin/platforms/gini/connection"),
+  saveGiniConnection: (body) =>
+    request("/api/admin/platforms/gini/connection", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  testGiniConnection: async (body) => {
+    const res = await fetch(apiUrl("/api/admin/platforms/gini/connection/test"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(body || {}),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(json.message || `Request failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    return json;
+  },
+  elryanConnection: () => request("/api/admin/platforms/elryan/connection"),
+  saveElryanConnection: (body) =>
+    request("/api/admin/platforms/elryan/connection", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  testElryanConnection: async (body) => {
+    const res = await fetch(apiUrl("/api/admin/platforms/elryan/connection/test"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(body || {}),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok && res.status !== 409) {
+      const err = new Error(json.message || `Request failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    return json;
+  },
+  elryanCategories: (params = {}) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value != null && value !== "") qs.set(key, String(value));
+    }
+    const suffix = qs.toString();
+    return request(`/api/admin/platforms/elryan/categories${suffix ? `?${suffix}` : ""}`);
+  },
+  elryanCategoryChildren: (id, params = {}) => {
+    const qs = new URLSearchParams(params);
+    const suffix = qs.toString();
+    return request(
+      `/api/admin/platforms/elryan/categories/${encodeURIComponent(id)}/children${suffix ? `?${suffix}` : ""}`
+    );
+  },
+  elryanCategoryCatalogStatus: () => request("/api/admin/platforms/elryan/category-catalog/status"),
+  elryanCategoryCatalog: (params = {}) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value != null && value !== "") qs.set(key, String(value));
+    }
+    const suffix = qs.toString();
+    return request(`/api/admin/platforms/elryan/category-catalog${suffix ? `?${suffix}` : ""}`);
+  },
+  elryanCategoryCatalogSync: (body) =>
+    request("/api/admin/platforms/elryan/category-catalog/sync", {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }),
+  elryanCategoryCatalogCancel: () =>
+    request("/api/admin/platforms/elryan/category-catalog/cancel", { method: "POST" }),
+  elryanMappingPreview: (params = {}) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value != null && value !== "") qs.set(key, String(value));
+    }
+    const suffix = qs.toString();
+    return request(`/api/admin/platforms/elryan/mapping-preview${suffix ? `?${suffix}` : ""}`);
+  },
+  elryanMappingSnapshotSearch: (params = {}) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value != null && value !== "") qs.set(key, String(value));
+    }
+    const suffix = qs.toString();
+    return request(
+      `/api/admin/platforms/elryan/mapping/snapshot-search${suffix ? `?${suffix}` : ""}`
+    );
+  },
+  elryanMappingPreviewSave: (body) =>
+    request("/api/admin/platforms/elryan/mapping/preview-save", {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }),
+  elryanMappingSave: (body) =>
+    request("/api/admin/platforms/elryan/mapping/save", {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }),
+  elryanCategoryAttributeCompatibility: (id) =>
+    request(
+      `/api/admin/platforms/elryan/categories/${encodeURIComponent(id)}/attribute-compatibility`
+    ),
+  elryanAttributeValues: (attribute, params = {}) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value != null && value !== "") qs.set(key, String(value));
+    }
+    const suffix = qs.toString();
+    return request(
+      `/api/admin/platforms/elryan/attribute-values/${encodeURIComponent(attribute)}${suffix ? `?${suffix}` : ""}`
+    );
+  },
+  elryanAttributeValueById: (id) =>
+    request(`/api/admin/platforms/elryan/attribute-values/id/${encodeURIComponent(id)}`),
+  elryanAttributeValueVerify: (body) =>
+    request("/api/admin/platforms/elryan/attribute-values/verify", {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }),
+  elryanValueMappings: (kind) => {
+    const qs = kind ? `?kind=${encodeURIComponent(kind)}` : "";
+    return request(`/api/admin/platforms/elryan/value-mappings${qs}`);
+  },
+  saveElryanValueMapping: (body) =>
+    request("/api/admin/platforms/elryan/value-mappings", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteElryanValueMapping: (kind, brownKey) =>
+    request(
+      `/api/admin/platforms/elryan/value-mappings/${encodeURIComponent(kind)}/${encodeURIComponent(brownKey)}`,
+      { method: "DELETE" }
+    ),
+  elryanSyncOneSearch: (q = "", limit = 20) => {
+    const qs = new URLSearchParams({ q, limit: String(limit) });
+    return request(`/api/admin/platforms/elryan/sync-one/products?${qs}`);
+  },
+  elryanSyncOnePreview: (productId, extras = {}) =>
+    request("/api/admin/platforms/elryan/sync-one/preview", {
+      method: "POST",
+      body: JSON.stringify({ productId, ...extras }),
+    }),
+  elryanSyncOneSend: (body) =>
+    request("/api/admin/platforms/elryan/sync-one/send", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   miswagConnection: () => request("/api/admin/platforms/miswag/connection"),
   saveMiswagConnection: (body) =>
     request("/api/admin/platforms/miswag/connection", {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { imgUrl } from "../../../lib/img";
@@ -13,7 +13,20 @@ export const PLATFORM_SECTIONS = [
   ["api", "partnerApi"],
 ];
 
-export function platformSectionsFor(partnerSlug) {
+let elryanSectionsLoader = null;
+function loadElryanSections() {
+  if (!elryanSectionsLoader) {
+    elryanSectionsLoader = import(
+      /* @vite-ignore */
+      "./elryanPlatformHost.jsx"
+    )
+      .then((mod) => (typeof mod.elryanPlatformSections === "function" ? mod.elryanPlatformSections() : null))
+      .catch(() => null);
+  }
+  return elryanSectionsLoader;
+}
+
+export function platformSectionsFor(partnerSlug, elryanSections = null) {
   if (partnerSlug === "miswag") {
     return [
       ["connection", "miswagApiConnection"],
@@ -21,6 +34,16 @@ export function platformSectionsFor(partnerSlug) {
       ["mappingCategories", "miswagMappingCategories"],
       ...PLATFORM_SECTIONS.filter(([id]) => id !== "mapping"),
     ];
+  }
+  if (partnerSlug === "gini") {
+    return [
+      ["connection", "giniApiConnection"],
+      ["syncOne", "giniSyncOneTitle"],
+      ...PLATFORM_SECTIONS,
+    ];
+  }
+  if (partnerSlug === "elryan" && Array.isArray(elryanSections) && elryanSections.length) {
+    return [...elryanSections, ...PLATFORM_SECTIONS];
   }
   return PLATFORM_SECTIONS;
 }
@@ -67,7 +90,18 @@ function SectionButton({ active, label, onClick, disabled, badge }) {
 
 export function PlatformNavBody({ nav, t, onNavigate }) {
   const partner = nav?.partner;
-  const sections = platformSectionsFor(partner?.slug);
+  const [elryanSections, setElryanSections] = useState(null);
+  useEffect(() => {
+    if (partner?.slug !== "elryan") return undefined;
+    let cancelled = false;
+    loadElryanSections().then((sections) => {
+      if (!cancelled) setElryanSections(sections);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [partner?.slug]);
+  const sections = platformSectionsFor(partner?.slug, elryanSections);
   return (
     <div className="flex h-full flex-col">
       <div className="px-4 pb-4 pt-6">
@@ -90,7 +124,7 @@ export function PlatformNavBody({ nav, t, onNavigate }) {
           <span className="min-w-0 flex-1 truncate font-display text-xl">{partner?.name || "…"}</span>
         </button>
       </div>
-      <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 pb-6">
+      <nav className="flex flex-1 flex-col divide-y divide-brown/10 overflow-y-auto px-3 pb-6">
         {sections.map(([id, labelKey]) => (
           <SectionButton
             key={id}

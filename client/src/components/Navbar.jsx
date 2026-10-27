@@ -10,7 +10,7 @@ import { useScrolled } from '../lib/hooks'
 import { imgUrl } from '../lib/img'
 import { useStore } from '../store'
 
-export const PHONE = '+964 751 760 7671'
+export const PHONE = '+964 7738029000'
 export const EMAIL = 'info@brownstore.net'
 
 const LANGS = [
@@ -22,12 +22,16 @@ const LANGS = [
 export function Wordmark({ light = false, className }) {
   const { t } = useLang()
   return (
-    <Link to="/" aria-label={t.brand} className={cn('group inline-flex shrink-0 items-center gap-2.5', className)}>
-      <Logo className="h-9 w-9 shrink-0 transition-transform duration-500 group-hover:-rotate-6" />
+    <Link
+      to="/"
+      aria-label={t.brand}
+      className={cn('group inline-flex min-w-0 shrink items-center gap-1.5 sm:gap-2.5', className)}
+    >
+      <Logo className="h-7 w-7 shrink-0 transition-transform duration-500 group-hover:-rotate-6 sm:h-9 sm:w-9" />
       <span
         dir="ltr"
         className={cn(
-          'font-display text-[1.4rem] font-extrabold leading-none tracking-[-0.045em]',
+          'truncate font-display text-[1.15rem] font-extrabold leading-none tracking-[-0.045em] sm:text-[1.4rem]',
           light ? 'text-bean-50' : 'text-bean-900',
         )}
       >
@@ -147,7 +151,7 @@ function MobileMenu({ open, onOpenChange }) {
         <button
           type="button"
           aria-label={t.menu}
-          className="grid size-10 place-items-center rounded-md text-bean-900 transition-colors hover:bg-accent lg:hidden"
+          className="grid size-9 place-items-center rounded-md text-bean-900 transition-colors hover:bg-accent sm:size-10 lg:hidden"
         >
           <Menu className="size-5" />
         </button>
@@ -253,14 +257,14 @@ export default function Navbar() {
         className="pointer-events-none fixed inset-x-0 top-5 z-50"
         onMouseLeave={() => setMegaOpen(false)}
       >
-        <div className="pointer-events-auto relative isolate mx-auto w-full max-w-[1400px] px-10">
+        <div className="pointer-events-auto relative isolate mx-auto w-full max-w-[1400px] px-3 sm:px-5 lg:px-10">
           <div
             className={cn(
               'rounded-xl border border-bean-900/10 bg-[rgb(var(--bg))]/90 backdrop-blur-md transition-shadow duration-300',
               scrolled && 'shadow-[0_18px_40px_-28px_rgb(36_22_17/0.55)]',
             )}
           >
-        <div className="grid h-16 grid-cols-[1fr_auto_1fr] items-center gap-3 px-5 lg:h-[76px]">
+        <div className="grid h-14 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-2.5 sm:h-16 sm:gap-3 sm:px-4 lg:h-[76px] lg:grid-cols-[1fr_auto_1fr] lg:px-5">
           <div className="flex items-center gap-7">
             <MobileMenu open={menuOpen} onOpenChange={setMenuOpen} />
             <nav className="hidden items-center gap-7 lg:flex" aria-label={t.primaryNav}>
@@ -290,9 +294,9 @@ export default function Navbar() {
             </nav>
           </div>
 
-          <Wordmark />
+          <Wordmark className="justify-self-center" />
 
-          <div className="flex items-center justify-end gap-1.5">
+          <div className="flex items-center justify-end gap-0.5 sm:gap-1.5">
             <LangSwitch className="me-2 hidden lg:flex" />
             <button
               type="button"
@@ -306,14 +310,14 @@ export default function Navbar() {
               type="button"
               onClick={() => setSearchOpen(true)}
               aria-label={t.searchShortcut}
-              className="grid size-10 place-items-center rounded-md text-bean-900 transition-colors hover:bg-accent lg:hidden"
+              className="grid size-9 place-items-center rounded-md text-bean-900 transition-colors hover:bg-accent sm:size-10 lg:hidden"
             >
               <Search className="size-5" />
             </button>
             <Link
               to="/saved"
               aria-label={`${t.savedItems} (${saved.count})`}
-              className="relative grid size-10 place-items-center rounded-md text-bean-900 transition-colors hover:bg-accent"
+              className="relative grid size-9 place-items-center rounded-md text-bean-900 transition-colors hover:bg-accent sm:size-10"
             >
               <Heart className="size-5" />
               {saved.count > 0 && (

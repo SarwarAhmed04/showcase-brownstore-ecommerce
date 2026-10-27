@@ -28,6 +28,20 @@ export function LangProvider({ children }) {
   return <LangContext.Provider value={value}>{children}</LangContext.Provider>;
 }
 
+/**
+ * Returns lang helpers. When context is briefly null (Vite Fast Refresh remounts
+ * LangProvider after i18n/HMR), fall back instead of throwing — otherwise
+ * AdminShell does `const { t } = useLang()` and the entire admin UI goes blank.
+ */
 export function useLang() {
-  return useContext(LangContext);
+  const ctx = useContext(LangContext);
+  if (ctx) return ctx;
+  const lang = typeof document !== "undefined" ? document.documentElement.lang || "ar" : "ar";
+  const safeLang = translations[lang] ? lang : "ar";
+  return {
+    lang: safeLang,
+    setLang: () => {},
+    t: translations[safeLang] || translations.ar,
+    dir: safeLang === "en" ? "ltr" : "rtl",
+  };
 }

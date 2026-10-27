@@ -66,7 +66,9 @@ export function filterSelectionIssue(selection) {
   const categoryId = String(selection?.categoryId || "").trim();
   const subCategoryId = String(selection?.subCategoryId || "").trim();
   const collectionId = String(selection?.collectionId || "").trim();
-  if (!vendorId || !brandId || !categoryId) return "required";
+  if (!vendorId) return "required";
+  if (categoryId && !brandId) return "brand";
+  if (subCategoryId && (!brandId || !categoryId)) return "category";
   if (collectionId && !subCategoryId) return "collection";
   return "";
 }
