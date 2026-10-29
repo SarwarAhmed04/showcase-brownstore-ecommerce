@@ -162,6 +162,7 @@ function reasonLabel(code) {
     missing_product: "Product not found",
     invalid_external_id: "Invalid Miswag external_id (needs IBSHER id)",
     invalid_price: "Invalid price",
+    price_needs_review: "The original IBSHER regular price is missing or ambiguous",
     inactive: "Product is inactive",
     missing_name: "Missing English product name",
     missing_arabic_name_for_highlight: "Missing Arabic name (required for highlight)",
@@ -233,10 +234,11 @@ export function buildMiswagTestPayload(
     const rate = Number(pricing.rate) || 0;
     return Math.max(0, storePrice * (1 + rate / 100));
   })();
-  const price = Math.round(Number(pricing.price));
+  const price = pricing.priceReview ? null : Math.round(Number(pricing.price));
   const externalId = miswagItemExternalId(resolved);
   if (!/^[\x20-\x7E]+$/.test(externalId) || externalId === "bs-") errors.push("invalid_external_id");
-  if (!Number.isFinite(price) || price < 0) errors.push("invalid_price");
+  if (pricing.priceReview) errors.push("price_needs_review");
+  else if (!Number.isFinite(price) || price < 0) errors.push("invalid_price");
   if (resolved.isActive === false) errors.push("inactive");
 
   const nameEn = localized(resolved.name, ["en", "ku", "ar"]);
@@ -367,7 +369,7 @@ export function buildMiswagTestPayload(
     ...(categoryCheck.ok ? { category_id: categoryCheck.categoryId } : {}),
     is_large: miswagIsLargeFlag(isLarge),
     ...(brandCheck.ok ? { brand_id: brandCheck.brandId } : {}),
-    price: Number.isFinite(price) ? price : 0,
+    ...(pricing.priceReview ? {} : { price: Number.isFinite(price) ? price : 0 }),
     currency: "IQD",
     variations: payloadVariations,
   };
@@ -379,8 +381,8 @@ export function buildMiswagTestPayload(
     warnings: [...new Set(warnings)],
     payload,
     externalId,
-    platformPrice: Number.isFinite(price) ? price : 0,
-    rawPriceAfterCommission: Math.round(rawAfterCommission * 100) / 100,
+    platformPrice: pricing.priceReview ? null : Number.isFinite(price) ? price : 0,
+    rawPriceAfterCommission: pricing.priceReview ? null : Math.round(rawAfterCommission * 100) / 100,
     pricing,
     product: {
       id: String(resolved.id || doc?._id || ""),
@@ -534,6 +536,7 @@ export async function previewMiswagTestProduct({
       rawPriceAfterCommission: built.rawPriceAfterCommission,
       finalRoundedPrice: built.platformPrice,
       currency: "IQD",
+      priceReview: Boolean(built.pricing.priceReview),
       storePriceUnchanged: storePriceBefore === storePriceAfter,
     },
     product: built.product,

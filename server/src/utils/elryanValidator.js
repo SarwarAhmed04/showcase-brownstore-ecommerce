@@ -72,7 +72,13 @@ export function validateElryanPreviewParts({
     }
   }
 
-  if (!pricing?.proposedElryanPrice || pricing.proposedElryanPrice <= 0) {
+  if (pricing?.priceReview) {
+    blockers.push({
+      code: "price_needs_review",
+      status: ELRYAN_READINESS.NOT_READY,
+      message: "The original IBSHER regular price is missing or ambiguous.",
+    });
+  } else if (!pricing?.proposedElryanPrice || pricing.proposedElryanPrice <= 0) {
     blockers.push({ code: "invalid_platform_price", status: ELRYAN_READINESS.NOT_READY });
   }
 

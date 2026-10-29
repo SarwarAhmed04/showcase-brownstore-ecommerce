@@ -1,3 +1,5 @@
+import { readImportedIbsherDiscount, readRegularIbsherPrice } from "../utils/ibsherPrice.js";
+
 const CLIENT_API = () => process.env.IBSHER_API || "https://api.ibsher.com/api/v1/client";
 const ADMIN_API = () => process.env.IBSHER_ADMIN_API || "https://api.ibsher.com/api/v1/admin";
 const PAGE_LIMIT = 100;
@@ -288,13 +290,16 @@ export async function streamIbsherCatalog(onProducts) {
 }
 
 export function mapIbsherProduct(p) {
+  const regular = readRegularIbsherPrice(p?.price);
   return {
     ibsherId: String(p._id || p.id || ""),
     name: p.name || { en: "", ar: "", ku: "" },
     description: p.description || { en: "", ar: "", ku: "" },
     itemCode: p.itemCode || "",
-    price: Number(p.price) || 0,
-    discountPrice: Number(p.discountPrice) || 0,
+    price: regular.ok ? regular.price : 0,
+    // Refresh must not put an IBSHER promotion back into the selling-price field.
+    discountPrice: 0,
+    ibsherDiscountPrice: readImportedIbsherDiscount(p?.discountPrice),
     variants: p.variants || [],
     category: p.category || null,
     subCategory: p.subCategory || null,

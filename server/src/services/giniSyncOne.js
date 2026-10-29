@@ -43,6 +43,7 @@ const BLOCKER_TEXT = {
   name_too_long: "The GINI product name is longer than 255 characters.",
   description_too_long: "The GINI description is longer than 1000 words.",
   invalid_price: "GINI price must be a positive whole number of IQD.",
+  price_needs_review: "The original IBSHER regular price is missing or ambiguous.",
   invalid_quantity: "Quantity must be a whole number of 0 or more.",
   missing_image: "At least one usable image is required.",
   invalid_image: "An image could not be downloaded as a valid GINI image file.",
@@ -223,9 +224,10 @@ export async function buildGiniSyncPlan(productId) {
   if (!text.description) blockers.push("missing_description");
   if (text.name && text.name.length > GINI_NAME_MAX) blockers.push("name_too_long");
   if (text.description && wordCount(text.description) > GINI_DESCRIPTION_MAX_WORDS) blockers.push("description_too_long");
-  const giniPrice = integerOrNull(priced.price, { min: 1 });
+  const giniPrice = priced.priceReview ? null : integerOrNull(priced.price, { min: 1 });
   const quantity = integerOrNull(resolved?.stock, { min: 0 });
-  if (giniPrice == null) blockers.push("invalid_price");
+  if (priced.priceReview) blockers.push("price_needs_review");
+  else if (giniPrice == null) blockers.push("invalid_price");
   if (quantity == null) blockers.push("invalid_quantity");
   if (!plannedImages.length) blockers.push("missing_image");
   if (plannedImages.some((url) => !isAllowedMediaUrl(url))) blockers.push("invalid_image");
@@ -277,9 +279,11 @@ export async function buildGiniSyncPlan(productId) {
     giniMode: simple.giniMode,
     brownStoreVariantsCollapsed: simple.brownStoreVariantsCollapsed,
     variantCount: simple.variantCount,
-    brownStorePrice: priced.storePrice,
+    brownStorePrice: priced.priceReview ? null : priced.storePrice,
     commissionRate: priced.rate,
-    giniPrice: giniPrice ?? priced.price,
+    giniPrice: priced.priceReview ? null : giniPrice,
+    priceReview: Boolean(priced.priceReview),
+    priceReviewReason: priced.priceReviewReason || "",
     quantity,
     category,
     subcategory,
@@ -306,6 +310,8 @@ function publicPreview(plan, previewToken = "") {
     brownStorePrice: plan.brownStorePrice,
     commissionRate: plan.commissionRate,
     giniPrice: plan.giniPrice,
+    priceReview: Boolean(plan.priceReview),
+    priceReviewReason: plan.priceReviewReason || "",
     quantity: plan.quantity,
     category: plan.category,
     subcategory: plan.subcategory,

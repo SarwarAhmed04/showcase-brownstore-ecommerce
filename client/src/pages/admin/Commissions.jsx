@@ -530,12 +530,12 @@ function fillTemplate(template, values) {
 function PriceDetails({ item, t, lang }) {
   const path = tName(item.commission?.targetName, lang);
   const rows = [
-    [t.brownstorePrice, moneyText(item.storePrice, t)],
+    [t.brownstorePrice, item.priceReview ? t.priceNeedsReview : moneyText(item.storePrice, t)],
     [t.winningRule, winningRuleLabel(item, t)],
     [t.matchingPath, path || "—"],
     [t.columnCommission, item.commission ? `${Number(item.commission.percentage) || 0}%` : "0%"],
-    [t.rawPlatformPrice, moneyText(item.rawPrice ?? item.storePrice, t)],
-    [t.finalPlatformPrice, moneyText(item.platformPrice, t)],
+    [t.rawPlatformPrice, item.priceReview ? t.priceNeedsReview : moneyText(item.rawPrice ?? item.storePrice, t)],
+    [t.finalPlatformPrice, item.priceReview ? t.priceNeedsReview : moneyText(item.platformPrice, t)],
   ];
   return (
     <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -620,9 +620,13 @@ function PlatformTableProduct({ item, t, lang, busy, open, onEdit, onToggle, onD
         <td className="overflow-hidden py-3 pr-2 text-brown/70">
           <p className="truncate">{tName(item.brand?.name, lang) || "—"}</p>
         </td>
-        <td className="overflow-hidden py-3 pr-2 font-semibold text-brown">{moneyText(item.storePrice, t)}</td>
+        <td className="overflow-hidden py-3 pr-2 font-semibold text-brown">
+          {item.priceReview ? t.priceNeedsReview : moneyText(item.storePrice, t)}
+        </td>
         <td className="overflow-hidden py-3 pr-2 font-semibold text-brown">{commissionSummaryText(item, t)}</td>
-        <td className="overflow-hidden py-3 pr-2 font-semibold text-brown">{moneyText(item.platformPrice, t)}</td>
+        <td className="overflow-hidden py-3 pr-2 font-semibold text-brown">
+          {item.priceReview ? t.priceNeedsReview : moneyText(item.platformPrice, t)}
+        </td>
         <td className="overflow-hidden py-3 pr-2">
           <ProductStatus item={item} t={t} />
         </td>
@@ -653,9 +657,9 @@ function PlatformProductCard({ item, t, lang, busy, open, onEdit, onToggle, onDe
   const fields = [
     [t.sku, item.sku || item.itemCode || "—"],
     [t.productBrand, tName(item.brand?.name, lang) || "—"],
-    [t.brownstorePrice, moneyText(item.storePrice, t)],
+    [t.brownstorePrice, item.priceReview ? t.priceNeedsReview : moneyText(item.storePrice, t)],
     [t.columnCommission, commissionSummaryText(item, t)],
-    [t.platformPriceLabel, moneyText(item.platformPrice, t)],
+    [t.platformPriceLabel, item.priceReview ? t.priceNeedsReview : moneyText(item.platformPrice, t)],
   ];
   return (
     <article className="py-4">

@@ -54,7 +54,8 @@ function explicitSku(record) {
 
 function explicitPrice(record) {
   if (!record || typeof record !== "object") return null;
-  for (const key of ["price", "sellingPrice", "discountPrice"]) {
+  // Promotional IBSHER discountPrice is not a BrownStore variant price.
+  for (const key of ["price", "sellingPrice"]) {
     if (record[key] == null || record[key] === "") continue;
     const number = Number(record[key]);
     if (Number.isFinite(number)) return number;

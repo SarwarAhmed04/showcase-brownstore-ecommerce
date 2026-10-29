@@ -149,7 +149,11 @@ function Row({ product, onEdit, t, lang }) {
       </div>
       <p className="truncate text-center text-sm">{product.sku || "—"}</p>
       <p className="text-center text-sm tabular-nums">
-        {formatGrouped(product.sellingPrice ?? product.price ?? 0)}
+        {product.priceReview ? (
+          <span className="font-semibold text-red-800">{t.priceNeedsReview}</span>
+        ) : (
+          formatGrouped(product.sellingPrice ?? product.price ?? 0)
+        )}
       </p>
       <p className="text-center text-sm">{product.stock ?? 0}</p>
       <p

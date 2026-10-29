@@ -42,6 +42,7 @@ const MISSING_TEXT = {
   missing_color: "Missing product color",
   missing_image: "Missing product image",
   missing_category: "Missing Gini category or subcategory ID",
+  price_needs_review: "The original IBSHER regular price is missing or ambiguous",
 };
 
 function locText(value, key) {
@@ -109,10 +110,10 @@ function giniProductRow(product, rules, overrides, context) {
   if (!color) missing.push("missing_color");
   if (!images.length) missing.push("missing_image");
   if (!ids) missing.push("missing_category");
-  if (missing.length) return { missing };
-
   const stock = Number(resolved.stock);
   const preview = partnerPricePreview(product, rules);
+  if (preview.priceReview) missing.push("price_needs_review");
+  if (missing.length) return { missing };
   const displayName = nameEn || nameAr;
   const collection =
     locText(resolved.collectionName, "en") ||

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --max-old-space-size=4096 --watch src/index.js",
     "start": "node src/index.js",
-    "test": "node --test src/platformPrice.test.js src/platformManagement.test.js src/taxonomyNotices.test.js src/giniExport.test.js src/giniConnection.test.js src/giniCategoryMapping.test.js src/giniSyncOne.test.js src/miswagConnection.test.js src/miswagSyncOne.test.js src/miswagDiscovery.test.js src/miswagBarcode.test.js src/miswagSyncAll.test.js src/miswagChangedSync.test.js src/miswagCategoryMapping.test.js src/miswagLargeProduct.test.js src/filterCommission.test.js src/platformProducts.test.js src/catalogBlocks.test.js src/miswagValueMapping.test.js",
+    "test": "node --test src/platformPrice.test.js src/platformManagement.test.js src/taxonomyNotices.test.js src/giniExport.test.js src/giniConnection.test.js src/giniCategoryMapping.test.js src/giniSyncOne.test.js src/miswagConnection.test.js src/miswagSyncOne.test.js src/miswagDiscovery.test.js src/miswagBarcode.test.js src/miswagSyncAll.test.js src/miswagChangedSync.test.js src/miswagCategoryMapping.test.js src/miswagLargeProduct.test.js src/filterCommission.test.js src/platformProducts.test.js src/catalogBlocks.test.js src/miswagValueMapping.test.js src/ibsherDiscountPrice.test.js",
     "test:elryan": "node --test src/elryanConnection.test.js src/elryanCatalogBrowse.test.js src/elryanPhase3Mapping.test.js src/elryanPhase31Mapping.test.js src/elryanManualMappingSelect.test.js src/elryanBrandMappingSafety.test.js src/elryanWhiteScreenFix.test.js src/elryanMappingPreviewPerf.test.js",
     "miswag:verify": "node src/scripts/verifyMiswagConnection.js"
   },

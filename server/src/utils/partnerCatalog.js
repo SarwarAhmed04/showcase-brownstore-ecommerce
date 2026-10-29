@@ -69,7 +69,7 @@ export function toPartnerProduct(doc, rules, origin, platformOverrides) {
   if (!pub) return null;
   const store = toResolvedProduct(doc);
   const rate = resolveCommissionRate(doc, rules);
-  const price = applyCommissionRate(store?.sellingPrice, rate);
+  const price = store?.priceReview ? null : applyCommissionRate(store?.sellingPrice, rate);
   const variants = stripPrices(pub.variants || [], origin);
   const images = collectImages(variants, pub.image, origin);
 
@@ -79,6 +79,7 @@ export function toPartnerProduct(doc, rules, origin, platformOverrides) {
     name: pub.name,
     description: pub.description,
     price,
+    priceReview: Boolean(store?.priceReview),
     stock: pub.stock,
     inStock: pub.inStock,
     images,
@@ -112,11 +113,32 @@ function commissionSummary(rule, rate) {
 export function partnerPricePreview(doc, rules) {
   const store = toResolvedProduct(doc);
   if (!store) {
-    return { storePrice: 0, rate: 0, rawPrice: 0, price: 0, customPrice: false, commission: null };
+    return {
+      storePrice: 0,
+      rate: 0,
+      rawPrice: 0,
+      price: 0,
+      customPrice: false,
+      commission: null,
+      priceReview: false,
+      priceReviewReason: "",
+    };
   }
-  const storePrice = Number(store.sellingPrice) || 0;
   const rule = winningCommission(doc, rules);
   const rate = rule && Number.isFinite(Number(rule.percentage)) ? Number(rule.percentage) : 0;
+  if (store.priceReview) {
+    return {
+      storePrice: null,
+      rate,
+      rawPrice: null,
+      customPrice: false,
+      price: null,
+      commission: commissionSummary(rule, rate),
+      priceReview: true,
+      priceReviewReason: store.priceReviewReason || "missing_regular_price",
+    };
+  }
+  const storePrice = Number(store.sellingPrice) || 0;
   return {
     storePrice,
     rate,
@@ -124,5 +146,7 @@ export function partnerPricePreview(doc, rules) {
     customPrice: false,
     price: applyCommissionRate(storePrice, rate),
     commission: commissionSummary(rule, rate),
+    priceReview: false,
+    priceReviewReason: "",
   };
 }

@@ -154,7 +154,9 @@ export default function GiniSyncOneProduct({ t, lang }) {
             </div>
             <div>
               <dt className="text-brown/45">BrownStore</dt>
-              <dd className="font-semibold">{preview.brownStorePrice} IQD</dd>
+              <dd className="font-semibold">
+                {preview.priceReview ? t.priceNeedsReview : `${preview.brownStorePrice} IQD`}
+              </dd>
             </div>
             <div>
               <dt className="text-brown/45">Commission</dt>
@@ -162,7 +164,9 @@ export default function GiniSyncOneProduct({ t, lang }) {
             </div>
             <div>
               <dt className="text-brown/45">GINI</dt>
-              <dd className="font-semibold">{preview.giniPrice} IQD</dd>
+              <dd className="font-semibold">
+                {preview.priceReview ? t.priceNeedsReview : `${preview.giniPrice} IQD`}
+              </dd>
             </div>
             <div>
               <dt className="text-brown/45">Quantity</dt>

@@ -228,9 +228,11 @@ function productRow(product, rules, extra, taxonomy) {
   const rate = Number(rule?.percentage);
   const safeRate = Number.isFinite(rate) ? rate : preview.rate || 0;
   const store = toResolvedProduct(product);
-  const discountPrice = Number(store?.discountPrice) || 0;
-  const commissionedPrice = preview.price;
-  const commissionedDiscount = discountPrice > 0 ? applyCommissionRate(discountPrice, safeRate) : 0;
+  const priceReview = Boolean(store?.priceReview || preview.priceReview);
+  const discountPrice = priceReview ? 0 : Number(store?.discountPrice) || 0;
+  const commissionedPrice = priceReview ? "" : preview.price;
+  const commissionedDiscount =
+    !priceReview && discountPrice > 0 ? applyCommissionRate(discountPrice, safeRate) : priceReview ? "" : 0;
   const keywords = Array.isArray(resolved.keyword) ? resolved.keyword.filter(Boolean).join(", ") : "";
   return {
     cells: {
@@ -245,7 +247,7 @@ function productRow(product, rules, extra, taxonomy) {
       price: commissionedPrice,
       discountPrice: commissionedDiscount,
       commission: safeRate,
-      platformPrice: preview.price,
+      platformPrice: priceReview ? "" : preview.price,
       availability: resolved.outOfStock ? "Out of stock" : "In stock",
       status: resolved.isActive === false ? "Inactive" : "Active",
       brandKu: locText(resolved.brand, "ku"),

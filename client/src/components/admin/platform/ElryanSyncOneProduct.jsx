@@ -140,7 +140,9 @@ export default function ElryanSyncOneProduct({ t, lang }) {
             </div>
             <div>
               <dt className="text-brown/45">{t.storePrice}</dt>
-              <dd className="font-semibold">{preview.pricing?.storeSellingPrice} IQD</dd>
+              <dd className="font-semibold">
+                {preview.pricing?.priceReview ? t.priceNeedsReview : `${preview.pricing?.storeSellingPrice} IQD`}
+              </dd>
             </div>
             <div>
               <dt className="text-brown/45">{t.commission}</dt>
@@ -148,11 +150,15 @@ export default function ElryanSyncOneProduct({ t, lang }) {
             </div>
             <div>
               <dt className="text-brown/45">{t.platformPrice}</dt>
-              <dd className="font-semibold">{preview.pricing?.platformPrice} IQD</dd>
+              <dd className="font-semibold">
+                {preview.pricing?.priceReview ? t.priceNeedsReview : `${preview.pricing?.platformPrice} IQD`}
+              </dd>
             </div>
             <div>
               <dt className="text-brown/45">{t.elryanProposedPrice}</dt>
-              <dd className="font-semibold">{preview.pricing?.proposedElryanPrice ?? "—"}</dd>
+              <dd className="font-semibold">
+                {preview.pricing?.priceReview ? t.priceNeedsReview : (preview.pricing?.proposedElryanPrice ?? "—")}
+              </dd>
             </div>
             <div>
               <dt className="text-brown/45">{t.elryanProposedCost}</dt>

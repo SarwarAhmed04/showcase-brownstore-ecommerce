@@ -1,3 +1,4 @@
+import { resolveBrownStorePrice } from "./ibsherPrice.js";
 import {
   applyOverrides,
   asObject,
@@ -113,12 +114,12 @@ export function toResolvedProduct(doc, extraOverrides) {
     merged.stock != null && Number.isFinite(Number(merged.stock))
       ? Number(merged.stock)
       : sourceStock;
-  const price = Number(merged.price) || 0;
-  const discountPrice = Number(merged.discountPrice) || 0;
-  const sellingPrice =
-    discountPrice > 0 && discountPrice < price ? discountPrice : price;
+  const pricing = resolveBrownStorePrice(raw, raw.overrides, extraOverrides);
+  const price = pricing.price;
+  const discountPrice = pricing.discountPrice;
+  const sellingPrice = pricing.sellingPrice;
   const outOfStock = merged.outOfStock === true;
-  const hasDiscount = discountPrice > 0 && discountPrice < price;
+  const hasDiscount = pricing.hasDiscount;
 
   return {
     id: raw._id,
@@ -130,6 +131,8 @@ export function toResolvedProduct(doc, extraOverrides) {
     price,
     discountPrice,
     sellingPrice,
+    priceReview: pricing.priceReview,
+    priceReviewReason: pricing.priceReviewReason,
     stock,
     outOfStock,
     inStock: !outOfStock && stock > 0,

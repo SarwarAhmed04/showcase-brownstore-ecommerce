@@ -6,6 +6,7 @@ import { requireAdmin } from "../middleware/auth.js";
 import { isPrimaryAdmin, toAdminAccount, verifyApiKeyPin } from "../utils/adminUser.js";
 import { User } from "../models/User.js";
 import bcrypt from "bcryptjs";
+import { brownStoreSellingPriceExpr, matchesImportedDiscount } from "../utils/ibsherPrice.js";
 import { toAdminProduct, toResolvedProduct } from "../utils/productView.js";
 import {
   mergeOverridePatch,
@@ -151,28 +152,7 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const sellingPriceExpr = {
-  $let: {
-    vars: {
-      override: { $ifNull: ["$overrides.price", null] },
-      listed: { $ifNull: ["$price", 0] },
-      disc: { $ifNull: ["$discountPrice", 0] },
-    },
-    in: {
-      $cond: [
-        { $ne: ["$$override", null] },
-        "$$override",
-        {
-          $cond: [
-            { $and: [{ $gt: ["$$disc", 0] }, { $lt: ["$$disc", "$$listed"] }] },
-            "$$disc",
-            "$$listed",
-          ],
-        },
-      ],
-    },
-  },
-};
+const sellingPriceExpr = brownStoreSellingPriceExpr();
 
 function parseMoney(value) {
   if (value == null || String(value).trim() === "") return null;
@@ -763,18 +743,35 @@ export async function upsertProducts(items, syncedAt) {
     mappedItems.push(mapped);
   }
 
-  const ops = mappedItems.map((mapped) => ({
-    updateOne: {
-      filter: { ibsherId: mapped.ibsherId },
-      update: {
-        $set: mapped,
-        $setOnInsert: {
-          overrides: emptyOverrides(),
-        },
+  const existing = await Product.find({
+    ibsherId: { $in: mappedItems.map((item) => item.ibsherId) },
+  })
+    .select("ibsherId discountPrice ibsherDiscountPrice overrides.discountPrice")
+    .lean();
+  const previous = new Map(existing.map((doc) => [doc.ibsherId, doc]));
+
+  const ops = mappedItems.map((mapped) => {
+    const prior = previous.get(mapped.ibsherId);
+    const $set = { ...mapped };
+    const manualDiscount = prior?.overrides?.discountPrice;
+    const clearImportedDiscount = matchesImportedDiscount(manualDiscount, [
+      mapped.ibsherDiscountPrice,
+      prior?.discountPrice,
+      prior?.ibsherDiscountPrice,
+    ]);
+    if (clearImportedDiscount) $set["overrides.discountPrice"] = null;
+    const update = { $set };
+    if (!clearImportedDiscount) {
+      update.$setOnInsert = { overrides: emptyOverrides() };
+    }
+    return {
+      updateOne: {
+        filter: { ibsherId: mapped.ibsherId },
+        update,
+        upsert: true,
       },
-      upsert: true,
-    },
-  }));
+    };
+  });
 
   let inserted = 0;
   let updated = 0;

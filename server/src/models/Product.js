@@ -10,6 +10,7 @@ const productSchema = new mongoose.Schema(
     itemCode: { type: String, default: "", index: true },
     price: { type: Number, default: 0 },
     discountPrice: { type: Number, default: 0 },
+    ibsherDiscountPrice: { type: Number, default: 0 },
     variants: { type: Array, default: [] },
     category: { type: mongoose.Schema.Types.Mixed },
     subCategory: { type: mongoose.Schema.Types.Mixed },

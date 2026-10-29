@@ -14,6 +14,23 @@ export async function buildElryanPricingView(productDoc, { commissionRules } = {
   const preview = partnerPricePreview(productDoc, rules);
   const rule = winningCommission(productDoc, rules);
   const rate = resolveCommissionRate(productDoc, rules);
+  if (resolved?.priceReview || preview.priceReview) {
+    return {
+      storeSellingPrice: null,
+      commissionRate: rate,
+      commission: preview.commission,
+      winningScope: rule?.scope || null,
+      rawPrice: null,
+      platformPrice: null,
+      proposedElryanPrice: null,
+      proposedElryanCost: null,
+      priceReview: true,
+      priceReviewReason: resolved?.priceReviewReason || preview.priceReviewReason || "missing_regular_price",
+      pricingStatus: ELRYAN_READINESS.PRICING_UNVERIFIED,
+      pricingNote: "The original IBSHER regular price is missing or ambiguous, so no Elryan price is proposed.",
+      elryanCommissionInvestigation: null,
+    };
+  }
   const platformPrice = applyCommissionRate(resolved?.sellingPrice, rate);
 
   return {
@@ -27,6 +44,8 @@ export async function buildElryanPricingView(productDoc, { commissionRules } = {
     proposedElryanPrice: platformPrice > 0 ? platformPrice : null,
     /** Intentionally null — do not fabricate vendor net / cost. */
     proposedElryanCost: null,
+    priceReview: false,
+    priceReviewReason: "",
     pricingStatus: ELRYAN_READINESS.PRICING_UNVERIFIED,
     pricingNote:
       "BrownStore platform price is proposed as Elryan `price`. Elryan `cost` / marketplace commission relationship is not confirmed; cost is omitted and readiness stays PRICING_UNVERIFIED.",
