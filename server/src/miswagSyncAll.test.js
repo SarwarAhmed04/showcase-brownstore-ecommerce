@@ -591,6 +591,40 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
     assert.equal(stopped.job.status, "stopped");
   });
 
+  it("lets the admin start full sync without a stored full preview", () => {
+    const ui = fs.readFileSync(
+      path.join(__dirname, "../../client/src/components/admin/platform/MiswagSyncAll.jsx"),
+      "utf8"
+    );
+    assert.equal(ui.includes("fullPreview"), false);
+    assert.equal(ui.includes("setFullPreview"), false);
+    assert.match(ui, /if \(!preview\?\.dryRun \|\| !job\?\.id\) return "";/);
+    assert.match(ui, /if \(\(job\.strategy \|\| preview\.strategy\) !== "changed"\) return "";/);
+    assert.match(ui, /window\.confirm\(t\.miswagStartSyncConfirm\)/);
+    assert.match(ui, /api\.miswagSyncAllStart\(true, "full"\)/);
+    assert.match(ui, /!changedPreviewJobId/);
+    assert.match(ui, /api\.miswagSyncAllStart\(true, "changed", changedPreviewJobId\)/);
+    assert.equal(ui.includes("useEffect(() => {\n    run("), false);
+
+    const api = fs.readFileSync(path.join(__dirname, "../../client/src/api.js"), "utf8");
+    assert.match(api, /if \(normalized === "changed"\) body\.previewJobId/);
+
+    const service = fs.readFileSync(path.join(__dirname, "services/miswagSyncAll.js"), "utf8");
+    const batch = service.slice(
+      service.indexOf("async function processSyncBatch"),
+      service.indexOf("async function runJobLoop")
+    );
+    assert.match(batch, /evaluateOneProduct\(doc, context\)/);
+    assert.match(batch, /result\.status === "INACTIVE"/);
+    assert.match(batch, /result\.status !== "READY"/);
+    const readySend = batch.indexOf('if (result.status !== "READY")');
+    const sendCall = batch.indexOf("sendWithRetry(result.payload)");
+    assert.ok(readySend > 0 && sendCall > readySend);
+    const start = service.slice(service.indexOf("export async function startMiswagSyncAll"));
+    assert.match(start, /if \(requested === "changed"\) await assertCompletedChangedPreview\(previewJobId\)/);
+    assert.equal(start.includes('requested === "full" && '), false);
+  });
+
   it("does not restore Category Mapping or Customized Price architecture", () => {
     assert.equal(fs.existsSync(path.join(__dirname, "models/PlatformCategoryMapping.js")), false);
     assert.equal(fs.existsSync(path.join(__dirname, "services/platformCategoryMapping.js")), false);

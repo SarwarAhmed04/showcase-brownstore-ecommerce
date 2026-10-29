@@ -28,7 +28,6 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
   const [connected, setConnected] = useState(syncEnabledProp === true);
   const [job, setJob] = useState(null);
   const [preview, setPreview] = useState(null);
-  const [fullPreview, setFullPreview] = useState(null);
   const [changedPreview, setChangedPreview] = useState(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -75,7 +74,6 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
       if (data.dryRun) {
         setPreview(data);
         if (data.strategy === "changed" || data.job?.strategy === "changed") setChangedPreview(data);
-        else setFullPreview(data);
       }
       setMessage(data.message || t.miswagSyncAllUpdated);
     } catch (err) {
@@ -136,11 +134,9 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
             </button>
             <button
               type="button"
-              disabled={Boolean(busy) || !fullPreview?.dryRun}
+              disabled={Boolean(busy)}
               className={BUTTON}
-              title={!fullPreview?.dryRun ? t.miswagRunFullPreview : undefined}
               onClick={() => {
-                if (!fullPreview?.dryRun) return;
                 if (!window.confirm(t.miswagStartSyncConfirm)) return;
                 run(() => api.miswagSyncAllStart(true, "full"), "full-start");
               }}

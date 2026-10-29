@@ -742,7 +742,7 @@ export const translations = {
     miswagBarcodeSource: "سەرچاوە",
     miswagSyncAllTitle: "هاوکاتکردنی هەموو بەرهەمەکان",
     miswagSyncAllHint:
-      "پێش ناردن Preview بکە. بەرھەمەکان بە دەستە دەنێردرێن؛ یەک بەرهەمی خراپ کاتالۆگەکە ناوەستێنێت.",
+      "هاوکاتکردنی تەواو دوای دڵنیابوونەوە بەرهەمە شایستەکان دەنێرێت بۆ میسواگ. هاوکاتکردنی گۆڕاوەکان هێشتا پێویستی بە پێشبینی تەواو هەیە. بەرهەمەکان بە دەستە دەنێردرێن؛ یەک بەرهەمی خراپ کاتالۆگەکە ناوەستێنێت.",
     miswagRunSyncPreview: "پێشبینینی هاوکاتکردن",
     miswagStartSync: "دەستپێکردنی هاوکاتکردن",
     miswagFullSyncTitle: "هاوکاتکردنی تەواو",
@@ -1748,7 +1748,7 @@ export const translations = {
     miswagBarcodeSource: "Source",
     miswagSyncAllTitle: "Sync All Products",
     miswagSyncAllHint:
-      "Run a dry-run preview first. Products are sent in small batches; one bad product will not stop the catalog.",
+      "Full Sync sends eligible products to Miswag after you confirm. Changed Sync still requires a completed preview. Products are sent in small batches; one bad product will not stop the catalog.",
     miswagRunSyncPreview: "Run Sync Preview",
     miswagStartSync: "Start Sync",
     miswagFullSyncTitle: "Full sync",
@@ -2732,7 +2732,7 @@ export const translations = {
     miswagBarcodeSource: "المصدر",
     miswagSyncAllTitle: "مزامنة كل المنتجات",
     miswagSyncAllHint:
-      "شغّل المعاينة أولاً. تُرسل المنتجات على دفعات صغيرة؛ منتج واحد فاشل لا يوقف الكتالوج.",
+      "المزامنة الكاملة ترسل المنتجات المؤهلة إلى مسواگ بعد التأكيد. مزامنة المتغيّر ما زالت تتطلب معاينة مكتملة. تُرسل المنتجات على دفعات صغيرة؛ منتج واحد فاشل لا يوقف الكتالوج.",
     miswagRunSyncPreview: "معاينة المزامنة",
     miswagStartSync: "بدء المزامنة",
     miswagFullSyncTitle: "مزامنة كاملة",
