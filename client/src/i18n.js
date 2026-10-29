@@ -788,7 +788,7 @@ export const translations = {
       "براندی براون ستۆر بە ناسنامەی براندی میسواگ ببەستەوە. نەخشەی دەستی هەمیشە لە ئۆتۆماتیکی بەهێزترە.",
     miswagColorMapping: "نەخشەکردنی ڕەنگ",
     miswagColorMappingHint:
-      "ناوی ئینگلیزی ڕەنگ ببەستە بە HEX. هیچ APIی کاتالۆگی ڕەنگی میسواگ نییە — HEXی بەرهەم، ناوی پشتڕاستکراو، یان HEXی دەستی.",
+      "ناوی ڕەنگی براون ستۆر وەک خۆی دەمێنێتەوە. ڕەنگە پشتڕاستکراوەکان وەک ڕەش، سپی، سوور، شین و سەوز HEXیان ئۆتۆماتیکی وەردەگرن. ناوەکانی تر، وەک Black + White، پێویستیان بە یەک HEXی دەستی هەیە. نەخشەی دەستی هەمیشە لە ئۆتۆماتیکی بەهێزترە.",
     miswagMappingManual: "دەستی",
     miswagMappingAuto: "ئۆتۆماتیکی",
     miswagMappingNeedsReview: "پێویستی بە پێداچوونەوە",
@@ -1795,7 +1795,7 @@ export const translations = {
       "Match BrownStore brands to Miswag brand ids. Manual mappings always win over automatic exact-name matches.",
     miswagColorMapping: "Color Mapping",
     miswagColorMappingHint:
-      "Map English BrownStore color names to HEX values for Miswag payloads. There is no Miswag color directory API — use product HEX, verified names, or a manual HEX.",
+      "Original BrownStore color names are kept. Verified colors such as Black, White, Red, Blue, and Green get a HEX automatically. Other names, including Black + White, need one manual HEX. Manual mappings override automatic matches.",
     miswagMappingManual: "Manual",
     miswagMappingAuto: "Auto",
     miswagMappingNeedsReview: "Needs review",
@@ -2779,7 +2779,7 @@ export const translations = {
       "اربط علامات براون ستور بمعرفات مسواگ. التعيين اليدوي يتفوق دائماً على المطابقة التلقائية.",
     miswagColorMapping: "تعيين الألوان",
     miswagColorMappingHint:
-      "اربط أسماء الألوان الإنجليزية بقيم HEX. لا توجد واجهة كتالوج ألوان لمسواگ — استخدم HEX المنتج أو الأسماء الموثقة أو HEX يدوياً.",
+      "يُحفظ اسم لون براون ستور كما هو. الألوان الموثقة مثل الأسود والأبيض والأحمر والأزرق والأخضر تحصل على HEX تلقائياً. الأسماء الأخرى، بما فيها Black + White، تحتاج قيمة HEX يدوية واحدة. التعيين اليدوي يتفوق دائماً على المطابقة التلقائية.",
     miswagMappingManual: "يدوي",
     miswagMappingAuto: "تلقائي",
     miswagMappingNeedsReview: "يحتاج مراجعة",

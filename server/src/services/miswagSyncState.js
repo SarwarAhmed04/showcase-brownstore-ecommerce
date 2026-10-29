@@ -47,6 +47,8 @@ export async function saveMiswagAcceptedPayload({
   httpStatus = 0,
   miswagProductId = "",
 } = {}) {
+  const status = Number(httpStatus);
+  if (!Number.isInteger(status) || status < 200 || status > 202) return null;
   const id = String(externalId || payload?.external_id || "").trim();
   if (!id || !payload || typeof payload !== "object") return null;
   const lastPayloadHash = miswagPayloadHash(payload);

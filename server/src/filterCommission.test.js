@@ -26,7 +26,6 @@ import {
   applyCommissionRate,
   commissionMatchFilter,
   filterCommissionOptions,
-  FILTER_BRAND_BEFORE_CATEGORY_MESSAGE,
   FILTER_COLLECTION_MESSAGE,
   FILTER_REQUIRED_MESSAGE,
   filterCommissionTargetId,
@@ -214,7 +213,7 @@ describe("filter commission rules", () => {
     assert.equal(filterIdsError({}), FILTER_REQUIRED_MESSAGE);
     assert.equal(filterIdsError({ vendorId: ID.v1 }), "");
     assert.equal(filterIdsError({ vendorId: ID.v1, brandId: ID.zilan }), "");
-    assert.equal(filterIdsError({ vendorId: ID.v1, categoryId: ID.home }), FILTER_BRAND_BEFORE_CATEGORY_MESSAGE);
+    assert.equal(filterIdsError({ vendorId: ID.v1, categoryId: ID.home }), "");
     assert.equal(filterIdsError({ ...broad, collectionId: ID.fridge }), FILTER_COLLECTION_MESSAGE);
     assert.equal(filterIdsError(broad), "");
     assert.equal(filterIdsError(PATH), "");
@@ -224,7 +223,7 @@ describe("filter commission rules", () => {
     assert.equal(filterSelectionComplete({ ...PATH, vendorId: "  " }), false);
     assert.equal(filterSelectionComplete({ vendorId: ID.v1 }), true);
     assert.equal(filterSelectionComplete({ vendorId: ID.v1, brandId: ID.zilan }), true);
-    assert.equal(filterSelectionComplete({ vendorId: ID.v1, categoryId: ID.home }), false);
+    assert.equal(filterSelectionComplete({ vendorId: ID.v1, categoryId: ID.home }), true);
     assert.equal(filterSelectionIssue({ ...broad, collectionId: ID.fridge }), "collection");
     assert.equal(filterSelectionIssue({ vendorId: ID.v1 }), "");
     assert.equal(filterSelectionIssue({}), "required");
@@ -252,7 +251,32 @@ describe("filter commission rules", () => {
     assert.equal(resolveCommissionRate(makeProduct({ vendorId: ID.v2 }), [allBrands]), 0);
     assert.equal(resolveCommissionRate(makeProduct(), [allBrands, amd]), 15);
     assert.equal(resolveCommissionRate(makeProduct({ brandId: ID.other }), [allBrands, amd]), 10);
-    assert.equal(filterFieldsEnabled({ vendorId: ID.v1, brandId: "" }).category, false);
+    assert.equal(filterFieldsEnabled({ vendorId: ID.v1, brandId: "" }).category, true);
+  });
+
+  it("applies All brands plus a category to every brand in that category", () => {
+    const allBrandsCategory = {
+      scope: "filter",
+      vendorId: ID.v1,
+      categoryId: ID.home,
+      percentage: 10,
+      isActive: true,
+    };
+    const amd = { scope: "filter", vendorId: ID.v1, brandId: ID.zilan, percentage: 15, isActive: true };
+    const amdHome = {
+      scope: "filter",
+      vendorId: ID.v1,
+      brandId: ID.zilan,
+      categoryId: ID.home,
+      percentage: 20,
+      isActive: true,
+    };
+    assert.equal(resolveCommissionRate(makeProduct(), [allBrandsCategory]), 10);
+    assert.equal(resolveCommissionRate(makeProduct({ brandId: ID.other }), [allBrandsCategory]), 10);
+    assert.equal(resolveCommissionRate(makeProduct({ categoryId: ID.electronics }), [allBrandsCategory]), 0);
+    assert.equal(resolveCommissionRate(makeProduct(), [allBrandsCategory, amd]), 10);
+    assert.equal(resolveCommissionRate(makeProduct(), [allBrandsCategory, amdHome]), 20);
+    assert.equal(resolveCommissionRate(makeProduct({ brandId: ID.other }), [allBrandsCategory, amdHome]), 10);
   });
 
   it("clears every child when a parent filter changes", () => {
@@ -311,6 +335,11 @@ describe("filter commission rules", () => {
       filterFieldsEnabled({ ...emptyFilterSelection(), vendorId: ID.v1, brandId: ID.zilan }).category,
       true
     );
+    assert.equal(filterFieldsEnabled({ vendorId: ID.v1 }).category, true);
+    assert.equal(
+      filterFieldsEnabled({ vendorId: ID.v1, categoryId: ID.home }).subCategory,
+      true
+    );
     assert.equal(filterFieldsEnabled({ ...PATH, collectionId: "" }).collection, true);
     assert.equal(filterFieldsEnabled({ ...PATH, subCategoryId: "" }).collection, false);
     assert.deepEqual(filterPreviewParams({ ...PATH, collectionId: "", subCategoryId: "" }), {
@@ -332,7 +361,14 @@ describe("filter commission rules", () => {
       collection: ID.fridge,
     });
     assert.deepEqual(filterOptionsQueryForChange(PATH, "subCategoryId")?.subCategoryId, ID.kitchen);
-    assert.equal(filterOptionsQueryForChange({ ...PATH, brandId: "" }, "brandId"), null);
+    assert.deepEqual(filterOptionsQueryForChange({ ...PATH, brandId: "" }, "brandId"), {
+      vendorId: ID.v1,
+      level: "categories",
+    });
+    assert.deepEqual(filterOptionsQueryForChange({ vendorId: ID.v1, categoryId: ID.home }, "categoryId"), {
+      vendorId: ID.v1,
+      categoryId: ID.home,
+    });
     const pinned = ensureOption([], ID.zilan, NAME.zilan);
     assert.equal(pinned[0].id, ID.zilan);
     assert.equal(ensureOption(pinned, ID.zilan, NAME.zilan).length, 1);
@@ -627,6 +663,8 @@ describe("filter commission rules", () => {
     assert.match(ui, /applyFilterChange/);
     assert.match(ui, /filterSelectionIssue/);
     assert.match(ui, /filterEnabled\.brand \? t\.allBrands : t\.selectBrand/);
+    assert.match(ui, /filterEnabled\.category \? t\.allCategories : t\.selectCategory/);
+    assert.match(commission, /en: "All categories"/);
     assert.match(ui, /part\.key === "brand"\) return t\.allBrands/);
     assert.match(ui, /allSubCategories/);
     assert.match(ui, /allCollections/);
@@ -915,16 +953,17 @@ describe("filter commission catalog", { concurrency: 1, timeout: 180000 }, () =>
     assert.equal(vendorBrandSaved.categoryId, null);
     await vendorBrandSaved.deleteOne();
 
-    await assert.rejects(
-      () =>
-        saveFilterCommission({
-          partner: "miswag",
-          vendorId: ID.v1,
-          categoryId: ID.home,
-          percentage: 10,
-        }),
-      (err) => err.message === FILTER_BRAND_BEFORE_CATEGORY_MESSAGE
-    );
+    const allBrandsCategory = await saveFilterCommission({
+      partner: "miswag",
+      vendorId: ID.v1,
+      categoryId: ID.home,
+      percentage: 10,
+    });
+    assert.equal(allBrandsCategory.brandId, null);
+    assert.equal(allBrandsCategory.categoryId, ID.home);
+    assert.equal(allBrandsCategory.filterPath.brand.en, "All brands");
+    assert.equal(allBrandsCategory.filterPath.category.en, "Home Appliances");
+    await allBrandsCategory.deleteOne();
     await assert.rejects(
       () =>
         saveFilterCommission({
@@ -1007,6 +1046,13 @@ describe("filter commission catalog", { concurrency: 1, timeout: 180000 }, () =>
     assert.equal(v2Brands.get(ID.zilan).products, 2);
     assert.equal(v2Brands.get(ID.solo).products, 1);
     assert.equal(v2Brands.has(ID.other), false);
+
+    const allBrandCategories = byId(
+      (await filterCommissionOptions({ vendorId: ID.v1, level: "categories" })).categories
+    );
+    assert.equal(allBrandCategories.get(ID.home).products, 5);
+    assert.equal(allBrandCategories.get(ID.electronics).products, 1);
+    assert.equal(allBrandCategories.get(ID.garden).products, 1);
 
     const zilanCategories = byId(
       (await filterCommissionOptions({ vendorId: ID.v1, brandId: ID.zilan })).categories

@@ -41,7 +41,7 @@ const ALL_BRANDS_NAME = {
 
 const ALL_CATEGORIES_NAME = {
   ku: "هەموو پۆلەکان",
-  en: "All Categories",
+  en: "All categories",
   ar: "كل الأقسام",
 };
 
@@ -292,7 +292,15 @@ function productIdMatch(path, id) {
   return choices.length === 1 ? choices[0] : { $or: choices };
 }
 
-function filterOptionLevel(ids) {
+function filterOptionLevel(ids, requested = "") {
+  if (
+    requested === "categories" &&
+    ids.vendorId &&
+    !ids.categoryId &&
+    !ids.subCategoryId
+  ) {
+    return "categories";
+  }
   if (ids.subCategoryId) return "collections";
   if (ids.categoryId) return "subcategories";
   if (ids.brandId) return "categories";
@@ -309,14 +317,17 @@ export async function filterCommissionOptions(query = {}) {
   if (brandId && !vendorId) {
     throw new CommissionInputError("Select a vendor before a brand.");
   }
-  if (categoryId && (!vendorId || !brandId)) {
-    throw new CommissionInputError("Select a vendor and brand before a category.");
+  if ((categoryId || String(query.level || "") === "categories") && !vendorId) {
+    throw new CommissionInputError("Select a vendor before a category.");
   }
-  if (subCategoryId && (!vendorId || !brandId || !categoryId)) {
-    throw new CommissionInputError("Select a vendor, brand, and category before a sub-category.");
+  if (subCategoryId && (!vendorId || !categoryId)) {
+    throw new CommissionInputError("Select a category before a sub-category.");
   }
 
-  const level = filterOptionLevel({ vendorId, brandId, categoryId, subCategoryId });
+  const level = filterOptionLevel(
+    { vendorId, brandId, categoryId, subCategoryId },
+    String(query.level || "")
+  );
   if (level === "vendors") {
     return { level, vendors: await catalogGroups("vendor") };
   }
@@ -495,7 +506,10 @@ function filterRuleScore(rule, productIds) {
   if (ids.categoryId && !sameId(ids.categoryId, productIds.categoryId)) return 0;
   if (ids.subCategoryId && !sameId(ids.subCategoryId, productIds.subCategoryId)) return 0;
   if (ids.collectionId && !sameId(ids.collectionId, productIds.collectionId)) return 0;
-  return filterSpecificity(ids);
+  const depth = filterSpecificity(ids);
+  if (!depth) return 0;
+  // Same depth with a chosen brand is narrower than All brands.
+  return depth * 2 + (ids.brandId ? 1 : 0);
 }
 
 export function winningCommission(product, rules) {

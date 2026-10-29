@@ -266,6 +266,57 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
     assert.equal(sample?.reason, "Miswag category mapping missing");
   });
 
+  it("counts missing variation color on full and changed previews without sending", async () => {
+    await markConnected();
+    await Product.create(
+      sampleProduct("needs-hex", {
+        variants: [
+          {
+            _id: "var-needs-hex",
+            color: { name: { en: "Space Gray" }, hex: "#000000" },
+            images: [{ url: "/media/sample.jpg", isMain: true }],
+            sizes: [{ _id: "size-needs-hex", size: "One Size", stockQuantity: 3 }],
+          },
+        ],
+      })
+    );
+    await mapDefaultCollection();
+    let createCalls = 0;
+    setMiswagFetch(async (url, options) => {
+      const method = String(options?.method || "GET").toUpperCase();
+      if (method === "HEAD") return mockResponse(200, "");
+      if (String(url).includes("/v1/brands/search")) {
+        return mockResponse(200, { data: { content: [{ id: 42, name: "Philips", alias: "philips" }] } });
+      }
+      if (method === "POST" && String(url).includes("/v1/items/bulk-create")) {
+        createCalls += 1;
+        return mockResponse(201, { data: { item_id: "should-not-send" } });
+      }
+      return mockResponse(404, {});
+    });
+
+    for (const strategy of ["full", "changed"]) {
+      const preview = await runMiswagSyncPreview({ strategy });
+      assert.equal(preview.dryRun, true);
+      assert.equal(preview.sentToMiswag, 0);
+      assert.equal(preview.job.ready, 0);
+      assert.equal(preview.job.missingColor, 1);
+    }
+    assert.equal(createCalls, 0);
+
+    const doc = await Product.findOne({ ibsherId: "ibs-needs-hex" });
+    const cache = createBrandResolverCache();
+    cache.set(normalizeBrandKey("Philips"), { ok: true, brand: { id: 42, name: "Philips" } });
+    const blocked = await evaluateMiswagProductForSync(doc, {
+      rules: await Commission.find({ partner: "miswag" }).lean(),
+      mappingByCollection: mappingMap(),
+      brandCache: cache,
+    });
+    assert.notEqual(blocked.status, "READY");
+    assert.equal(blocked.code, "missing_color_value");
+    assert.equal(blocked.reason, "Missing variation color");
+  });
+
   it("keeps stable external_id and shared rounded price", async () => {
     const doc = await Product.create(sampleProduct("price-1"));
     const rules = await Commission.find({ partner: "miswag" }).lean();
@@ -345,6 +396,7 @@ describe("Miswag Sync All Products", { concurrency: 1 }, () => {
     });
     assert.equal(ok.status, "READY");
     assert.equal(ok.categoryId, "L4-100");
+    assert.deepEqual(ok.payload.variations[0].color, { name: "Black", value: "#000000" });
 
     const missing = await Product.create(
       sampleProduct("brand-2", { brand: { _id: "b2", name: { en: "UnknownBrandXYZ" } } })

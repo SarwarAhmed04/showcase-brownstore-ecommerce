@@ -46,8 +46,8 @@ import {
   emptyFilterSelection,
   ensureOption,
   filterFieldsEnabled,
+  filterOptionQueriesForChange,
   filterOptionsLevel,
-  filterOptionsQueryForChange,
   filterPathParts,
   filterPreviewParams,
   filterSelectionIssue,
@@ -96,6 +96,7 @@ function filterPartText(part, t, lang) {
   const stored = tName(part.name, lang);
   if (stored) return stored;
   if (!part.id && part.key === "brand") return t.allBrands;
+  if (!part.id && part.key === "category") return t.allCategories;
   if (!part.id && part.key === "subCategory") return t.allSubCategories;
   if (!part.id && part.key === "collection") return t.allCollections;
   return part.id;
@@ -1347,11 +1348,15 @@ function PartnerCommission({ partnerSlug, t, lang }) {
     setSubCategoryId(next.subCategoryId);
     setCollectionId(next.collectionId);
     setFilterOptions((options) => clearChildOptions(options, field));
-    const query = filterOptionsQueryForChange(next, field);
-    const fetchLevel = query ? filterOptionsLevel(query) : "";
-    invalidateOptionLevels(staleOptionLevels(field, fetchLevel));
+    const queries = filterOptionQueriesForChange(next, field);
+    invalidateOptionLevels(
+      staleOptionLevels(
+        field,
+        queries.map((query) => filterOptionsLevel(query))
+      )
+    );
     setError("");
-    if (query) void loadFilterLevel(query);
+    for (const query of queries) void loadFilterLevel(query);
   }
 
   async function restoreFilterRule(rule) {
@@ -1379,26 +1384,24 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         selection.vendorId
           ? api.commissionFilterOptions({ vendorId: selection.vendorId })
           : Promise.resolve({ brands: [] }),
-        selection.vendorId && selection.brandId
-          ? api.commissionFilterOptions({
-              vendorId: selection.vendorId,
-              brandId: selection.brandId,
-            })
+        selection.vendorId
+          ? api.commissionFilterOptions(
+              selection.brandId
+                ? { vendorId: selection.vendorId, brandId: selection.brandId }
+                : { vendorId: selection.vendorId, level: "categories" }
+            )
           : Promise.resolve({ categories: [] }),
-        selection.vendorId && selection.brandId && selection.categoryId
+        selection.vendorId && selection.categoryId
           ? api.commissionFilterOptions({
               vendorId: selection.vendorId,
-              brandId: selection.brandId,
+              ...(selection.brandId ? { brandId: selection.brandId } : {}),
               categoryId: selection.categoryId,
             })
           : Promise.resolve({ subcategories: [] }),
-        selection.vendorId &&
-        selection.brandId &&
-        selection.categoryId &&
-        selection.subCategoryId
+        selection.vendorId && selection.categoryId && selection.subCategoryId
           ? api.commissionFilterOptions({
               vendorId: selection.vendorId,
-              brandId: selection.brandId,
+              ...(selection.brandId ? { brandId: selection.brandId } : {}),
               categoryId: selection.categoryId,
               subCategoryId: selection.subCategoryId,
             })
@@ -2210,7 +2213,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                   label={t.category}
                   value={categoryId}
                   disabled={filterRestoring || !filterEnabled.category}
-                  placeholder={t.selectCategory}
+                  placeholder={filterEnabled.category ? t.allCategories : t.selectCategory}
                   lang={lang}
                   options={ensureOption(filterOptions.categories, categoryId, filterLabels?.category)}
                   onChange={(value) => onFilterField("categoryId", value)}

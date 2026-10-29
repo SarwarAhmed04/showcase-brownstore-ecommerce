@@ -492,6 +492,22 @@ export const api = {
     request(`/api/admin/platforms/miswag/mapping-brands/${encodeURIComponent(brownKey)}`, {
       method: "DELETE",
     }),
+  miswagMappingColors: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.fromEntries(Object.entries(params).filter(([, v]) => v !== "" && v != null))
+    );
+    const suffix = qs.toString();
+    return request(`/api/admin/platforms/miswag/mapping-colors${suffix ? `?${suffix}` : ""}`);
+  },
+  saveMiswagMappingColor: (brownKey, body) =>
+    request(`/api/admin/platforms/miswag/mapping-colors/${encodeURIComponent(brownKey)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  resetMiswagMappingColor: (brownKey) =>
+    request(`/api/admin/platforms/miswag/mapping-colors/${encodeURIComponent(brownKey)}`, {
+      method: "DELETE",
+    }),
   miswagFindBrands: (q = "", limit = 20) => {
     const qs = new URLSearchParams({ q, limit: String(limit) });
     return request(`/api/admin/platforms/miswag/sync-one/brands?${qs}`);

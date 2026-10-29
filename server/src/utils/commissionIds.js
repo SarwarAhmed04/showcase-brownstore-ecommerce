@@ -15,8 +15,7 @@ export const FILTER_REQUIRED_MESSAGE = "Select a vendor.";
 
 export const FILTER_BRAND_BEFORE_CATEGORY_MESSAGE = "Select a brand before a category.";
 
-export const FILTER_CATEGORY_BEFORE_SUB_MESSAGE =
-  "Select a brand and category before a sub-category.";
+export const FILTER_CATEGORY_BEFORE_SUB_MESSAGE = "Select a category before a sub-category.";
 
 export const FILTER_COLLECTION_MESSAGE = "Select a sub-category before a collection.";
 
@@ -56,8 +55,7 @@ export function readFilterIds(input) {
 export function filterIdsError(input) {
   const ids = readFilterIds(input);
   if (!ids.vendorId) return FILTER_REQUIRED_MESSAGE;
-  if (ids.categoryId && !ids.brandId) return FILTER_BRAND_BEFORE_CATEGORY_MESSAGE;
-  if (ids.subCategoryId && (!ids.brandId || !ids.categoryId)) return FILTER_CATEGORY_BEFORE_SUB_MESSAGE;
+  if (ids.subCategoryId && !ids.categoryId) return FILTER_CATEGORY_BEFORE_SUB_MESSAGE;
   if (ids.collectionId && !ids.subCategoryId) return FILTER_COLLECTION_MESSAGE;
   return "";
 }

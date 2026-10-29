@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../../api";
 import { formatCount, StatusBadge } from "./platformUi";
 import MiswagBrandMapping from "./MiswagBrandMapping";
+import MiswagColorMapping from "./MiswagColorMapping";
 
 function label(name, lang) {
   if (!name) return "";
@@ -162,6 +163,7 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
         {[
           ["categories", t.miswagCategoryMappingTab || "Category Mapping"],
           ["brands", t.miswagBrandMappingTab || "Brand Mapping"],
+          ["colors", t.miswagColorMappingTab || "Color Mapping"],
         ].map(([id, text]) => (
           <button
             key={id}
@@ -177,6 +179,7 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
       </div>
 
       {tab === "brands" ? <MiswagBrandMapping t={t} /> : null}
+      {tab === "colors" ? <MiswagColorMapping t={t} /> : null}
 
       {tab === "categories" && noticeCount > 0 ? (
         <section className="rounded-3xl bg-amber-50 p-5 text-amber-950 ring-1 ring-amber-200">

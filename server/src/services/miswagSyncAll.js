@@ -26,7 +26,7 @@ import {
   buildMiswagTestPayload,
   miswagItemExternalId,
 } from "./miswagTestProduct.js";
-import { loadMiswagBrandMappingMap } from "./miswagValueMapping.js";
+import { loadMiswagBrandMappingMap, loadMiswagColorMappingMap } from "./miswagValueMapping.js";
 
 /** Prior Miswag seller client processed docs in batches of 15 (one API call per item). */
 export const MISWAG_SYNC_BATCH_SIZE = 15;
@@ -41,9 +41,8 @@ function reasonFromErrors(errors = []) {
   if (errors.includes("missing_name")) return "Missing English product name";
   if (errors.includes("missing_arabic_description")) return "Missing Arabic description";
   if (errors.includes("missing_arabic_name_for_highlight")) return "Missing Arabic name";
-  if (errors.includes("missing_color_name") || errors.includes("missing_color_value")) {
-    return "Missing variation color name";
-  }
+  if (errors.includes("missing_color_value")) return "Missing variation color";
+  if (errors.includes("missing_color_name")) return "Missing variation color name";
   if (errors.includes("missing_variations")) return "Missing variations";
   if (errors.includes("inactive")) return "Product is inactive";
   return errors[0] ? String(errors[0]) : "Missing required product data";
@@ -230,6 +229,7 @@ async function evaluateOneProduct(doc, context) {
     brandName: brand.brand.name,
     isLarge: category.category.isLarge === true,
     barcodeAssignments,
+    colorMap: context.colorMap || null,
   });
 
   if (!built.ok) {
@@ -302,16 +302,18 @@ async function sendWithRetry(payload) {
 
 async function prepareContext() {
   await assertMiswagSyncAllowed();
-  const [rules, eligibility, mappingByCollection, brandMappingMap] = await Promise.all([
+  const [rules, eligibility, mappingByCollection, colorMap, brandMappingMap] = await Promise.all([
     Commission.find({ partner: "miswag", isActive: { $ne: false } }).lean(),
     loadEligibilityContext("miswag"),
     loadMiswagCategoryMappingMap(),
+    loadMiswagColorMappingMap(),
     loadMiswagBrandMappingMap(),
   ]);
   return {
     rules,
     eligibility,
     mappingByCollection,
+    colorMap,
     brandMappingMap,
     brandCache: createBrandResolverCache(),
     mappingCount: mappingByCollection.size,
@@ -396,6 +398,8 @@ async function annotateChangeTypes(results) {
 }
 
 async function recordAcceptedPayload(result, sent) {
+  const httpStatus = Number(sent?.httpStatus) || 0;
+  if (!sent?.ok || !Number.isInteger(httpStatus) || httpStatus < 200 || httpStatus > 202) return "";
   const miswagProductId = String(sent.data?.item_id || sent.data?.id || result.externalId || "");
   await saveMiswagAcceptedPayload({
     productId: result.productId,
@@ -842,11 +846,13 @@ export async function evaluateMiswagProductForSync(doc, overrides = {}) {
   if (!mappingByCollection) {
     mappingByCollection = await loadMiswagCategoryMappingMap();
   }
+  const colorMap = overrides.colorMap || (await loadMiswagColorMappingMap());
   const brandMappingMap = overrides.brandMappingMap || (await loadMiswagBrandMappingMap());
   const context = {
     rules: overrides.rules || [],
     eligibility: overrides.eligibility || { partnerActive: true, inactive: {}, taxonomyRequired: false },
     mappingByCollection,
+    colorMap,
     brandMappingMap,
     brandCache: overrides.brandCache || createBrandResolverCache(),
     stats: { categoryAttempted: 0, categoryResolved: 0, brandAttempted: 0, brandResolved: 0 },

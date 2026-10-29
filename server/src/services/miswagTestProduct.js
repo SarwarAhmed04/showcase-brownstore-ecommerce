@@ -20,13 +20,14 @@ import {
 import { ensureProductVariationBarcodes } from "./miswagTestBarcodes.js";
 import { saveMiswagAcceptedPayload } from "./miswagSyncState.js";
 import { resolveMiswagBrandForProduct, createBrandResolverCache } from "./miswagBrandResolve.js";
+import { isMiswagColorHex, readOriginalMiswagColorName } from "./miswagColorMap.js";
+import { loadMiswagColorMappingMap, resolveColorFromMaps } from "./miswagValueMapping.js";
 
 export const MISWAG_ITEM_CREATE_PATH = "/v1/items/bulk-create";
 export const MISWAG_CATEGORY_ID_RX = /^L[34]-\d+$/;
 const SUPPORTED_IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif"]);
 const PRINTABLE = /[^\x20-\x7E]/g;
 const HIGHLIGHT_MAX = 160;
-const HEX_ONLY = /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
 function mediaPublicOrigin() {
   return String(process.env.MEDIA_PUBLIC_ORIGIN || "").trim().replace(/\/$/, "");
@@ -57,42 +58,11 @@ function localized(value, order = ["en", "ar", "ku"]) {
 }
 
 /**
- * Read the original BrownStore variation color name as-is.
- * Prefer English text. Never invent names, never use HEX as a name,
- * and never split multi-color labels (e.g. "Black + White").
+ * Original BrownStore color name plus a verified or saved HEX.
+ * The name is never replaced, and multi-color labels are never split.
  */
-export function resolveMiswagColor(variant) {
-  const candidates = [];
-
-  function pushCandidate(value) {
-    if (value == null) return;
-    if (typeof value === "string" || typeof value === "number") {
-      const text = plainText(value);
-      if (!text || HEX_ONLY.test(text)) return;
-      candidates.push(text);
-      return;
-    }
-    if (typeof value !== "object") return;
-    // Prefer English first so multi-color English labels stay intact.
-    if (value.name && typeof value.name === "object") {
-      pushCandidate(value.name.en);
-      pushCandidate(value.name.ar);
-      pushCandidate(value.name.ku);
-    } else {
-      pushCandidate(value.name);
-    }
-    pushCandidate(value.en);
-    pushCandidate(value.label);
-    // Intentionally ignore hex / value / colorHex — those are not color names.
-  }
-
-  pushCandidate(variant?.color);
-  pushCandidate(variant?.colour);
-  pushCandidate(variant?.colorName);
-
-  const name = candidates.find((text) => text.length > 0) || "";
-  if (!name) return null;
-  return { name };
+export function resolveMiswagColor(variant, colorMap = null) {
+  return resolveColorFromMaps(variant, colorMap);
 }
 
 function publicImageUrl(url, origin) {
@@ -204,7 +174,7 @@ function reasonLabel(code) {
     missing_public_origin: "MEDIA_PUBLIC_ORIGIN is not set (needed for image URLs)",
     missing_variations: "Missing variants",
     missing_variant_id: "Missing variant id",
-    missing_color_value: "Missing variant color name",
+    missing_color_value: "Missing variation color value",
     missing_color_name: "Missing variant color name",
     missing_images: "Missing image",
     missing_sizes: "Missing variant sizes",
@@ -247,6 +217,7 @@ export function buildMiswagTestPayload(
     isLarge = false,
     origin = mediaPublicOrigin(),
     barcodeAssignments = null,
+    colorMap = null,
   } = {}
 ) {
   const resolved = toResolvedProduct(doc);
@@ -315,10 +286,11 @@ export function buildMiswagTestPayload(
       errors.push("invalid_external_id");
       continue;
     }
-    const color = resolveMiswagColor(variant);
-    if (!color || !String(color.name || "").trim()) {
-      errors.push("missing_color_name");
-    }
+    const colorName = readOriginalMiswagColorName(variant);
+    const color = resolveMiswagColor(variant, colorMap);
+    const colorReady = Boolean(color && color.name === colorName && isMiswagColorHex(color.value));
+    if (!colorName) errors.push("missing_color_name");
+    else if (!colorReady) errors.push("missing_color_value");
     const images = variationImages(variant.images, origin);
     if (!images.length) errors.push("missing_images");
     for (const image of images) {
@@ -372,7 +344,7 @@ export function buildMiswagTestPayload(
       barcode: barcode || "",
       barcodeSource: source,
       ...(code ? { merchant_code: printable(code, 100) } : {}),
-      color: color || undefined,
+      color: colorReady ? { name: color.name, value: color.value } : undefined,
       images,
       sizes,
     });
@@ -500,11 +472,12 @@ export async function previewMiswagTestProduct({
   const doc = await loadProductOrThrow(productId);
   const storePriceBefore = Number(toResolvedProduct(doc)?.sellingPrice) || 0;
 
-  const [rules, eligibilityContext, brand, mappingByCollection] = await Promise.all([
+  const [rules, eligibilityContext, brand, mappingByCollection, colorMap] = await Promise.all([
     Commission.find({ partner: "miswag", isActive: { $ne: false } }).lean(),
     loadEligibilityContext("miswag"),
     tryResolveBrandId(doc, brandId),
     loadMiswagCategoryMappingMap(),
+    loadMiswagColorMappingMap(),
   ]);
 
   const eligibility = evaluatePlatformEligibility(doc, eligibilityContext);
@@ -517,6 +490,7 @@ export async function previewMiswagTestProduct({
     brandName: brand.brandName,
     isLarge,
     barcodeAssignments,
+    colorMap,
   });
 
   const blockReasons = [];
@@ -667,7 +641,7 @@ export async function sendMiswagTestProduct({
     responseData?.item_id || responseData?.id || payload.external_id || ""
   );
 
-  if (ok) {
+  if (ok && httpStatus >= 200 && httpStatus <= 202) {
     await saveMiswagAcceptedPayload({
       productId: preview.product?.id || String(productId),
       ibsherId: preview.product?.ibsherId || "",

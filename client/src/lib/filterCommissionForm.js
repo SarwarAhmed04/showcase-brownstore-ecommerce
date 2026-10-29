@@ -57,18 +57,19 @@ export function clearChildOptions(options, field) {
 }
 
 export function staleOptionLevels(field, fetchLevel) {
-  return (CHILD_LEVELS[field] || []).filter((level) => level !== fetchLevel);
+  const keep = new Set(
+    Array.isArray(fetchLevel) ? fetchLevel.filter(Boolean) : fetchLevel ? [fetchLevel] : []
+  );
+  return (CHILD_LEVELS[field] || []).filter((level) => !keep.has(level));
 }
 
 export function filterSelectionIssue(selection) {
   const vendorId = String(selection?.vendorId || "").trim();
-  const brandId = String(selection?.brandId || "").trim();
   const categoryId = String(selection?.categoryId || "").trim();
   const subCategoryId = String(selection?.subCategoryId || "").trim();
   const collectionId = String(selection?.collectionId || "").trim();
   if (!vendorId) return "required";
-  if (categoryId && !brandId) return "brand";
-  if (subCategoryId && (!brandId || !categoryId)) return "category";
+  if (subCategoryId && !categoryId) return "category";
   if (collectionId && !subCategoryId) return "collection";
   return "";
 }
@@ -79,15 +80,14 @@ export function filterSelectionComplete(selection) {
 
 export function filterFieldsEnabled(selection) {
   const vendorId = String(selection?.vendorId || "");
-  const brandId = String(selection?.brandId || "");
   const categoryId = String(selection?.categoryId || "");
   const subCategoryId = String(selection?.subCategoryId || "");
   return {
     vendor: true,
     brand: Boolean(vendorId),
-    category: Boolean(vendorId && brandId),
-    subCategory: Boolean(vendorId && brandId && categoryId),
-    collection: Boolean(vendorId && brandId && categoryId && subCategoryId),
+    category: Boolean(vendorId),
+    subCategory: Boolean(vendorId && categoryId),
+    collection: Boolean(vendorId && categoryId && subCategoryId),
   };
 }
 
@@ -102,6 +102,14 @@ export function filterPreviewParams(selection) {
 }
 
 export function filterOptionsLevel(query) {
+  if (
+    query?.level === "categories" &&
+    query?.vendorId &&
+    !query?.categoryId &&
+    !query?.subCategoryId
+  ) {
+    return "categories";
+  }
   if (query?.subCategoryId) return "collections";
   if (query?.categoryId) return "subcategories";
   if (query?.brandId) return "categories";
@@ -115,16 +123,30 @@ export function filterOptionsQueryForChange(selection, field) {
   const categoryId = String(selection?.categoryId || "");
   const subCategoryId = String(selection?.subCategoryId || "");
   if (field === "vendorId") return vendorId ? { vendorId } : null;
-  if (field === "brandId") return vendorId && brandId ? { vendorId, brandId } : null;
+  if (field === "brandId") {
+    if (!vendorId) return null;
+    return brandId ? { vendorId, brandId } : { vendorId, level: "categories" };
+  }
   if (field === "categoryId") {
-    return vendorId && brandId && categoryId ? { vendorId, brandId, categoryId } : null;
+    if (!vendorId || !categoryId) return null;
+    return brandId ? { vendorId, brandId, categoryId } : { vendorId, categoryId };
   }
   if (field === "subCategoryId") {
-    return vendorId && brandId && categoryId && subCategoryId
+    if (!vendorId || !categoryId || !subCategoryId) return null;
+    return brandId
       ? { vendorId, brandId, categoryId, subCategoryId }
-      : null;
+      : { vendorId, categoryId, subCategoryId };
   }
   return null;
+}
+
+export function filterOptionQueriesForChange(selection, field) {
+  const query = filterOptionsQueryForChange(selection, field);
+  const queries = query ? [query] : [];
+  if (field === "vendorId" && String(selection?.vendorId || "")) {
+    queries.push({ vendorId: String(selection.vendorId), level: "categories" });
+  }
+  return queries;
 }
 
 export function selectionFromCommission(rule) {

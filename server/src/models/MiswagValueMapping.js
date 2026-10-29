@@ -1,10 +1,9 @@
 import mongoose from "mongoose";
 
 /**
- * Brand maps for Miswag only (isolated from Elryan/GINI).
- * kind "color" may still exist historically; color mapping is no longer used —
- * Miswag payloads send original BrownStore color names without HEX.
- * Manual brand rows are never overwritten by automatic matching.
+ * Brand and color maps for Miswag only (isolated from Elryan/GINI).
+ * Color rows store a verified HEX. The original BrownStore color name is never
+ * replaced by that HEX. Manual rows are never overwritten by automatic matching.
  */
 const miswagValueMappingSchema = new mongoose.Schema(
   {

@@ -10,6 +10,7 @@ import { MongoMemoryServer } from "mongodb-memory-server";
 import { adminRouter } from "./routes/admin.js";
 import { Commission } from "./models/Commission.js";
 import { MiswagConnection } from "./models/MiswagConnection.js";
+import { MiswagProductSyncState } from "./models/MiswagProductSyncState.js";
 import { Partner } from "./models/Partner.js";
 import { PlatformVisibilityRule } from "./models/PlatformVisibilityRule.js";
 import { Product } from "./models/Product.js";
@@ -246,6 +247,7 @@ describe("Miswag Sync 1 Product", { concurrency: 1 }, () => {
     });
     assert.equal(built.platformPrice, 1250);
     assert.equal(built.payload.price, 1250);
+    assert.deepEqual(built.payload.variations[0].color, { name: "Black", value: "#000000" });
 
     const after = await Product.findById(productId).lean();
     assert.equal(after.price, before.price);
@@ -268,6 +270,7 @@ describe("Miswag Sync 1 Product", { concurrency: 1 }, () => {
         assert.equal(body.price, 1250);
         assert.equal(body.currency, "IQD");
         assert.ok(Array.isArray(body.variations));
+        assert.deepEqual(body.variations[0].color, { name: "Black", value: "#000000" });
         assert.equal(JSON.stringify(options.headers || {}).includes("sk_prd_test_secret"), true);
         return mockResponse(201, { data: { item_id: "mw-created-1" } });
       }
@@ -322,6 +325,59 @@ describe("Miswag Sync 1 Product", { concurrency: 1 }, () => {
     assert.equal(sent.ok, true);
     assert.equal(sent.action, "UPDATE");
     assert.equal(sent.miswagProductId, "mw-existing-9");
+  });
+
+  it("previews one product with the original color and HEX and does not send", async () => {
+    await markConnected();
+    let posted = false;
+    setMiswagFetch(async (url, options) => {
+      const method = String(options?.method || "GET").toUpperCase();
+      if (method === "POST") {
+        posted = true;
+        return mockResponse(500, { message: "must not send" });
+      }
+      if (method === "HEAD") return mockResponse(200, "");
+      return mockResponse(404, {});
+    });
+    const preview = await previewMiswagTestProduct({
+      productId,
+      categoryId: "L4-999",
+      brandId: "42",
+      lookupExisting: false,
+    });
+    assert.equal(posted, false);
+    assert.equal(preview.canSend, true);
+    assert.equal(preview.plannedAction, "CREATE");
+    assert.deepEqual(preview.payloadPreview.variations[0].color, {
+      name: "Black",
+      value: "#000000",
+    });
+    assert.equal(preview.product.variants[0].color.name, "Black");
+  });
+
+  it("does not store a payload hash when Miswag rejects the product", async () => {
+    await markConnected();
+    await MiswagProductSyncState.deleteMany({});
+    setMiswagFetch(async (url, options) => {
+      const method = String(options?.method || "GET").toUpperCase();
+      if (method === "HEAD") return mockResponse(200, "");
+      if (method === "GET" && String(url).includes("/v1/items/")) return mockResponse(404, {});
+      if (method === "POST") {
+        return mockResponse(422, {
+          message: "The variations.0.color.value field is required.",
+        });
+      }
+      return mockResponse(404, {});
+    });
+    const sent = await sendMiswagTestProduct({
+      productId,
+      categoryId: "L4-999",
+      brandId: "42",
+      confirm: true,
+    });
+    assert.equal(sent.ok, false);
+    assert.equal(sent.httpStatus, 422);
+    assert.equal(await MiswagProductSyncState.countDocuments({}), 0);
   });
 
   it("handles duplicate/conflict 409", async () => {
