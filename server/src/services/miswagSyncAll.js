@@ -26,6 +26,7 @@ import {
   buildMiswagTestPayload,
   miswagItemExternalId,
 } from "./miswagTestProduct.js";
+import { loadMiswagBrandMappingMap } from "./miswagValueMapping.js";
 
 /** Prior Miswag seller client processed docs in batches of 15 (one API call per item). */
 export const MISWAG_SYNC_BATCH_SIZE = 15;
@@ -40,7 +41,9 @@ function reasonFromErrors(errors = []) {
   if (errors.includes("missing_name")) return "Missing English product name";
   if (errors.includes("missing_arabic_description")) return "Missing Arabic description";
   if (errors.includes("missing_arabic_name_for_highlight")) return "Missing Arabic name";
-  if (errors.includes("missing_color_value")) return "Missing variation color";
+  if (errors.includes("missing_color_name") || errors.includes("missing_color_value")) {
+    return "Missing variation color name";
+  }
   if (errors.includes("missing_variations")) return "Missing variations";
   if (errors.includes("inactive")) return "Product is inactive";
   return errors[0] ? String(errors[0]) : "Missing required product data";
@@ -58,8 +61,11 @@ function classifyBlocked(result) {
   }
   if (String(result.code || "").startsWith("brand_")) return "missingBrand";
   if (
+    result.code === "missing_color_name" ||
     result.code === "missing_color_value" ||
+    result.reason === "Missing variation color name" ||
     result.reason === "Missing variation color" ||
+    (result.errors || []).includes("missing_color_name") ||
     (result.errors || []).includes("missing_color_value")
   ) {
     return "missingColor";
@@ -182,7 +188,11 @@ async function evaluateOneProduct(doc, context) {
   context.stats.categoryResolved += 1;
 
   context.stats.brandAttempted += 1;
-  const brand = await resolveMiswagBrandForProduct(doc, context.brandCache);
+  const brand = await resolveMiswagBrandForProduct(
+    doc,
+    context.brandCache,
+    context.brandMappingMap || null
+  );
   if (!brand.ok) {
     return {
       productId,
@@ -292,15 +302,17 @@ async function sendWithRetry(payload) {
 
 async function prepareContext() {
   await assertMiswagSyncAllowed();
-  const [rules, eligibility, mappingByCollection] = await Promise.all([
+  const [rules, eligibility, mappingByCollection, brandMappingMap] = await Promise.all([
     Commission.find({ partner: "miswag", isActive: { $ne: false } }).lean(),
     loadEligibilityContext("miswag"),
     loadMiswagCategoryMappingMap(),
+    loadMiswagBrandMappingMap(),
   ]);
   return {
     rules,
     eligibility,
     mappingByCollection,
+    brandMappingMap,
     brandCache: createBrandResolverCache(),
     mappingCount: mappingByCollection.size,
     stats: {
@@ -830,10 +842,12 @@ export async function evaluateMiswagProductForSync(doc, overrides = {}) {
   if (!mappingByCollection) {
     mappingByCollection = await loadMiswagCategoryMappingMap();
   }
+  const brandMappingMap = overrides.brandMappingMap || (await loadMiswagBrandMappingMap());
   const context = {
     rules: overrides.rules || [],
     eligibility: overrides.eligibility || { partnerActive: true, inactive: {}, taxonomyRequired: false },
     mappingByCollection,
+    brandMappingMap,
     brandCache: overrides.brandCache || createBrandResolverCache(),
     stats: { categoryAttempted: 0, categoryResolved: 0, brandAttempted: 0, brandResolved: 0 },
   };

@@ -18,6 +18,11 @@ import {
   saveMiswagCategoryMapping,
 } from "../services/miswagCategoryMapping.js";
 import {
+  listMiswagBrandMappingRows,
+  resetMiswagValueMapping,
+  upsertMiswagValueMapping,
+} from "../services/miswagValueMapping.js";
+import {
   getLatestMiswagSyncJob,
   pauseMiswagSyncAll,
   resumeMiswagSyncAll,
@@ -255,6 +260,46 @@ miswagConnectionRouter.put("/platforms/miswag/mapping-categories/:brownCollectio
     res.json(await saveMiswagCategoryMapping(req.params.brownCollectionId, input));
   } catch (err) {
     fail(res, err, "Failed to save Miswag category mapping");
+  }
+});
+
+miswagConnectionRouter.get("/platforms/miswag/mapping-brands", async (req, res) => {
+  try {
+    res.json(
+      await listMiswagBrandMappingRows({
+        q: req.query.q,
+        status: req.query.status,
+        page: req.query.page,
+        limit: req.query.limit,
+      })
+    );
+  } catch (err) {
+    fail(res, err, "Failed to load Miswag brand mappings");
+  }
+});
+
+miswagConnectionRouter.put("/platforms/miswag/mapping-brands/:brownKey", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const mapping = await upsertMiswagValueMapping({
+      kind: "brand",
+      brownKey: req.params.brownKey,
+      brownLabel: body.brownLabel || body.label || "",
+      miswagId: body.miswagId || body.id || "",
+      miswagLabel: body.miswagLabel || body.name || "",
+      mode: "manual",
+    });
+    res.json({ ok: true, mapping });
+  } catch (err) {
+    fail(res, err, "Failed to save Miswag brand mapping");
+  }
+});
+
+miswagConnectionRouter.delete("/platforms/miswag/mapping-brands/:brownKey", async (req, res) => {
+  try {
+    res.json(await resetMiswagValueMapping("brand", req.params.brownKey));
+  } catch (err) {
+    fail(res, err, "Failed to reset Miswag brand mapping");
   }
 });
 

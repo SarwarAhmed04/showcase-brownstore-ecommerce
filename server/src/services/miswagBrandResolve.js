@@ -1,8 +1,13 @@
 import { normalizeMiswagBrand, searchBrands } from "./miswag.js";
+import {
+  findMiswagBrandMapping,
+  rememberAutoBrandMapping,
+} from "./miswagValueMapping.js";
 
 /**
  * Per-sync brand resolver with in-memory cache.
- * Exact normalized name/alias only — never fuzzy-picks a random brand.
+ * Priority: saved manual mapping → saved auto mapping → exact live search.
+ * Never fuzzy-picks a random brand. Never overwrites manual mappings.
  */
 
 export function normalizeBrandKey(value) {
@@ -21,6 +26,12 @@ export function brandLabelOf(product) {
   if (typeof brand === "string") return brand;
   if (typeof brand.name === "string") return brand.name;
   return brand.name?.en || brand.name?.ar || brand.name?.ku || "";
+}
+
+export function brandIdOf(product) {
+  const brand = product?.brand;
+  if (!brand) return "";
+  return String(brand._id || brand.id || "").trim();
 }
 
 export function createBrandResolverCache() {
@@ -44,17 +55,86 @@ function exactBrandMatch(candidates, key) {
   return { ok: false, code: "brand_unresolved" };
 }
 
-export async function resolveMiswagBrandForProduct(product, cache = createBrandResolverCache()) {
+function fromSavedMapping(mapping) {
+  if (!mapping?.miswagId) return null;
+  const id = Number(mapping.miswagId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  return {
+    ok: true,
+    brand: {
+      id,
+      name: mapping.miswagLabel || mapping.brownLabel || String(id),
+    },
+    matchType: mapping.mode === "manual" ? "manual_mapping" : "auto_mapping",
+    source: mapping.mode === "manual" ? "manual_mapping" : "auto_mapping",
+  };
+}
+
+function lookupFromMap(product, mappingMap) {
+  if (!mappingMap) return null;
+  const id = brandIdOf(product);
+  if (id && mappingMap.has(id)) return fromSavedMapping(mappingMap.get(id));
+  const nameKey = normalizeBrandKey(brandLabelOf(product));
+  if (nameKey && mappingMap.has(`name:${nameKey}`)) {
+    return fromSavedMapping(mappingMap.get(`name:${nameKey}`));
+  }
+  if (nameKey && mappingMap.has(nameKey)) return fromSavedMapping(mappingMap.get(nameKey));
+  return null;
+}
+
+async function lookupSavedBrand(product, mappingMap = null) {
+  const fromMap = lookupFromMap(product, mappingMap);
+  if (fromMap) return fromMap;
+
+  const id = brandIdOf(product);
+  if (id) {
+    const byId = await findMiswagBrandMapping(id);
+    const resolved = fromSavedMapping(byId);
+    if (resolved) return resolved;
+  }
+  const label = brandLabelOf(product);
+  const nameKey = normalizeBrandKey(label);
+  if (nameKey) {
+    const byNameKey = await findMiswagBrandMapping(nameKey);
+    const resolvedKey = fromSavedMapping(byNameKey);
+    if (resolvedKey) return resolvedKey;
+  }
+  return null;
+}
+
+export async function resolveMiswagBrandForProduct(
+  product,
+  cache = createBrandResolverCache(),
+  mappingMap = null
+) {
   const label = brandLabelOf(product);
   const key = normalizeBrandKey(label);
-  if (key.length < 2) {
-    return {
+  const brownId = brandIdOf(product);
+
+  // Accept cache hits by brand id or normalized name (tests + Sync All share both styles).
+  if (brownId && cache.has(brownId)) return cache.get(brownId);
+  if (key && cache.has(key)) return cache.get(key);
+
+  function remember(result) {
+    if (brownId) cache.set(brownId, result);
+    if (key) cache.set(key, result);
+    return result;
+  }
+
+  if (key.length < 2 && !brownId) {
+    return remember({
       ok: false,
       reason: "Miswag brand could not be resolved safely",
       code: "brand_missing_name",
-    };
+    });
   }
-  if (cache.has(key)) return cache.get(key);
+
+  try {
+    const saved = await lookupSavedBrand(product, mappingMap);
+    if (saved) return remember(saved);
+  } catch {
+    // Mapping DB failure should not abort sync; fall through to live search.
+  }
 
   let result;
   try {
@@ -65,13 +145,33 @@ export async function resolveMiswagBrandForProduct(product, cache = createBrandR
         ? response.data
         : [];
     const match = exactBrandMatch(content, key);
-    result = match.ok
-      ? { ok: true, brand: match.brand, matchType: "exact" }
-      : {
-          ok: false,
-          reason: "Miswag brand could not be resolved safely",
-          code: match.code,
-        };
+    if (match.ok) {
+      result = {
+        ok: true,
+        brand: match.brand,
+        matchType: "exact",
+        source: "live_search",
+      };
+      // Remember exact auto match under brand id when available (never overwrites manual).
+      if (brownId) {
+        try {
+          await rememberAutoBrandMapping({
+            brownKey: brownId,
+            brownLabel: label || brownId,
+            miswagId: match.brand.id,
+            miswagLabel: match.brand.name,
+          });
+        } catch {
+          // Persistence failure is non-fatal.
+        }
+      }
+    } else {
+      result = {
+        ok: false,
+        reason: "Miswag brand could not be resolved safely",
+        code: match.code,
+      };
+    }
   } catch (err) {
     result = {
       ok: false,
@@ -81,6 +181,5 @@ export async function resolveMiswagBrandForProduct(product, cache = createBrandR
     };
   }
 
-  cache.set(key, result);
-  return result;
+  return remember(result);
 }

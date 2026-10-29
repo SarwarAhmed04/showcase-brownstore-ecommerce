@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../../api";
 import { formatCount, StatusBadge } from "./platformUi";
+import MiswagBrandMapping from "./MiswagBrandMapping";
 
 function label(name, lang) {
   if (!name) return "";
@@ -45,6 +46,7 @@ function LargeProductToggle({ on, disabled, onToggle, labelText }) {
 }
 
 export default function MiswagMappingCategories({ t, lang, onNotices }) {
+  const [tab, setTab] = useState("categories");
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
@@ -61,6 +63,7 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
   const [finding, setFinding] = useState(false);
 
   useEffect(() => {
+    if (tab !== "categories") return undefined;
     let ignore = false;
     setError("");
     api
@@ -84,7 +87,7 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
     return () => {
       ignore = true;
     };
-  }, [query, status, page, onNotices]);
+  }, [tab, query, status, page, onNotices]);
 
   async function save(row, payload) {
     setSaving(row.id);
@@ -155,7 +158,27 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
 
   return (
     <div className="space-y-5">
-      {noticeCount > 0 ? (
+      <div className="flex flex-wrap gap-1 rounded-[1.25rem] bg-cream p-1 sm:w-fit">
+        {[
+          ["categories", t.miswagCategoryMappingTab || "Category Mapping"],
+          ["brands", t.miswagBrandMappingTab || "Brand Mapping"],
+        ].map(([id, text]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTab(id)}
+            className={`rounded-full px-4 py-2 text-xs font-semibold ${
+              tab === id ? "bg-white text-brown shadow-sm" : "text-brown/55"
+            }`}
+          >
+            {text}
+          </button>
+        ))}
+      </div>
+
+      {tab === "brands" ? <MiswagBrandMapping t={t} /> : null}
+
+      {tab === "categories" && noticeCount > 0 ? (
         <section className="rounded-3xl bg-amber-50 p-5 text-amber-950 ring-1 ring-amber-200">
           <p className="font-semibold">
             {String(t.miswagNewCollectionNoticeTitle || "").replace("{count}", formatCount(noticeCount))}
@@ -178,6 +201,7 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
         </section>
       ) : null}
 
+      {tab === "categories" ? (
       <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
         <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
           {t.miswagMappingCategories}
@@ -414,6 +438,7 @@ export default function MiswagMappingCategories({ t, lang, onNotices }) {
           </div>
         ) : null}
       </section>
+      ) : null}
     </div>
   );
 }

@@ -12,7 +12,6 @@ import {
   getItem,
   logMiswagSafe,
   sanitizeMiswagText,
-  searchBrands,
 } from "./miswag.js";
 import {
   loadMiswagCategoryMappingMap,
@@ -20,32 +19,14 @@ import {
 } from "./miswagCategoryMapping.js";
 import { ensureProductVariationBarcodes } from "./miswagTestBarcodes.js";
 import { saveMiswagAcceptedPayload } from "./miswagSyncState.js";
+import { resolveMiswagBrandForProduct, createBrandResolverCache } from "./miswagBrandResolve.js";
 
 export const MISWAG_ITEM_CREATE_PATH = "/v1/items/bulk-create";
 export const MISWAG_CATEGORY_ID_RX = /^L[34]-\d+$/;
 const SUPPORTED_IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif"]);
 const PRINTABLE = /[^\x20-\x7E]/g;
 const HIGHLIGHT_MAX = 160;
-
-const COLOR_MAP = {
-  black: ["#000000", "Black"],
-  white: ["#FFFFFF", "White"],
-  red: ["#FF0000", "Red"],
-  blue: ["#0000FF", "Blue"],
-  green: ["#008000", "Green"],
-  yellow: ["#FFFF00", "Yellow"],
-  orange: ["#FFA500", "Orange"],
-  purple: ["#800080", "Purple"],
-  pink: ["#FFC0CB", "Pink"],
-  gray: ["#808080", "Gray"],
-  grey: ["#808080", "Gray"],
-  silver: ["#C0C0C0", "Silver"],
-  gold: ["#D4AF37", "Gold"],
-  brown: ["#8B4513", "Brown"],
-  beige: ["#F5F5DC", "Beige"],
-  navy: ["#000080", "Navy"],
-  "navy blue": ["#000080", "Navy"],
-};
+const HEX_ONLY = /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
 function mediaPublicOrigin() {
   return String(process.env.MEDIA_PUBLIC_ORIGIN || "").trim().replace(/\/$/, "");
@@ -75,75 +56,43 @@ function localized(value, order = ["en", "ar", "ku"]) {
   return "";
 }
 
-function normalizeHex(value) {
-  const raw = String(value || "").trim();
-  const match = raw.match(/^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
-  if (!match) return "";
-  let hex = match[1];
-  if (hex.length === 3) hex = hex.split("").map((char) => char + char).join("");
-  return `#${hex.toUpperCase()}`;
-}
-
-function normalizeColorKey(value) {
-  return plainText(value)
-    .toLowerCase()
-    .replace(/[\u064B-\u0652]/g, "")
-    .replace(/[أإآ]/g, "ا")
-    .replace(/ة/g, "ه")
-    .replace(/ى/g, "ي")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function pushColorBits(target, value) {
-  if (value == null) return;
-  if (typeof value === "string" || typeof value === "number") {
-    target.push(String(value));
-    return;
-  }
-  if (typeof value !== "object") return;
-  pushColorBits(target, value.value);
-  pushColorBits(target, value.hex);
-  pushColorBits(target, value.code);
-  pushColorBits(target, value.colorHex);
-  if (value.name && typeof value.name === "object") {
-    pushColorBits(target, value.name.en);
-    pushColorBits(target, value.name.ar);
-    pushColorBits(target, value.name.ku);
-  } else {
-    pushColorBits(target, value.name);
-  }
-  pushColorBits(target, value.en);
-  pushColorBits(target, value.ar);
-  pushColorBits(target, value.ku);
-  pushColorBits(target, value.label);
-}
-
+/**
+ * Read the original BrownStore variation color name as-is.
+ * Prefer English text. Never invent names, never use HEX as a name,
+ * and never split multi-color labels (e.g. "Black + White").
+ */
 export function resolveMiswagColor(variant) {
-  const bits = [];
-  pushColorBits(bits, variant?.color);
-  pushColorBits(bits, variant?.colour);
-  pushColorBits(bits, variant?.colorName);
-  pushColorBits(bits, variant?.colorHex);
-  pushColorBits(bits, variant?.hex);
-  pushColorBits(bits, variant?.colorValue);
+  const candidates = [];
 
-  let hex = "";
-  const names = [];
-  for (const bit of bits) {
-    const asHex = normalizeHex(bit);
-    if (asHex && !hex) hex = asHex;
-    const key = normalizeColorKey(bit);
-    if (key && !asHex) names.push(key);
+  function pushCandidate(value) {
+    if (value == null) return;
+    if (typeof value === "string" || typeof value === "number") {
+      const text = plainText(value);
+      if (!text || HEX_ONLY.test(text)) return;
+      candidates.push(text);
+      return;
+    }
+    if (typeof value !== "object") return;
+    // Prefer English first so multi-color English labels stay intact.
+    if (value.name && typeof value.name === "object") {
+      pushCandidate(value.name.en);
+      pushCandidate(value.name.ar);
+      pushCandidate(value.name.ku);
+    } else {
+      pushCandidate(value.name);
+    }
+    pushCandidate(value.en);
+    pushCandidate(value.label);
+    // Intentionally ignore hex / value / colorHex — those are not color names.
   }
 
-  const named = names.map((name) => COLOR_MAP[name]).find(Boolean);
-  if (hex && named) return { name: named[1], value: hex };
-  if (hex && names.some((name) => name.length >= 3)) {
-    return { name: names.find((name) => name.length >= 3), value: hex };
-  }
-  if (!hex && named) return { name: named[1], value: normalizeHex(named[0]) };
-  return null;
+  pushCandidate(variant?.color);
+  pushCandidate(variant?.colour);
+  pushCandidate(variant?.colorName);
+
+  const name = candidates.find((text) => text.length > 0) || "";
+  if (!name) return null;
+  return { name };
 }
 
 function publicImageUrl(url, origin) {
@@ -255,7 +204,8 @@ function reasonLabel(code) {
     missing_public_origin: "MEDIA_PUBLIC_ORIGIN is not set (needed for image URLs)",
     missing_variations: "Missing variants",
     missing_variant_id: "Missing variant id",
-    missing_color_value: "Missing variant color name/hex",
+    missing_color_value: "Missing variant color name",
+    missing_color_name: "Missing variant color name",
     missing_images: "Missing image",
     missing_sizes: "Missing variant sizes",
     missing_size_label: "Missing size label",
@@ -366,8 +316,8 @@ export function buildMiswagTestPayload(
       continue;
     }
     const color = resolveMiswagColor(variant);
-    if (!color || color.name.length < 3 || !/^#[0-9A-Fa-f]{6}$/.test(color.value)) {
-      errors.push("missing_color_value");
+    if (!color || !String(color.name || "").trim()) {
+      errors.push("missing_color_name");
     }
     const images = variationImages(variant.images, origin);
     if (!images.length) errors.push("missing_images");
@@ -513,42 +463,31 @@ async function loadProductOrThrow(productId) {
   return doc;
 }
 
-async function tryResolveBrandId(doc, explicitBrandId) {
+async function tryResolveBrandId(doc, explicitBrandId, brandCache = createBrandResolverCache()) {
   if (explicitBrandId != null && String(explicitBrandId).trim() !== "") {
     return { brandId: String(explicitBrandId).trim(), brandName: "", source: "temporary" };
   }
-  const brandLabel =
-    typeof doc.brand?.name === "string"
-      ? doc.brand.name
-      : doc.brand?.name?.en || doc.brand?.name?.ar || doc.brand?.name?.ku || "";
-  const query = String(brandLabel || "").trim();
-  if (query.length < 2) return { brandId: "", brandName: "", source: "none" };
-  try {
-    const response = await searchBrands(query);
-    const content = Array.isArray(response.data?.content) ? response.data.content : [];
-    const normalized = query.toLowerCase().replace(/\s+/g, " ").trim();
-    const matches = content.filter((row) => {
-      const name = String(row?.name || "")
-        .toLowerCase()
-        .replace(/\s+/g, " ")
-        .trim();
-      const alias = String(row?.alias || "")
-        .toLowerCase()
-        .replace(/\s+/g, " ")
-        .trim();
-      return name === normalized || alias === normalized;
-    });
-    if (matches.length === 1 && Number(matches[0].id) > 0) {
-      return {
-        brandId: String(matches[0].id),
-        brandName: String(matches[0].name || query),
-        source: "live_search",
-      };
-    }
-  } catch {
-    // Brand search failure is not fatal; preview will report missing brand id.
+  const resolved = await resolveMiswagBrandForProduct(doc, brandCache);
+  if (resolved.ok) {
+    return {
+      brandId: String(resolved.brand.id),
+      brandName: String(resolved.brand.name || ""),
+      source: resolved.source || resolved.matchType || "live_search",
+    };
   }
-  return { brandId: "", brandName: query, source: "unresolved" };
+  return {
+    brandId: "",
+    brandName: brandLabelOfSafe(doc),
+    source: resolved.code === "brand_missing_name" ? "none" : "unresolved",
+    code: resolved.code,
+  };
+}
+
+function brandLabelOfSafe(doc) {
+  const brand = doc?.brand;
+  if (!brand) return "";
+  if (typeof brand.name === "string") return brand.name;
+  return brand.name?.en || brand.name?.ar || brand.name?.ku || "";
 }
 
 export async function previewMiswagTestProduct({
