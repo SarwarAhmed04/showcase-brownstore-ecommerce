@@ -95,6 +95,7 @@ const FILTER_LABEL_KEY = {
 function filterPartText(part, t, lang) {
   const stored = tName(part.name, lang);
   if (stored) return stored;
+  if (!part.id && part.key === "brand") return t.allBrands;
   if (!part.id && part.key === "subCategory") return t.allSubCategories;
   if (!part.id && part.key === "collection") return t.allCollections;
   return part.id;
@@ -2200,7 +2201,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
                   label={t.productBrand}
                   value={brandId}
                   disabled={filterRestoring || !filterEnabled.brand}
-                  placeholder={t.selectBrand}
+                  placeholder={filterEnabled.brand ? t.allBrands : t.selectBrand}
                   lang={lang}
                   options={ensureOption(filterOptions.brands, brandId, filterLabels?.brand)}
                   onChange={(value) => onFilterField("brandId", value)}

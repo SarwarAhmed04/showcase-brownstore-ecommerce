@@ -35,7 +35,7 @@ export const ALL_TARGET_NAME = {
 
 const ALL_BRANDS_NAME = {
   ku: "هەموو براندەکان",
-  en: "All Brands",
+  en: "All brands",
   ar: "كل العلامات",
 };
 

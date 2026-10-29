@@ -244,6 +244,17 @@ describe("filter commission rules", () => {
     assert.deepEqual(selectionFromCommission({ scope: "filter", ...PATH }), PATH);
   });
 
+  it("applies All brands to every brand of the vendor and lets a specific brand win", () => {
+    const allBrands = { scope: "filter", vendorId: ID.v1, percentage: 10, isActive: true };
+    const amd = { scope: "filter", vendorId: ID.v1, brandId: ID.zilan, percentage: 15, isActive: true };
+    assert.equal(resolveCommissionRate(makeProduct(), [allBrands]), 10);
+    assert.equal(resolveCommissionRate(makeProduct({ brandId: ID.other }), [allBrands]), 10);
+    assert.equal(resolveCommissionRate(makeProduct({ vendorId: ID.v2 }), [allBrands]), 0);
+    assert.equal(resolveCommissionRate(makeProduct(), [allBrands, amd]), 15);
+    assert.equal(resolveCommissionRate(makeProduct({ brandId: ID.other }), [allBrands, amd]), 10);
+    assert.equal(filterFieldsEnabled({ vendorId: ID.v1, brandId: "" }).category, false);
+  });
+
   it("clears every child when a parent filter changes", () => {
     const start = { ...PATH };
     const vendorChange = applyFilterChange(start, "vendorId", ID.v2);
@@ -596,6 +607,7 @@ describe("filter commission rules", () => {
     assert.equal(fs.existsSync(path.join(__dirname, "models/PlatformCategoryMapping.js")), false);
 
     assert.match(commission, /scope === "filter"/);
+    assert.match(commission, /en: "All brands"/);
     assert.equal(commission.includes("isLarge"), false);
     assert.equal(commission.includes("is_large"), false);
     assert.equal(ibsher.includes("COMMISSION_SCOPES"), false);
@@ -614,6 +626,8 @@ describe("filter commission rules", () => {
     assert.equal(fields.includes("winningCommission"), false);
     assert.match(ui, /applyFilterChange/);
     assert.match(ui, /filterSelectionIssue/);
+    assert.match(ui, /filterEnabled\.brand \? t\.allBrands : t\.selectBrand/);
+    assert.match(ui, /part\.key === "brand"\) return t\.allBrands/);
     assert.match(ui, /allSubCategories/);
     assert.match(ui, /allCollections/);
     assert.match(ui, /filterPreviewParams/);
