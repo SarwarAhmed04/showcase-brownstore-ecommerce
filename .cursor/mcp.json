@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "elryan-api": {
+      "url": "https://marketplace-api.elryan.com/mcp"
+    }
+  }
+}

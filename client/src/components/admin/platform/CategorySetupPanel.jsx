@@ -3,6 +3,7 @@ import {
   applyCategoryChange,
   applySubcategoryChange,
   categoryOptions,
+  giniChoiceDisabled,
   giniMappingStatus,
   subcategoryOptions,
   summarizeGiniStatuses,
@@ -14,6 +15,11 @@ function label(name, lang) {
   if (!name) return "";
   if (typeof name === "string") return name;
   return name[lang] || name.en || name.ku || name.ar || "";
+}
+
+function giniOptionText(item, t) {
+  const status = item?.isActive ? t.giniStatusActive : t.giniStatusInactive;
+  return `${item?.name || ""} (${status})`;
 }
 
 function pathText(row, lang) {
@@ -299,9 +305,17 @@ function GiniCategorySetup({ partnerSlug, t, lang, onNotices, onOpenConnection }
             const draft = drafts[row.id] || {};
             const categoriesForRow = categoryOptions(categories, draft.categoryId);
             const subcategoriesForRow = subcategoryOptions(categories, draft.categoryId, draft.subcategoryId);
+            const selectedCategory = categories.find((item) => String(item.id) === String(draft.categoryId || ""));
+            const selectedSubcategory = selectedCategory?.subcategories?.find(
+              (item) => String(item.id) === String(draft.subcategoryId || "")
+            );
             const draftStatus = treeReady ? giniMappingStatus(draft, categories) : "";
             const canSave = draftStatus === "configured";
-            const showInactiveWarning = row.mappingStatus === "inactive" || draftStatus === "inactive";
+            const showInactiveWarning =
+              row.mappingStatus === "inactive" ||
+              draftStatus === "inactive" ||
+              selectedCategory?.isActive === false ||
+              selectedSubcategory?.isActive === false;
             return (
               <article key={row.id} className="rounded-2xl bg-cream p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -336,8 +350,12 @@ function GiniCategorySetup({ partnerSlug, t, lang, onNotices, onOpenConnection }
                       >
                         <option value="">{t.giniChooseCategory}</option>
                         {categoriesForRow.map((category) => (
-                          <option key={String(category.id)} value={String(category.id)} disabled={Boolean(category.legacy)}>
-                            {category.name}
+                          <option
+                            key={String(category.id)}
+                            value={String(category.id)}
+                            disabled={giniChoiceDisabled(category, draft.categoryId, false)}
+                          >
+                            {giniOptionText(category, t)}
                           </option>
                         ))}
                       </select>
@@ -357,11 +375,24 @@ function GiniCategorySetup({ partnerSlug, t, lang, onNotices, onOpenConnection }
                       >
                         <option value="">{t.giniChooseSubcategory}</option>
                         {subcategoriesForRow.map((subcategory) => (
-                          <option key={String(subcategory.id)} value={String(subcategory.id)} disabled={Boolean(subcategory.legacy)}>
-                            {subcategory.name}
+                          <option
+                            key={String(subcategory.id)}
+                            value={String(subcategory.id)}
+                            disabled={giniChoiceDisabled(
+                              subcategory,
+                              draft.subcategoryId,
+                              Boolean(subcategory.legacy) ||
+                                subcategory.isActive === false ||
+                                selectedCategory?.isActive === false
+                            )}
+                          >
+                            {giniOptionText(subcategory, t)}
                           </option>
                         ))}
                       </select>
+                      {draft.categoryId && subcategoriesForRow.length === 0 ? (
+                        <span className="mt-1 block font-medium text-brown/50">{t.giniNoSubcategories}</span>
+                      ) : null}
                     </label>
                   </div>
                 ) : null}

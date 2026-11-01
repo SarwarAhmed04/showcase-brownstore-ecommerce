@@ -3,6 +3,7 @@ import {
   ELRYAN_DEFAULT_ENVIRONMENT,
   ELRYAN_PATHS,
   elryanEnvironmentConfig,
+  elryanLiveProductWritesEnabled,
   elryanProductWritesEnabled,
 } from "../utils/elryanConstants.js";
 import { sanitizeElryanText } from "../utils/elryanRedact.js";
@@ -102,11 +103,19 @@ function buildPublicSnapshot(stored, { environment, keyStored, decryptionError, 
 }
 
 export function getElryanWritesGatePublic() {
+  const productWritesEnabled = elryanProductWritesEnabled();
+  const liveWritesAllowed = elryanLiveProductWritesEnabled();
   return {
-    productWritesEnabled: elryanProductWritesEnabled(),
+    productWritesEnabled,
+    liveWritesAllowed,
+    productPostCalled: false,
     envFlag: "ELRYAN_PRODUCT_WRITES_ENABLED",
+    liveFlag: "ELRYAN_ALLOW_LIVE_PRODUCT_WRITES",
     default: false,
-    note: "Product create/update/bulk remain disabled until Elryan grants publishing and this flag is explicitly set to true after a separate review.",
+    note:
+      productWritesEnabled && liveWritesAllowed
+        ? "Both product-write flags are on. This status check does not send a product. Production create stays refused."
+        : "Product create stays disabled until both write flags are explicitly set to true after a separate review. This status check does not send a product.",
   };
 }
 

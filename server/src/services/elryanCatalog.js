@@ -1,12 +1,13 @@
-import { ELRYAN_PATHS } from "../utils/elryanConstants.js";
+import { ELRYAN_PATHS, elryanProductWritesEnabled } from "../utils/elryanConstants.js";
+import { interpretElryanSkuAvailability } from "../utils/elryanSku.js";
 import {
   normalizeElryanAttributeValueList,
   normalizeElryanAttributeValueRow,
 } from "../utils/elryanAttributeValues.js";
 import { formatElryanReadError } from "../utils/elryanErrorMessage.js";
 import { extractElryanListMeta } from "../utils/elryanPagination.js";
-import { ElryanClientError } from "./elryanClient.js";
-import { elryanAuthedRead } from "./elryanConnection.js";
+import { ElryanClientError, elryanRequest } from "./elryanClient.js";
+import { elryanAuthedRead, resolveElryanConfig } from "./elryanConnection.js";
 import { elryanAttributeSupportsValueList } from "./elryanAttributeValueCatalog.js";
 
 function asList(payload) {
@@ -243,14 +244,63 @@ export async function elryanListWarranties() {
 
 /** READ — GET /v1/products/sku-exists */
 export async function elryanSkuExists(sku, productId) {
-  const result = await read(ELRYAN_PATHS.skuExists, {
-    sku: String(sku || "").trim(),
-    productId: productId || undefined,
-  });
+  const query = { sku: String(sku || "").trim() };
+  if (productId) query.productId = String(productId);
+  const result = await elryanAuthedRead(ELRYAN_PATHS.skuExists, { query, retries: 1 });
+  const interpreted = interpretElryanSkuAvailability(result);
+  if (!result.ok && !interpreted.conflict) {
+    const formatted = formatElryanReadError(result);
+    throw new ElryanClientError(formatted.message, {
+      status: result.httpStatus >= 400 && result.httpStatus < 600 ? result.httpStatus : 502,
+      code: formatted.code || "elryan_read_failed",
+      classification: "READ",
+      httpStatus: result.httpStatus,
+    });
+  }
   return {
     classification: "READ",
     httpStatus: result.httpStatus,
-    exists: result.httpStatus === 409 || Boolean(result.json?.exists),
+    exists: interpreted.exists,
+    available: interpreted.available === true,
     raw: result.json,
   };
+}
+
+/**
+ * WRITE — POST /v1/products.
+ * Refuses unless both product-write flags are on and the active environment is Staging.
+ * Does not retry.
+ */
+export async function elryanCreateProduct(body) {
+  if (!elryanProductWritesEnabled()) {
+    throw new ElryanClientError("Elryan product publishing is disabled.", {
+      status: 403,
+      code: "writes_disabled",
+      classification: "WRITE",
+    });
+  }
+  if (String(process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES || "").trim().toLowerCase() !== "true") {
+    throw new ElryanClientError("Live Elryan product writes are not enabled.", {
+      status: 403,
+      code: "writes_gated",
+      classification: "WRITE",
+    });
+  }
+  const config = await resolveElryanConfig();
+  if (config.environment !== "staging") {
+    throw new ElryanClientError("Elryan product create is limited to Staging.", {
+      status: 403,
+      code: "staging_only",
+      classification: "WRITE",
+    });
+  }
+  return elryanRequest({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    path: ELRYAN_PATHS.products,
+    method: "POST",
+    body,
+    classification: "WRITE",
+    retries: 0,
+  });
 }

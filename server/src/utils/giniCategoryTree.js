@@ -73,24 +73,74 @@ export function summarizeGiniStatuses(statuses, total = statuses.length) {
   return counts;
 }
 
-export function categoryOptions(categories, selectedId) {
-  const active = (categories || []).filter((category) => category.isActive);
-  const id = String(selectedId || "").trim();
-  if (!id || active.some((category) => String(category.id) === id)) return active;
-  const saved = (categories || []).find((category) => String(category.id) === id);
-  if (saved) return [...active, { ...saved, legacy: true }];
-  return [...active, { id, name: id, slug: "", isActive: false, legacy: true, subcategories: [] }];
+/** Stop following category pages after this many responses. */
+export const GINI_CATEGORY_PAGE_LIMIT = 50;
+
+function legacyChoice(id) {
+  return { id, name: id, slug: "", isActive: false, legacy: true };
 }
 
+function withSavedChoice(items, selectedId, extra = {}) {
+  const listed = (items || []).map((item) => ({ ...item }));
+  const id = String(selectedId || "").trim();
+  if (!id || listed.some((item) => String(item.id) === id)) return listed;
+  return [...listed, { ...legacyChoice(id), ...extra }];
+}
+
+/**
+ * Every category returned by the mapping API, in API order.
+ * A saved id that is no longer in the tree stays visible as a legacy choice.
+ */
+export function categoryOptions(categories, selectedId) {
+  return withSavedChoice(categories, selectedId, { subcategories: [] });
+}
+
+/**
+ * Subcategories of one parent only, in API order, including inactive rows.
+ * An unknown saved id is kept as a legacy choice and is not taken from another parent.
+ */
 export function subcategoryOptions(categories, categoryId, selectedSubId) {
   const category = (categories || []).find((item) => String(item.id) === String(categoryId || "").trim());
-  const subs = category?.subcategories || [];
-  const active = subs.filter((sub) => sub.isActive);
-  const id = String(selectedSubId || "").trim();
-  if (!category || !id || active.some((sub) => String(sub.id) === id)) return active;
-  const saved = subs.find((sub) => String(sub.id) === id);
-  if (saved) return [...active, { ...saved, legacy: true }];
-  return [...active, { id, name: id, slug: "", isActive: false, legacy: true }];
+  if (!category) return withSavedChoice([], selectedSubId);
+  return withSavedChoice(category.subcategories, selectedSubId);
+}
+
+/**
+ * Legacy choices stay visible and cannot be newly selected.
+ * Pass `locked` for a row that must not become a new mapping, such as an inactive subcategory.
+ * The current value stays enabled so a previously saved mapping remains displayed.
+ */
+export function giniChoiceDisabled(option, selectedId, locked = false) {
+  const current = String(selectedId || "").trim();
+  if (current && String(option?.id ?? "") === current) return false;
+  return Boolean(option?.legacy || locked);
+}
+
+/** Next relative query when a category payload says another page exists. */
+export function giniCategoryNextQuery(json, page) {
+  const current = Number(page) || 1;
+  const last = Number(json?.meta?.last_page);
+  if (Number.isInteger(last) && last > current) return `?page=${current + 1}`;
+  if (typeof json?.links?.next === "string" && json.links.next.trim()) return `?page=${current + 1}`;
+  return "";
+}
+
+/** Combine category pages. The first copy of an id wins. A single payload is unchanged. */
+export function mergeGiniCategoryPayloads(payloads) {
+  const list = Array.isArray(payloads) ? payloads : [];
+  if (list.length <= 1) return list[0] ?? { data: [] };
+  const seen = new Set();
+  const data = [];
+  for (const json of list) {
+    const rows = Array.isArray(json?.data) ? json.data : [];
+    for (const row of rows) {
+      const id = row?.id == null ? "" : String(row.id).trim();
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      data.push(row);
+    }
+  }
+  return { data };
 }
 
 export function applyCategoryChange(categories, categoryId) {

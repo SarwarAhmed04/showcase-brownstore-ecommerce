@@ -1,5 +1,6 @@
 import { ELRYAN_READINESS } from "./elryanConstants.js";
 import { validateElryanSku } from "./elryanSku.js";
+import { warrantyBlockersFor } from "./elryanWarranty.js";
 
 export function validateElryanPreviewParts({
   hasApiKey,
@@ -9,13 +10,20 @@ export function validateElryanPreviewParts({
   brand,
   color,
   warranty,
+  warrantyCatalog,
   attributes,
   requiredAttributeCodes = [],
+  rejectedAttributeCodes = [],
+  attributeSetUnverified = false,
   variation,
   pricing,
   images,
+  extraBlockers = [],
 }) {
   const blockers = [];
+  for (const extra of extraBlockers) {
+    if (extra?.code) blockers.push(extra);
+  }
 
   if (!hasApiKey) blockers.push({ code: "api_access_pending", status: ELRYAN_READINESS.API_ACCESS_PENDING });
 
@@ -44,12 +52,18 @@ export function validateElryanPreviewParts({
     blockers.push({ code: "missing_color_mapping", status: ELRYAN_READINESS.MISSING_MAPPING });
   }
 
-  if (!warranty?.elryanCode) {
-    blockers.push({ code: "missing_warranty_mapping", status: ELRYAN_READINESS.MISSING_MAPPING });
-  }
+  blockers.push(...warrantyBlockersFor({ code: warranty?.elryanCode, catalog: warrantyCatalog }));
 
   if (!images?.length) {
     blockers.push({ code: "missing_image", status: ELRYAN_READINESS.MISSING_REQUIRED_FIELD });
+  }
+
+  if (attributeSetUnverified) {
+    blockers.push({
+      code: "attribute_set_unverified",
+      status: ELRYAN_READINESS.MISSING_REQUIRED_FIELD,
+      message: "The category attribute set could not be read, so required attributes are unverified.",
+    });
   }
 
   for (const code of requiredAttributeCodes) {
@@ -60,6 +74,14 @@ export function validateElryanPreviewParts({
         message: `Required Elryan attribute "${code}" is not mapped.`,
       });
     }
+  }
+
+  for (const code of rejectedAttributeCodes) {
+    blockers.push({
+      code: `unverified_attribute_${code}`,
+      status: ELRYAN_READINESS.MISSING_REQUIRED_FIELD,
+      message: `Attribute "${code}" is not one of the values published for this category.`,
+    });
   }
 
   if (variation && !variation.ok) {
@@ -82,35 +104,46 @@ export function validateElryanPreviewParts({
     blockers.push({ code: "invalid_platform_price", status: ELRYAN_READINESS.NOT_READY });
   }
 
-  // Price/cost semantics with Elryan marketplace commission remain unconfirmed.
-  blockers.push({
-    code: "pricing_unverified",
-    status: ELRYAN_READINESS.PRICING_UNVERIFIED,
-    message: pricing?.pricingNote || "Elryan price/cost semantics are not confirmed.",
-  });
-
-  const statuses = blockers.map((b) => b.status);
-  let readiness = ELRYAN_READINESS.READY;
-  if (statuses.includes(ELRYAN_READINESS.API_ACCESS_PENDING)) {
-    readiness = ELRYAN_READINESS.API_ACCESS_PENDING;
-  } else if (statuses.includes(ELRYAN_READINESS.MISSING_MAPPING)) {
-    readiness = ELRYAN_READINESS.MISSING_MAPPING;
-  } else if (statuses.includes(ELRYAN_READINESS.MISSING_REQUIRED_FIELD)) {
-    readiness = ELRYAN_READINESS.MISSING_REQUIRED_FIELD;
-  } else if (statuses.includes(ELRYAN_READINESS.NOT_READY)) {
-    readiness = ELRYAN_READINESS.NOT_READY;
-  } else if (statuses.includes(ELRYAN_READINESS.PRICING_UNVERIFIED)) {
-    readiness = ELRYAN_READINESS.PRICING_UNVERIFIED;
-  }
-
-  // Never READY while pricing unverified (always present in this phase).
-  if (readiness === ELRYAN_READINESS.READY) {
-    readiness = ELRYAN_READINESS.PRICING_UNVERIFIED;
-  }
-
+  const decision = elryanPreviewDecision({ blockers });
   return {
-    readiness,
+    readiness: decision.readiness,
     blockers,
-    canProposePayload: !statuses.includes(ELRYAN_READINESS.MISSING_MAPPING),
+    ready: decision.ready,
+    canProposePayload: !decision.statuses.includes(ELRYAN_READINESS.MISSING_MAPPING),
   };
+}
+
+/**
+ * Shared READY rule for Sync One and Sync All.
+ * Any remaining blocker, including pricing_unverified, keeps the product out of READY.
+ */
+export function elryanPreviewDecision({ blockers = [], readiness = "" } = {}) {
+  const list = Array.isArray(blockers) ? blockers.filter((blocker) => blocker?.code) : [];
+  const statuses = list.map((blocker) => blocker.status);
+  let next = readiness || ELRYAN_READINESS.READY;
+  if (!readiness) {
+    if (statuses.includes(ELRYAN_READINESS.API_ACCESS_PENDING)) {
+      next = ELRYAN_READINESS.API_ACCESS_PENDING;
+    } else if (statuses.includes(ELRYAN_READINESS.MISSING_MAPPING)) {
+      next = ELRYAN_READINESS.MISSING_MAPPING;
+    } else if (statuses.includes(ELRYAN_READINESS.MISSING_REQUIRED_FIELD)) {
+      next = ELRYAN_READINESS.MISSING_REQUIRED_FIELD;
+    } else if (statuses.includes(ELRYAN_READINESS.NOT_READY)) {
+      next = ELRYAN_READINESS.NOT_READY;
+    } else if (statuses.includes(ELRYAN_READINESS.WARRANTY_UNVERIFIED)) {
+      next = ELRYAN_READINESS.WARRANTY_UNVERIFIED;
+    } else if (statuses.includes(ELRYAN_READINESS.PRICING_UNVERIFIED)) {
+      next = ELRYAN_READINESS.PRICING_UNVERIFIED;
+    }
+  }
+  if (list.length > 0 && next === ELRYAN_READINESS.READY) {
+    next = list.some(
+      (blocker) =>
+        blocker.code === "pricing_unverified" || blocker.status === ELRYAN_READINESS.PRICING_UNVERIFIED
+    )
+      ? ELRYAN_READINESS.PRICING_UNVERIFIED
+      : ELRYAN_READINESS.NOT_READY;
+  }
+  const ready = next === ELRYAN_READINESS.READY && list.length === 0;
+  return { readiness: ready ? ELRYAN_READINESS.READY : next, ready, statuses };
 }

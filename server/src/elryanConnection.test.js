@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { after, before, beforeEach, describe, it } from "node:test";
 import express from "express";
 import jwt from "jsonwebtoken";
@@ -15,10 +16,12 @@ import { ElryanValueMapping } from "./models/ElryanValueMapping.js";
 import { decryptApiKey, encryptApiKey } from "./utils/partnerAuth.js";
 import { applyCommissionRate } from "./utils/commission.js";
 import { taxonomyFieldsFor, isTaxonomyComplete } from "./utils/platformTaxonomyFields.js";
-import { validateElryanSku } from "./utils/elryanSku.js";
+import { interpretElryanSkuAvailability, validateElryanSku } from "./utils/elryanSku.js";
 import { assessElryanSellableUnits } from "./utils/elryanVariations.js";
 import { buildElryanProductPayload } from "./utils/elryanPayloadBuilder.js";
-import { validateElryanPreviewParts } from "./utils/elryanValidator.js";
+import { collectElryanImageUrls, resolveElryanImageUrl, verifyElryanPublicImages } from "./utils/elryanImages.js";
+import { publicMediaUrl } from "./utils/commissionExcel.js";
+import { elryanPreviewDecision, validateElryanPreviewParts } from "./utils/elryanValidator.js";
 import { ELRYAN_READINESS, elryanProductWritesEnabled } from "./utils/elryanConstants.js";
 import { joinElryanUrl, setElryanFetch, validateElryanBaseUrl } from "./services/elryanClient.js";
 import { assertNoElryanSecretLeak, sanitizeElryanText } from "./utils/elryanRedact.js";
@@ -160,8 +163,80 @@ describe("Elryan constants and pure helpers", () => {
     assert.equal("cost" in payload, false);
   });
 
-  it("marks pricing unverified when mappings look complete", () => {
-    const result = validateElryanPreviewParts({
+  it("resolves BrownStore images to the public media URL and checks image content", async () => {
+    const relative = "/uploads/products/img-1788957353512-732082698.webp";
+    const expected = publicMediaUrl(relative);
+    const resolved = {
+      variants: [{ images: [{ url: relative }] }],
+      image: relative,
+    };
+    assert.equal(expected, "https://api.brownstore.net/api/media/uploads/products/img-1788957353512-732082698.webp");
+    assert.equal(resolveElryanImageUrl(relative), expected);
+    assert.equal(resolveElryanImageUrl(`/api/media${relative}`), expected);
+    assert.equal(resolveElryanImageUrl(`http://localhost:5173${relative}`), expected);
+    assert.equal(resolveElryanImageUrl(expected), expected);
+    assert.equal(resolveElryanImageUrl("https://cdn.example.com/lamp.jpg"), "https://cdn.example.com/lamp.jpg");
+    assert.equal(resolveElryanImageUrl(""), "");
+    assert.equal(resolveElryanImageUrl("/not-a-product/file.webp"), "");
+
+    const payload = buildElryanProductPayload({
+      resolved,
+      sku: "OWCH180002",
+      origin: "http://localhost:5173",
+      pricing: { proposedElryanPrice: 66250 },
+      quantity: 3,
+    });
+    assert.equal(payload.images[0].fileUrl, expected);
+    assert.equal(payload.images[0].fileUrl, collectElryanImageUrls(resolved)[0]);
+    assert.equal(payload.images[0].fileUrl.includes("localhost"), false);
+    assert.equal("cost" in payload, false);
+
+    const webp = Buffer.concat([Buffer.from("RIFF"), Buffer.from([8, 0, 0, 0]), Buffer.from("WEBP"), Buffer.from("VP8 ")]);
+    const imageResponse = (status, type, body) => ({
+      status,
+      headers: { get: (name) => (String(name).toLowerCase() === "content-type" ? type : null) },
+      async arrayBuffer() {
+        return body;
+      },
+    });
+    assert.equal((await verifyElryanPublicImages([expected], async () => imageResponse(200, "image/webp", webp))).length, 0);
+    assert.equal(
+      (await verifyElryanPublicImages([expected], async () => imageResponse(404, "text/plain", Buffer.from("missing"))))[0].code,
+      "image_unreachable"
+    );
+    assert.equal(
+      (await verifyElryanPublicImages([expected], async () => imageResponse(200, "text/html", Buffer.from("<html>no</html>"))))[0]
+        .code,
+      "image_unreachable"
+    );
+    assert.equal(
+      (await verifyElryanPublicImages(["https://cdn.example.com/lamp.jpg"], async () => {
+        throw new Error("external images are preserved without a fetch");
+      })).length,
+      0
+    );
+
+    const missing = validateElryanPreviewParts({
+      hasApiKey: true,
+      resolved: { name: { en: "A", ar: "ب" } },
+      sku: "OWCH180002",
+      mapping: { categoryId: "340" },
+      brand: { elryanId: "276" },
+      color: { elryanId: "59" },
+      warranty: { elryanCode: "rlbo35igt4" },
+      warrantyCatalog: { checked: true, codes: ["rlbo35igt4"], empty: false, message: "" },
+      attributes: {},
+      requiredAttributeCodes: [],
+      variation: { ok: true, reasons: [] },
+      pricing: { proposedElryanPrice: 66250 },
+      images: [],
+    });
+    assert.equal(missing.ready, false);
+    assert.equal(missing.blockers.some((blocker) => blocker.code === "missing_image"), true);
+  });
+
+  it("accepts a resolved BrownStore price and still blocks an ambiguous one", () => {
+    const resolved = validateElryanPreviewParts({
       hasApiKey: true,
       resolved: { name: { en: "A", ar: "ب" } },
       sku: "SKU-1",
@@ -169,13 +244,73 @@ describe("Elryan constants and pure helpers", () => {
       brand: { elryanId: "b1" },
       color: { elryanId: "c1" },
       warranty: { elryanCode: "W1" },
+      warrantyCatalog: { checked: true, codes: ["W1"], empty: false, message: "" },
       attributes: {},
       requiredAttributeCodes: [],
       variation: { ok: true, reasons: [] },
-      pricing: { proposedElryanPrice: 1000, pricingNote: "unverified" },
+      pricing: { proposedElryanPrice: 1000, pricingNote: "resolved" },
       images: ["https://cdn.example.com/a.jpg"],
     });
-    assert.equal(result.readiness, ELRYAN_READINESS.PRICING_UNVERIFIED);
+    assert.equal(resolved.readiness, ELRYAN_READINESS.READY);
+    assert.equal(resolved.ready, true);
+    assert.equal(resolved.blockers.some((blocker) => blocker.code === "pricing_unverified"), false);
+
+    const ambiguous = validateElryanPreviewParts({
+      hasApiKey: true,
+      resolved: { name: { en: "A", ar: "ب" } },
+      sku: "SKU-1",
+      mapping: { categoryId: "c1" },
+      brand: { elryanId: "b1" },
+      color: { elryanId: "c1" },
+      warranty: { elryanCode: "W1" },
+      warrantyCatalog: { checked: true, codes: ["W1"], empty: false, message: "" },
+      attributes: {},
+      requiredAttributeCodes: [],
+      variation: { ok: true, reasons: [] },
+      pricing: { proposedElryanPrice: null, priceReview: true },
+      images: ["https://cdn.example.com/a.jpg"],
+    });
+    assert.equal(ambiguous.ready, false);
+    assert.equal(ambiguous.blockers.some((blocker) => blocker.code === "price_needs_review"), true);
+  });
+
+  it("keeps READY impossible while any mandatory blocker remains", () => {
+    const priced = elryanPreviewDecision({
+      readiness: ELRYAN_READINESS.READY,
+      blockers: [{ code: "pricing_unverified", status: ELRYAN_READINESS.PRICING_UNVERIFIED }],
+    });
+    assert.equal(priced.ready, false);
+    assert.equal(priced.readiness, ELRYAN_READINESS.PRICING_UNVERIFIED);
+
+    const mapped = elryanPreviewDecision({
+      blockers: [
+        { code: "missing_brand_mapping", status: ELRYAN_READINESS.MISSING_MAPPING },
+        { code: "pricing_unverified", status: ELRYAN_READINESS.PRICING_UNVERIFIED },
+      ],
+    });
+    assert.equal(mapped.ready, false);
+    assert.equal(mapped.readiness, ELRYAN_READINESS.MISSING_MAPPING);
+
+    const clear = elryanPreviewDecision({ readiness: ELRYAN_READINESS.READY, blockers: [] });
+    assert.equal(clear.ready, true);
+    assert.equal(clear.readiness, ELRYAN_READINESS.READY);
+  });
+
+  it("treats data.available true as free and HTTP 409 as taken", () => {
+    const free = interpretElryanSkuAvailability({
+      httpStatus: 200,
+      json: { success: true, data: { available: true }, exists: true },
+    });
+    assert.equal(free.available, true);
+    assert.equal(free.exists, false);
+
+    const taken = interpretElryanSkuAvailability({
+      httpStatus: 409,
+      json: { success: false, error: { code: "CONFLICT", message: "SKU already used" } },
+    });
+    assert.equal(taken.exists, true);
+    assert.equal(taken.available, false);
+    assert.equal(taken.conflict, true);
   });
 });
 
@@ -236,7 +371,13 @@ describe("Elryan connection state and catalog reads", { concurrency: 1 }, () => 
     await ElryanValueMapping.create([
       { kind: "brand", brownKey: "brand-1", elryanId: "elr-brand-1", elryanLabel: "Acme" },
       { kind: "color", brownKey: "black", elryanId: "elr-color-1", elryanLabel: "Black" },
-      { kind: "warranty", brownKey: "default", elryanCode: "W-STD" },
+      {
+        kind: "warranty",
+        brownKey: "staging:brand:brand-1",
+        environment: "staging",
+        warrantyScope: "brand",
+        elryanCode: "W-STD",
+      },
     ]);
   });
 
@@ -392,11 +533,55 @@ describe("Elryan connection state and catalog reads", { concurrency: 1 }, () => 
       body: { productId },
     });
     assert.equal(preview.json.productWritesEnabled, false);
+    assert.equal(preview.json.liveWritesAllowed, false);
+    assert.equal(preview.json.writesGate.productPostCalled, false);
+    assert.notEqual(preview.json.readiness, ELRYAN_READINESS.READY);
+    assert.equal(preview.json.blockers.some((blocker) => blocker.code === "pricing_unverified"), false);
+    assert.equal(preview.json.blockers.some((blocker) => blocker.code === "dimensions_unverified"), true);
     const send = await call("POST", "/api/admin/platforms/elryan/sync-one/send", {
       body: { productId, confirm: true, previewToken: preview.json.previewToken },
     });
     assert.equal(send.status, 403);
     assert.equal(send.json.code, "writes_disabled");
+  });
+
+  it("reads the writes gate without a product post when both flags are enabled", async () => {
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const calls = [];
+    setElryanFetch(async (url, options = {}) => {
+      calls.push(`${String(options.method || "GET").toUpperCase()} ${url}`);
+      throw new Error("writes-gate must not call Elryan");
+    });
+    try {
+      const gate = await call("GET", "/api/admin/platforms/elryan/writes-gate");
+      assert.equal(gate.status, 200);
+      assert.equal(gate.json.productWritesEnabled, true);
+      assert.equal(gate.json.liveWritesAllowed, true);
+      assert.equal(gate.json.productPostCalled, false);
+      assert.equal(calls.length, 0);
+      const source = fs.readFileSync(
+        new URL("../../client/src/components/admin/platform/ElryanSyncOneProduct.jsx", import.meta.url),
+        "utf8"
+      );
+      const probeStart = source.indexOf("async function onProbeWritesGate");
+      const probeEnd = source.indexOf("function onAskSend");
+      const probe = source.slice(probeStart, probeEnd);
+      assert.equal(probe.includes("elryanWritesGate"), true);
+      assert.equal(probe.includes("elryanSyncOneSend"), false);
+      assert.equal(probe.includes("confirm"), false);
+      assert.equal(source.includes("/v1/products"), false);
+      const confirmStart = source.indexOf("async function onConfirmSend");
+      const confirmEnd = source.indexOf("async function onRefreshSendAttempt");
+      const confirmFn = source.slice(confirmStart, confirmEnd);
+      assert.equal(confirmFn.includes("elryanSyncOneSend"), true);
+      assert.match(confirmFn, /confirm:\s*true/);
+      assert.equal(confirmFn.includes("confirm: false"), false);
+    } finally {
+      delete process.env.ELRYAN_PRODUCT_WRITES_ENABLED;
+      delete process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES;
+      setElryanFetch(null);
+    }
   });
 
   it("does not mark authenticated from health alone when categories auth fails", async () => {
@@ -427,6 +612,35 @@ describe("Elryan connection state and catalog reads", { concurrency: 1 }, () => 
       "+stagingApiKeyEnc"
     );
     assert.equal(decryptApiKey(stored.stagingApiKeyEnc), API_KEY);
+  });
+
+  it("sku-exists reports an available SKU as free and a 409 as taken", async () => {
+    await call("PUT", "/api/admin/platforms/elryan/connection", {
+      body: { environment: "staging", apiKey: API_KEY },
+    });
+    mockElryanRouter({
+      other(url) {
+        const target = String(url);
+        if (!target.includes("/v1/products/sku-exists")) return mockResponse(200, { data: { ok: true } });
+        if (target.includes("TAKEN-1")) {
+          return mockResponse(409, {
+            success: false,
+            error: { code: "CONFLICT", message: "SKU already used" },
+          });
+        }
+        return mockResponse(200, { success: true, data: { available: true }, exists: true });
+      },
+    });
+    const free = await call("GET", "/api/admin/platforms/elryan/sku-exists?sku=OWCH180002");
+    assert.equal(free.status, 200);
+    assert.equal(free.json.available, true);
+    assert.equal(free.json.exists, false);
+    assert.equal(free.json.classification, "READ");
+    const taken = await call("GET", "/api/admin/platforms/elryan/sku-exists?sku=TAKEN-1");
+    assert.equal(taken.status, 200);
+    assert.equal(taken.json.exists, true);
+    assert.equal(taken.json.available, false);
+    assert.equal(taken.json.httpStatus, 409);
   });
 
   it("refuses assertNoElryanSecretLeak when a raw key slips in", () => {

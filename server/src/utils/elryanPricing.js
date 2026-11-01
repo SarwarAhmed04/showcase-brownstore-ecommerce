@@ -1,24 +1,82 @@
+import crypto from "crypto";
 import { Commission } from "../models/Commission.js";
-import { applyCommissionRate, resolveCommissionRate, winningCommission } from "./commission.js";
+import { resolveCommissionRate, winningCommission } from "./commission.js";
 import { partnerPricePreview } from "./partnerCatalog.js";
 import { toResolvedProduct } from "./productView.js";
 import { ELRYAN_READINESS } from "./elryanConstants.js";
 
 /**
- * BrownStore platform price only — never invents Elryan cost/net.
- * Proposed Elryan field: `price` = platformPrice; `cost` left unset until Elryan confirms semantics.
+ * Outgoing Elryan `price` is the BrownStore selling price after Elryan-only
+ * commission rules and the existing 250 IQD rounding. `cost` stays omitted.
+ * Elryan's marketplace commission is not added to the price.
+ */
+export const ELRYAN_PRICING_NOTE =
+  "Outgoing price comes from the BrownStore selling price and Elryan commission rules only, using the existing 250 IQD rounding. If no Elryan rule applies, the rounded selling price is sent. cost is omitted. Elryan marketplace commission and vendor payout are not added and are not required.";
+
+export const ELRYAN_PACKAGE_DIMENSIONS_NOTE =
+  "UNVERIFIED. Create lets width, height, and depth fall back to the category minimum. A category without a minimum makes all three required. Category responses do not include those minimums, so dimensions are not invented and are not treated as universally required.";
+
+export function elryanCommissionRules(rules) {
+  return (rules || []).filter((rule) => rule && rule.partner === "elryan" && rule.isActive !== false);
+}
+
+export function elryanPricingSource(rules, winningRule) {
+  const fingerprint = elryanCommissionRules(rules)
+    .map((rule) => ({
+      id: String(rule._id || ""),
+      scope: String(rule.scope || ""),
+      targetId: String(rule.targetId || ""),
+      percentage: Number(rule.percentage),
+      updatedAt: rule.updatedAt ? new Date(rule.updatedAt).toISOString() : "",
+    }))
+    .sort((left, right) =>
+      `${left.id}|${left.scope}|${left.targetId}`.localeCompare(`${right.id}|${right.scope}|${right.targetId}`)
+    );
+  const applied =
+    winningRule && winningRule.partner === "elryan"
+      ? {
+          id: String(winningRule._id || ""),
+          scope: String(winningRule.scope || ""),
+          targetId: String(winningRule.targetId || ""),
+          percentage: Number(winningRule.percentage),
+        }
+      : null;
+  return { partner: "elryan", applied, rules: fingerprint };
+}
+
+/** Binds the Elryan body to the BrownStore rules that produced it. The body itself is unchanged. */
+export function elryanOutboundPriceHash(payload, pricingSource) {
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        payload: payload || {},
+        pricingSource: pricingSource || { partner: "elryan", applied: null, rules: [] },
+      })
+    )
+    .digest("hex");
+}
+
+/**
+ * BrownStore selling price plus Elryan commission rules only.
+ * Proposed Elryan field: `price`. `cost` stays omitted.
  */
 export async function buildElryanPricingView(productDoc, { commissionRules } = {}) {
-  const rules = commissionRules || (await Commission.find({}).lean());
+  const loaded =
+    commissionRules || (await Commission.find({ partner: "elryan", isActive: { $ne: false } }).lean());
+  const rules = elryanCommissionRules(loaded);
   const resolved = toResolvedProduct(productDoc);
   const preview = partnerPricePreview(productDoc, rules);
   const rule = winningCommission(productDoc, rules);
   const rate = resolveCommissionRate(productDoc, rules);
+  const pricingSource = elryanPricingSource(rules, rule);
   if (resolved?.priceReview || preview.priceReview) {
     return {
       storeSellingPrice: null,
       commissionRate: rate,
       commission: preview.commission,
+      commissionScope: rule?.scope || null,
+      commissionTargetId: rule?.targetId || null,
       winningScope: rule?.scope || null,
       rawPrice: null,
       platformPrice: null,
@@ -26,29 +84,31 @@ export async function buildElryanPricingView(productDoc, { commissionRules } = {
       proposedElryanCost: null,
       priceReview: true,
       priceReviewReason: resolved?.priceReviewReason || preview.priceReviewReason || "missing_regular_price",
-      pricingStatus: ELRYAN_READINESS.PRICING_UNVERIFIED,
-      pricingNote: "The original IBSHER regular price is missing or ambiguous, so no Elryan price is proposed.",
+      pricingStatus: ELRYAN_READINESS.NOT_READY,
+      pricingNote: "The BrownStore selling price is missing or ambiguous, so no Elryan price is sent.",
+      pricingSource,
       elryanCommissionInvestigation: null,
     };
   }
-  const platformPrice = applyCommissionRate(resolved?.sellingPrice, rate);
-
+  const pricingNote = rule
+    ? "Outgoing price is the BrownStore selling price plus the Elryan commission rule, rounded with the existing 250 IQD step. cost is omitted. Elryan marketplace commission is not added."
+    : "No Elryan commission rule applies. Outgoing price is the BrownStore selling price after the existing 250 IQD rounding. cost is omitted. Elryan marketplace commission is not added.";
   return {
     storeSellingPrice: Number(resolved?.sellingPrice) || 0,
     commissionRate: rate,
     commission: preview.commission,
+    commissionScope: rule?.scope || null,
+    commissionTargetId: rule?.targetId || null,
     winningScope: rule?.scope || null,
     rawPrice: preview.rawPrice,
-    platformPrice,
-    /** Documented Elryan customer-facing amount — proposed, not confirmed with Elryan net math. */
-    proposedElryanPrice: platformPrice > 0 ? platformPrice : null,
-    /** Intentionally null — do not fabricate vendor net / cost. */
+    platformPrice: preview.price,
+    proposedElryanPrice: preview.price > 0 ? preview.price : null,
     proposedElryanCost: null,
     priceReview: false,
     priceReviewReason: "",
-    pricingStatus: ELRYAN_READINESS.PRICING_UNVERIFIED,
-    pricingNote:
-      "BrownStore platform price is proposed as Elryan `price`. Elryan `cost` / marketplace commission relationship is not confirmed; cost is omitted and readiness stays PRICING_UNVERIFIED.",
+    pricingStatus: "RESOLVED",
+    pricingNote,
+    pricingSource,
     elryanCommissionInvestigation: null,
   };
 }
@@ -57,6 +117,5 @@ export function attachCommissionInvestigation(pricingView, investigation) {
   return {
     ...pricingView,
     elryanCommissionInvestigation: investigation || null,
-    pricingStatus: ELRYAN_READINESS.PRICING_UNVERIFIED,
   };
 }

@@ -7,7 +7,12 @@ import {
   signGiniRequest,
 } from "../utils/giniSigner.js";
 import { GiniConnection } from "../models/GiniConnection.js";
-import { normalizeGiniCategories } from "../utils/giniCategoryTree.js";
+import {
+  GINI_CATEGORY_PAGE_LIMIT,
+  giniCategoryNextQuery,
+  mergeGiniCategoryPayloads,
+  normalizeGiniCategories,
+} from "../utils/giniCategoryTree.js";
 
 export const GINI_DEFAULT_BASE_URL = "https://merchant.gini.iq";
 export const GINI_OFFICIAL_HOSTS = Object.freeze(["merchant.gini.iq", "app.gini.iq"]);
@@ -309,7 +314,7 @@ function retryAfterSeconds(response) {
   return null;
 }
 
-async function giniGet(baseUrl, path, { clientId, clientSecret, timeoutMs }) {
+async function giniGet(baseUrl, path, { clientId, clientSecret, timeoutMs, query = "" }) {
   const timestamp = giniTimestampSeconds();
   const signed = signGiniRequest({
     method: "GET",
@@ -326,7 +331,7 @@ async function giniGet(baseUrl, path, { clientId, clientSecret, timeoutMs }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(`${baseUrl}${signed.path}`, {
+    const response = await fetchImpl(`${baseUrl}${signed.path}${query || ""}`, {
       method: "GET",
       headers,
       redirect: "manual",
@@ -437,13 +442,34 @@ export async function fetchGiniCategoryTree() {
   if (current.status !== "connected" || !config.baseUrl || !config.clientId || !config.clientSecret) {
     return { connectionRequired: true, categories: [] };
   }
-  const response = await giniGet(config.baseUrl, GINI_CATEGORIES_PATH, {
-    clientId: config.clientId,
-    clientSecret: config.clientSecret,
-    timeoutMs: DEFAULT_TIMEOUT_MS,
-  });
-  const normalized = normalizeGiniCategories(response.json);
-  if (response.status !== 200 || !normalized.ok) {
+  const payloads = [];
+  let query = "";
+  for (let page = 1; page <= GINI_CATEGORY_PAGE_LIMIT; page += 1) {
+    const response = await giniGet(config.baseUrl, GINI_CATEGORIES_PATH, {
+      clientId: config.clientId,
+      clientSecret: config.clientSecret,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+      query,
+    });
+    if (response.status !== 200) {
+      throw new GiniConnectionError("Could not load GINI categories.", {
+        status: 400,
+        code: "categories_unavailable",
+      });
+    }
+    payloads.push(response.json);
+    const next = giniCategoryNextQuery(response.json, page);
+    if (!next) break;
+    if (page === GINI_CATEGORY_PAGE_LIMIT) {
+      throw new GiniConnectionError("Could not load GINI categories.", {
+        status: 400,
+        code: "categories_unavailable",
+      });
+    }
+    query = next;
+  }
+  const normalized = normalizeGiniCategories(mergeGiniCategoryPayloads(payloads));
+  if (!normalized.ok) {
     throw new GiniConnectionError("Could not load GINI categories.", {
       status: 400,
       code: "categories_unavailable",

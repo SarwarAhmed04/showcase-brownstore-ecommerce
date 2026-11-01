@@ -1,5 +1,17 @@
 import { ElryanValueMapping } from "../models/ElryanValueMapping.js";
 import { assertVerifiedElryanValueIdForMapping } from "../utils/elryanAttributeValues.js";
+import {
+  elryanWarrantyStorageKey,
+  explicitElryanProductWarrantyKey,
+  elryanBrandWarrantySubject,
+  normalizeElryanWarrantyEnvironment,
+  resolveElryanWarrantyFromRows,
+} from "../utils/elryanWarrantyResolve.js";
+import {
+  elryanScopedValueStorageKey,
+  resolveElryanScopedValue,
+} from "../utils/elryanValueResolve.js";
+import { normalizeElryanMappingEnvironment } from "../utils/elryanTaxonomyMapping.js";
 import { ElryanClientError } from "./elryanClient.js";
 import {
   elryanAttributeSupportsValueList,
@@ -46,11 +58,29 @@ export async function upsertElryanValueMapping(input = {}) {
   const elryanCode = normalizeKey(input.elryanCode);
   let elryanLabel = normalizeKey(input.elryanLabel);
 
+  let storedKey = brownKey;
+  let environment = "";
+  let warrantyScope = "";
   if (kind === "warranty") {
     if (!elryanCode) {
       const error = new Error("warranty mapping requires elryanCode");
       error.status = 400;
       error.code = "warranty_code_required";
+      throw error;
+    }
+    warrantyScope = input.warrantyScope === "brand" ? "brand" : "product";
+    environment = normalizeElryanWarrantyEnvironment(input.environment);
+    storedKey = elryanWarrantyStorageKey({
+      environment,
+      scope: warrantyScope,
+      subject: brownKey,
+    });
+    if (!storedKey) {
+      const error = new Error(
+        "Warranty mappings need a product warranty key or a BrownStore brand id. The universal key \"default\" is not allowed."
+      );
+      error.status = 400;
+      error.code = "warranty_default_rejected";
       throw error;
     }
     elryanId = "";
@@ -75,18 +105,32 @@ export async function upsertElryanValueMapping(input = {}) {
     if (!elryanLabel && verified.value.name) {
       elryanLabel = verified.value.name;
     }
+    environment = normalizeElryanMappingEnvironment(input.environment);
+    storedKey = elryanScopedValueStorageKey({ environment, subject: brownKey });
+    if (!storedKey) {
+      const error = new Error("brownKey is required");
+      error.status = 400;
+      error.code = "brown_key_required";
+      throw error;
+    }
+  }
+
+  const update = {
+    brownLabel: normalizeKey(input.brownLabel),
+    elryanId,
+    elryanCode,
+    elryanLabel,
+  };
+  if (kind === "warranty") {
+    update.environment = environment;
+    update.warrantyScope = warrantyScope;
+  } else {
+    update.environment = environment;
   }
 
   return ElryanValueMapping.findOneAndUpdate(
-    { kind, brownKey },
-    {
-      $set: {
-        brownLabel: normalizeKey(input.brownLabel),
-        elryanId,
-        elryanCode,
-        elryanLabel,
-      },
-    },
+    { kind, brownKey: storedKey },
+    { $set: update },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   ).lean();
 }
@@ -96,21 +140,34 @@ export async function deleteElryanValueMapping(kind, brownKey) {
   return { ok: true };
 }
 
-export async function findElryanBrandMapping(brandId) {
+export async function findElryanBrandMapping(brandId, environment = "staging") {
   const key = normalizeKey(brandId);
   if (!key) return null;
-  return ElryanValueMapping.findOne({ kind: "brand", brownKey: key }).lean();
+  const rows = await ElryanValueMapping.find({ kind: "brand" }).lean();
+  return resolveElryanScopedValue(rows, { environment, subject: key })?.row || null;
 }
 
-export async function findElryanColorMapping(colorKey) {
+export async function findElryanColorMapping(colorKey, environment = "staging") {
   const key = normalizeKey(colorKey).toLowerCase();
   if (!key) return null;
-  return ElryanValueMapping.findOne({ kind: "color", brownKey: key }).lean();
+  const rows = await ElryanValueMapping.find({ kind: "color" }).lean();
+  return resolveElryanScopedValue(rows, { environment, subject: key })?.row || null;
 }
 
-export async function findElryanWarrantyMapping(warrantyKey = "default") {
-  const key = normalizeKey(warrantyKey) || "default";
+export async function findElryanWarrantyMapping(warrantyKey = "") {
+  const key = normalizeKey(warrantyKey);
+  if (!key || key.toLowerCase() === "default") return null;
   return ElryanValueMapping.findOne({ kind: "warranty", brownKey: key }).lean();
+}
+
+/** Product warranty key first, then this brand's environment-specific mapping. Never "default". */
+export async function resolveElryanWarrantyForProduct(doc, environment) {
+  const rows = await ElryanValueMapping.find({ kind: "warranty" }).lean();
+  return resolveElryanWarrantyFromRows(rows, {
+    environment,
+    explicitKey: explicitElryanProductWarrantyKey(doc),
+    brandId: elryanBrandWarrantySubject(doc),
+  });
 }
 
 export function brownColourKeyFromResolved(resolved, variation) {
@@ -126,13 +183,7 @@ export function brownColourKeyFromResolved(resolved, variation) {
   return String(colour).trim().toLowerCase();
 }
 
+/** @deprecated Prefer explicitElryanProductWarrantyKey. "default" means no explicit key. */
 export function brownWarrantyKeyFromProduct(doc) {
-  const warranty = doc?.warranty;
-  if (warranty == null) return "default";
-  if (typeof warranty === "string" && warranty.trim()) return warranty.trim().toLowerCase();
-  if (typeof warranty === "object") {
-    const code = warranty.code || warranty.id || warranty._id || warranty.period;
-    if (code != null && String(code).trim()) return String(code).trim().toLowerCase();
-  }
-  return "default";
+  return explicitElryanProductWarrantyKey(doc) || "default";
 }

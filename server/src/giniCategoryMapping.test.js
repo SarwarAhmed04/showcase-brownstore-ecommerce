@@ -18,8 +18,11 @@ import {
   applyCategoryChange,
   applySubcategoryChange,
   categoryOptions,
+  giniCategoryNextQuery,
+  giniChoiceDisabled,
   giniMappingStatus,
   giniMappingValues,
+  mergeGiniCategoryPayloads,
   normalizeGiniCategories,
   subcategoryOptions,
   summarizeGiniStatuses,
@@ -112,10 +115,25 @@ function installGiniReads(body = LIVE_TREE) {
 const categories = normalizeGiniCategories(LIVE_TREE).categories;
 
 describe("GINI category tree rules", () => {
-  it("keeps only active categories and the active subcategories of the selected category", () => {
-    assert.deepEqual(categoryOptions(categories, "").map((category) => category.id), [1]);
-    assert.deepEqual(subcategoryOptions(categories, "1", "").map((sub) => sub.id), [10]);
-    assert.equal(subcategoryOptions(categories, "1", "").some((sub) => sub.id === 11), false);
+  it("lists every category and the subcategories of the selected parent, including inactive rows", () => {
+    assert.deepEqual(
+      categoryOptions(categories, "").map((category) => category.id),
+      [1, 2]
+    );
+    assert.deepEqual(
+      subcategoryOptions(categories, "1", "").map((sub) => sub.id),
+      [10, 11]
+    );
+    assert.deepEqual(
+      subcategoryOptions(categories, "2", "").map((sub) => sub.id),
+      [20]
+    );
+    assert.equal(subcategoryOptions(categories, "2", "").some((sub) => sub.id === 10), false);
+    assert.deepEqual(subcategoryOptions(categories, "", ""), []);
+    assert.equal(giniChoiceDisabled(categories[0], "", false), false);
+    assert.equal(giniChoiceDisabled(categories[1], "", false), false);
+    assert.equal(giniChoiceDisabled(categories[0].subcategories[1], "", true), true);
+    assert.equal(giniChoiceDisabled(categories[0].subcategories[1], "11", true), false);
   });
 
   it("clears the subcategory when the category changes", () => {
@@ -155,11 +173,121 @@ describe("GINI category tree rules", () => {
     assert.equal(giniMappingStatus({ categoryId: "1", subcategoryId: "999" }, categories), "invalid");
     assert.equal(giniMappingStatus({ categoryId: "1", subcategoryId: "11" }, categories), "inactive");
     assert.equal(giniMappingStatus({ categoryId: "2", subcategoryId: "20" }, categories), "inactive");
-    const legacy = subcategoryOptions(categories, "1", "11");
-    assert.equal(legacy.find((sub) => String(sub.id) === "11").legacy, true);
-    assert.equal(categoryOptions(categories, "2").some((category) => category.legacy && String(category.id) === "2"), true);
+    assert.throws(
+      () => giniMappingValues(categories, { categoryId: "2", subcategoryId: "20" }),
+      /Inactive/
+    );
+    assert.throws(
+      () => giniMappingValues(categories, { categoryId: "1", subcategoryId: "11" }),
+      /Inactive/
+    );
+    const legacy = subcategoryOptions(categories, "1", "999");
+    assert.equal(legacy.find((sub) => String(sub.id) === "999").legacy, true);
+    assert.equal(legacy.some((sub) => String(sub.id) === "11" && sub.legacy), false);
+    assert.equal(giniChoiceDisabled(legacy.find((sub) => String(sub.id) === "999"), "", false), true);
+    assert.equal(categoryOptions(categories, "2").some((category) => category.legacy), false);
+    assert.equal(
+      categoryOptions(categories, "999").some((category) => category.legacy && String(category.id) === "999"),
+      true
+    );
     const counts = summarizeGiniStatuses(["configured", "missing", "invalid", "inactive"]);
     assert.deepEqual(counts, { total: 4, configured: 1, missing: 1, invalid: 1, inactive: 1 });
+  });
+
+  it("keeps inactive official categories and does not drop them during normalization", () => {
+    const raw = {
+      data: [
+        null,
+        { name: "missing id", is_active: 1, subcategories: [] },
+        {
+          id: 4,
+          name: "اكسسوارات",
+          slug: "accessories",
+          is_active: 0,
+          subcategories: [{ name: "missing sub id", is_active: 1 }],
+        },
+        { id: 6, name: "منزلية", slug: "household", is_active: 0 },
+        { id: 10, name: "قراءة", slug: "reading", is_active: "0", subcategories: [] },
+        { id: 18, name: "إطفاء", slug: "fire", is_active: 0, subcategories: [] },
+        {
+          id: 1,
+          name: "Home",
+          slug: "home",
+          is_active: 1,
+          subcategories: [{ id: 30, name: "Active child", slug: "active-child", is_active: 1 }],
+        },
+      ],
+    };
+    const normalized = normalizeGiniCategories(raw);
+    assert.equal(normalized.ok, true);
+    assert.equal(raw.data.length, 7);
+    assert.equal(normalized.categories.length, 5);
+    assert.deepEqual(
+      normalized.categories.map((category) => [category.id, category.name, category.isActive]),
+      [
+        [4, "اكسسوارات", false],
+        [6, "منزلية", false],
+        [10, "قراءة", false],
+        [18, "إطفاء", false],
+        [1, "Home", true],
+      ]
+    );
+    const displayed = categoryOptions(normalized.categories, "");
+    assert.equal(displayed.length, normalized.categories.length);
+    assert.deepEqual(
+      displayed.map((category) => category.name),
+      ["اكسسوارات", "منزلية", "قراءة", "إطفاء", "Home"]
+    );
+    assert.deepEqual(subcategoryOptions(normalized.categories, "4", "").map((sub) => sub.id), []);
+    assert.deepEqual(subcategoryOptions(normalized.categories, "18", "").map((sub) => sub.name), []);
+    assert.deepEqual(subcategoryOptions(normalized.categories, "1", "").map((sub) => sub.id), [30]);
+    assert.equal(subcategoryOptions(normalized.categories, "6", "30").some((sub) => sub.id === 30 && !sub.legacy), false);
+    const saved = subcategoryOptions(normalized.categories, "4", "");
+    assert.equal(saved.length, 0);
+    assert.throws(
+      () => giniMappingValues(normalized.categories, { categoryId: "18", subcategoryId: "30" }),
+      /not in the current category tree/
+    );
+    assert.throws(
+      () => giniMappingValues(normalized.categories, { categoryId: "4", subcategoryId: "30" }),
+      /not in the current category tree/
+    );
+  });
+
+  it("follows a paged category payload without mixing or duplicating parents", () => {
+    assert.equal(giniCategoryNextQuery({ data: [] }, 1), "");
+    assert.equal(giniCategoryNextQuery({ data: [], meta: { last_page: 1 } }, 1), "");
+    assert.equal(giniCategoryNextQuery({ data: [], meta: { last_page: 2 } }, 1), "?page=2");
+    assert.equal(giniCategoryNextQuery({ data: [], links: { next: "https://merchant.gini.iq/next" } }, 1), "?page=2");
+    assert.equal(giniCategoryNextQuery({ data: [], meta: { last_page: 2 } }, 2), "");
+    const merged = mergeGiniCategoryPayloads([
+      {
+        data: [
+          {
+            id: 1,
+            name: "Home",
+            is_active: 1,
+            subcategories: [{ id: 10, name: "Blenders", is_active: 1 }],
+          },
+        ],
+        meta: { last_page: 2 },
+      },
+      {
+        data: [
+          { id: 1, name: "Home duplicate", is_active: 0, subcategories: [] },
+          { id: 102, name: "Second page", is_active: 0, subcategories: [] },
+        ],
+      },
+    ]);
+    const normalized = normalizeGiniCategories(merged);
+    assert.deepEqual(
+      normalized.categories.map((category) => [category.id, category.name, category.subcategories.length]),
+      [
+        [1, "Home", 1],
+        [102, "Second page", 0],
+      ]
+    );
+    assert.equal(mergeGiniCategoryPayloads([{ data: [{ id: 4, name: "اكسسوارات" }] }]).data[0].name, "اكسسوارات");
   });
 });
 
@@ -249,6 +377,71 @@ describe("GINI live category mapping", { concurrency: 1 }, () => {
     const stored = await GiniConnection.findOne({ singletonKey: "default" }).lean();
     assert.equal(stored.categories, undefined);
     assert.equal(JSON.stringify(stored).includes("Blenders"), false);
+  });
+
+  it("reads every category page when the official response is paginated", async () => {
+    const urls = [];
+    setGiniFetch(async (url, options = {}) => {
+      const method = String(options.method || "GET").toUpperCase();
+      if (method !== "GET") throw new Error(`GINI write attempted: ${method} ${url}`);
+      urls.push(String(url));
+      if (String(url).endsWith(GINI_PING_PATH)) return mockResponse(200, { data: { ok: true } });
+      const page = new URL(String(url)).searchParams.get("page");
+      if (page === "2") {
+        return mockResponse(200, {
+          data: [
+            {
+              id: 102,
+              name: "Second page",
+              slug: "second",
+              is_active: 0,
+              subcategories: [{ id: 202, name: "Second child", slug: "second-child", is_active: 0 }],
+            },
+          ],
+          meta: { current_page: 2, last_page: 2 },
+        });
+      }
+      if (String(url).split("?")[0].endsWith(GINI_CATEGORIES_PATH)) {
+        return mockResponse(200, {
+          data: [
+            {
+              id: 1,
+              name: "Home",
+              slug: "home",
+              is_active: 1,
+              subcategories: [{ id: 10, name: "Blenders", slug: "blenders", is_active: 1 }],
+            },
+          ],
+          meta: { current_page: 1, last_page: 2 },
+          links: { next: "https://merchant.gini.iq/api/v2.0/third-party/categories?page=2" },
+        });
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    await call("PUT", "/api/admin/platforms/gini/connection", {
+      body: { baseUrl: GINI_DEFAULT_BASE_URL, clientId: CLIENT_ID, clientSecret: SECRET },
+    });
+    await call("POST", "/api/admin/platforms/gini/connection/test", {
+      body: { baseUrl: GINI_DEFAULT_BASE_URL, clientId: CLIENT_ID, clientSecret: SECRET },
+    });
+    urls.length = 0;
+    const loaded = await call("GET", "/api/admin/platforms/gini/categories");
+    assert.equal(loaded.status, 200);
+    assert.deepEqual(
+      loaded.json.categories.map((category) => [category.id, category.name, category.isActive]),
+      [
+        [1, "Home", true],
+        [102, "Second page", false],
+      ]
+    );
+    assert.equal(loaded.json.categories[1].subcategories[0].isActive, false);
+    assert.equal(loaded.json.categories[1].subcategories[0].name, "Second child");
+    assert.equal(urls.filter((url) => url.includes(GINI_CATEGORIES_PATH)).length, 2);
+    assert.equal(urls.some((url) => url.includes("page=2")), true);
+    const displayed = categoryOptions(loaded.json.categories, "");
+    assert.deepEqual(displayed.map((category) => category.id), [1, 102]);
+    assert.deepEqual(subcategoryOptions(loaded.json.categories, "102", "").map((sub) => sub.id), [202]);
+    assert.deepEqual(subcategoryOptions(loaded.json.categories, "1", "").map((sub) => sub.id), [10]);
   });
 
   it("does not save a GINI mapping when the API is not connected", async () => {
@@ -347,6 +540,9 @@ describe("GINI live category mapping", { concurrency: 1 }, () => {
     );
     assert.match(panel, /applyCategoryChange/);
     assert.match(panel, /subcategoryOptions/);
+    assert.match(panel, /giniChoiceDisabled/);
+    assert.match(panel, /giniNoSubcategories/);
+    assert.match(panel, /giniStatusInactive/);
     assert.match(panel, /giniCategories\(\{ refresh: true \}\)/);
     assert.match(panel, /giniConnectFirst/);
     assert.equal(panel.includes("fuzz"), false);

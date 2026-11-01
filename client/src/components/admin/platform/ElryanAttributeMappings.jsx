@@ -15,6 +15,7 @@ const EMPTY = {
   elryanId: "",
   elryanCode: "",
   elryanLabel: "",
+  warrantyScope: "product",
 };
 
 export default function ElryanAttributeMappings({ t }) {
@@ -45,9 +46,11 @@ export default function ElryanAttributeMappings({ t }) {
   }, [form.elryanId, form.kind]);
 
   const needsValueId = form.kind === "brand" || form.kind === "color";
+  const warrantyKeyIsDefault = form.kind === "warranty" && form.brownKey.trim().toLowerCase() === "default";
   const canSave =
     !busy &&
     form.brownKey.trim() &&
+    !warrantyKeyIsDefault &&
     (form.kind === "warranty"
       ? Boolean(form.elryanCode.trim())
       : Boolean(form.elryanId.trim()) && idVerified);
@@ -208,12 +211,34 @@ export default function ElryanAttributeMappings({ t }) {
             <option value="warranty">Warranty</option>
           </select>
         </div>
+        {form.kind === "warranty" ? (
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-brown/50">Warranty scope</label>
+            <select
+              className={CONTROL}
+              value={form.warrantyScope}
+              onChange={(event) => setForm((prev) => ({ ...prev, warrantyScope: event.target.value }))}
+            >
+              <option value="product">Product warranty key</option>
+              <option value="brand">BrownStore brand id</option>
+            </select>
+          </div>
+        ) : null}
         <div>
-          <label className="mb-1 block text-xs font-semibold text-brown/50">{t.elryanBrownKey}</label>
+          <label className="mb-1 block text-xs font-semibold text-brown/50">
+            {form.kind === "warranty" && form.warrantyScope === "brand"
+              ? "BrownStore brand id"
+              : t.elryanBrownKey}
+          </label>
           <input
             className={CONTROL}
             value={form.brownKey}
             onChange={(event) => setForm((prev) => ({ ...prev, brownKey: event.target.value }))}
+            placeholder={
+              form.kind === "warranty" && form.warrantyScope === "brand"
+                ? "BrownStore brand _id"
+                : ""
+            }
             required
           />
         </div>
@@ -262,6 +287,18 @@ export default function ElryanAttributeMappings({ t }) {
             onChange={(event) => setForm((prev) => ({ ...prev, elryanLabel: event.target.value }))}
           />
         </div>
+        {form.kind === "warranty" ? (
+          <p className="md:col-span-2 text-xs text-amber-900">
+            Brand warranties apply only to that BrownStore brand. The key default is rejected. The
+            code is stored for the active Elryan environment only, so a Staging code is not reused
+            in Production.
+          </p>
+        ) : (
+          <p className="md:col-span-2 text-xs text-amber-900">
+            Brand and colour mappings are stored for the active Elryan environment. A Staging id is
+            not used when the connection is Production. Existing unprefixed rows are left in place.
+          </p>
+        )}
         <div className="md:col-span-2 flex flex-wrap gap-2">
           <button type="submit" className={BUTTON} disabled={!canSave}>
             {busy ? t.loading : t.save}
@@ -379,11 +416,14 @@ export default function ElryanAttributeMappings({ t }) {
           >
             <div>
               <p className="font-semibold text-brown">
-                {row.kind}: {row.brownLabel || row.brownKey}
+                {row.kind}
+                {row.warrantyScope ? ` · ${row.warrantyScope}` : ""}
+                {row.environment ? ` · ${row.environment}` : ""}: {row.brownLabel || row.brownKey}
               </p>
               <p className="text-xs text-brown/50">
                 → {row.elryanLabel || row.elryanCode || row.elryanId}
                 {row.elryanId ? ` · id ${row.elryanId}` : ""}
+                {row.elryanCode ? ` · code ${row.elryanCode}` : ""}
               </p>
             </div>
             <button

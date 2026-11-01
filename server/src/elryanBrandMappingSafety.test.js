@@ -280,6 +280,8 @@ describe("Elryan Brand/list verification (mocked)", () => {
     assert.equal(saved.status, 200);
     assert.equal(saved.json.mapping.elryanId, "10104");
     assert.equal(saved.json.mapping.elryanLabel, "ingco");
+    assert.equal(saved.json.mapping.environment, "staging");
+    assert.equal(saved.json.mapping.brownKey, "staging:ingco");
   });
 
   it("blocks save when verification fails (id/name mismatch)", async () => {

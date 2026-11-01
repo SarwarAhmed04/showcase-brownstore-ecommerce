@@ -97,11 +97,18 @@ describe("IBSHER regular price", () => {
     assert.equal(miswag.pricing.storePrice, 333000);
     assert.equal(miswag.errors.includes("price_needs_review"), false);
     assert.equal(elryan.storeSellingPrice, 333000);
-    assert.equal(elryan.rawPrice, 366300);
-    assert.equal(elryan.platformPrice, 366500);
-    assert.equal(elryan.proposedElryanPrice, 366500);
+    assert.equal(elryan.commissionRate, 0);
+    assert.equal(elryan.rawPrice, 333000);
+    assert.equal(elryan.platformPrice, 333000);
+    assert.equal(elryan.proposedElryanPrice, 333000);
     assert.equal(elryan.proposedElryanCost, null);
-    assert.equal(elryanPayload.price, 366500);
+    assert.equal(elryanPayload.price, 333000);
+    const elryanRuled = await buildElryanPricingView(product, {
+      commissionRules: RULES.map((rule) => ({ ...rule, partner: "elryan" })),
+    });
+    assert.equal(elryanRuled.storeSellingPrice, 333000);
+    assert.equal(elryanRuled.commissionRate, 10);
+    assert.equal(elryanRuled.proposedElryanPrice, 366500);
     assert.equal(applyCommissionRate(333000, 10), 366500);
     assert.equal(product.discountPrice, 273000);
   });

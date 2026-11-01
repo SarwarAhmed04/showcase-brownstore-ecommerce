@@ -15,6 +15,10 @@ const elryanValueMappingSchema = new mongoose.Schema(
     elryanId: { type: String, default: "" },
     elryanCode: { type: String, default: "" },
     elryanLabel: { type: String, default: "" },
+    /** Staging or production. Empty on legacy unprefixed rows. */
+    environment: { type: String, default: "" },
+    /** "product" or "brand" for warranty rows. Empty otherwise. */
+    warrantyScope: { type: String, default: "" },
   },
   { timestamps: true }
 );

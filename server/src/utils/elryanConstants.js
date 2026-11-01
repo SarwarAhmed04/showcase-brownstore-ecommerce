@@ -64,6 +64,10 @@ export function elryanProductWritesEnabled() {
   return String(process.env.ELRYAN_PRODUCT_WRITES_ENABLED || "").trim().toLowerCase() === "true";
 }
 
+export function elryanLiveProductWritesEnabled() {
+  return String(process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES || "").trim().toLowerCase() === "true";
+}
+
 export function elryanEnvironmentConfig(environment) {
   const key = String(environment || ELRYAN_DEFAULT_ENVIRONMENT).trim().toLowerCase();
   return ELRYAN_ENVIRONMENTS[key] || ELRYAN_ENVIRONMENTS[ELRYAN_DEFAULT_ENVIRONMENT];
@@ -75,6 +79,7 @@ export const ELRYAN_READINESS = Object.freeze({
   MISSING_MAPPING: "MISSING_MAPPING",
   MISSING_REQUIRED_FIELD: "MISSING_REQUIRED_FIELD",
   PRICING_UNVERIFIED: "PRICING_UNVERIFIED",
+  WARRANTY_UNVERIFIED: "WARRANTY_UNVERIFIED",
   API_ACCESS_PENDING: "API_ACCESS_PENDING",
 });
 

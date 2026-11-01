@@ -7,6 +7,7 @@ import ElryanAttributeMappings from "./ElryanAttributeMappings";
 import ElryanCatalogBrowse from "./ElryanCatalogBrowse";
 import ElryanSmartMapping from "./ElryanSmartMapping";
 import ElryanPanelErrorBoundary from "./ElryanPanelErrorBoundary";
+import ElryanSyncAll from "./ElryanSyncAll";
 import ElryanSyncOneProduct from "./ElryanSyncOneProduct";
 
 export function elryanPlatformSections() {
@@ -16,6 +17,7 @@ export function elryanPlatformSections() {
     ["elryanSmartMapping", "elryanSmartMappingTitle"],
     ["elryanAttributes", "elryanAttributesTitle"],
     ["syncOne", "elryanSyncOneTitle"],
+    ["syncAll", "elryanSyncAllTitle"],
   ];
 }
 
@@ -48,6 +50,13 @@ export default function ElryanPlatformHost({ tab, partnerSlug, t, lang }) {
     return (
       <ElryanPanelErrorBoundary t={t}>
         <ElryanSyncOneProduct t={t} lang={lang} />
+      </ElryanPanelErrorBoundary>
+    );
+  }
+  if (tab === "syncAll") {
+    return (
+      <ElryanPanelErrorBoundary t={t}>
+        <ElryanSyncAll t={t} />
       </ElryanPanelErrorBoundary>
     );
   }

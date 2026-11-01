@@ -1,5 +1,8 @@
 import { validateElryanSku } from "./elryanSku.js";
 import { ELRYAN_TITLE_MAX } from "./elryanConstants.js";
+import { collectElryanImageUrls } from "./elryanImages.js";
+
+export { collectElryanImageUrls };
 
 function clip(value, max) {
   const text = String(value || "").trim();
@@ -7,33 +10,9 @@ function clip(value, max) {
   return text.length <= max ? text : text.slice(0, max);
 }
 
-function absolutize(origin, url) {
-  const raw = String(url || "").trim();
-  if (!raw) return "";
-  if (raw.startsWith("http://") || raw.startsWith("https://")) return raw;
-  const path = raw.startsWith("/") ? raw : `/${raw}`;
-  return `${String(origin || "").replace(/\/+$/, "")}${path}`;
-}
-
-export function collectElryanImageUrls(resolved, origin) {
-  const urls = [];
-  const seen = new Set();
-  function push(url) {
-    const abs = absolutize(origin, url);
-    if (!abs || !/^https:\/\//i.test(abs) || seen.has(abs)) return;
-    seen.add(abs);
-    urls.push(abs);
-  }
-  for (const variant of resolved?.variants || []) {
-    for (const image of variant.images || []) push(image.url);
-  }
-  push(resolved?.image);
-  return urls;
-}
-
 /**
  * Build OpenAPI-shaped create payload. Does not call Elryan.
- * Omits `cost` until pricing semantics are confirmed.
+ * Omits `cost`. `price` is the BrownStore selling price after Elryan commission rules.
  */
 export function buildElryanProductPayload({
   resolved,
@@ -44,11 +23,11 @@ export function buildElryanProductPayload({
   warranty,
   attributes = {},
   pricing,
-  origin = "",
+  dimensions = null,
   quantity,
 }) {
   const skuCheck = validateElryanSku(sku);
-  const images = collectElryanImageUrls(resolved, origin).map((url) => ({ url }));
+  const images = collectElryanImageUrls(resolved).map((fileUrl) => ({ fileUrl }));
   const qty = Math.max(0, Math.floor(Number(quantity) || 0));
   const outOfStock = resolved?.outOfStock === true || qty <= 0;
 
@@ -75,10 +54,19 @@ export function buildElryanProductPayload({
   if (pricing?.proposedElryanPrice != null && pricing.proposedElryanPrice > 0) {
     payload.price = pricing.proposedElryanPrice;
   }
-  // cost intentionally omitted (pricing unverified)
+  // cost intentionally omitted; price is the BrownStore Elryan amount
 
   if (attributes && typeof attributes === "object" && Object.keys(attributes).length) {
     payload.attributes = attributes;
+  }
+
+  if (
+    dimensions?.confirmed === true &&
+    [dimensions.width, dimensions.height, dimensions.depth].every((value) => Number(value) > 0)
+  ) {
+    payload.width = Number(dimensions.width);
+    payload.height = Number(dimensions.height);
+    payload.depth = Number(dimensions.depth);
   }
 
   return payload;

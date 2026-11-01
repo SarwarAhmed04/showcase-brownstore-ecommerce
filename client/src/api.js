@@ -409,11 +409,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ productId, ...extras }),
     }),
+  elryanWritesGate: () => request("/api/admin/platforms/elryan/writes-gate"),
+  elryanSendAttempt: (productId) =>
+    request(`/api/admin/platforms/elryan/sync-one/send-attempt?productId=${encodeURIComponent(productId || "")}`),
   elryanSyncOneSend: (body) =>
     request("/api/admin/platforms/elryan/sync-one/send", {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  elryanSyncAllStatus: () => request("/api/admin/platforms/elryan/sync-all"),
+  elryanSyncAllPreview: (strategy = "full") =>
+    request("/api/admin/platforms/elryan/sync-all/preview", {
+      method: "POST",
+      body: JSON.stringify({ strategy: strategy === "changed" ? "changed" : "full" }),
+    }),
+  elryanSyncAllPause: () =>
+    request("/api/admin/platforms/elryan/sync-all/pause", { method: "POST", body: "{}" }),
+  elryanSyncAllResume: () =>
+    request("/api/admin/platforms/elryan/sync-all/resume", { method: "POST", body: "{}" }),
+  elryanSyncAllStop: () =>
+    request("/api/admin/platforms/elryan/sync-all/stop", { method: "POST", body: "{}" }),
   miswagConnection: () => request("/api/admin/platforms/miswag/connection"),
   saveMiswagConnection: (body) =>
     request("/api/admin/platforms/miswag/connection", {

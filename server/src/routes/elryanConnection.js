@@ -43,11 +43,25 @@ import {
 } from "../services/elryanAttributeMapping.js";
 import { verifyElryanAttributeValueFromList } from "../services/elryanAttributeValueCatalog.js";
 import {
+  approveElryanStagingPrice,
   elryanBulkDesignNotes,
+  inspectElryanSendAttempt,
   previewElryanSyncOne,
   searchElryanSyncProducts,
   sendElryanSyncOne,
 } from "../services/elryanSyncOne.js";
+import {
+  confirmElryanStagingDimensions,
+  saveElryanStagingProductOverride,
+} from "../services/elryanStagingInput.js";
+import {
+  getElryanSyncAllStatus,
+  pauseElryanSyncAll,
+  resumeElryanSyncAll,
+  runElryanSyncPreview,
+  startElryanSyncAll,
+  stopElryanSyncAll,
+} from "../services/elryanSyncAll.js";
 import { assertNoElryanSecretLeak } from "../utils/elryanRedact.js";
 
 export const elryanConnectionRouter = Router();
@@ -399,7 +413,14 @@ elryanConnectionRouter.get("/platforms/elryan/value-mappings", async (req, res) 
 
 elryanConnectionRouter.put("/platforms/elryan/value-mappings", async (req, res) => {
   try {
-    const row = await upsertElryanValueMapping(req.body || {});
+    const body = req.body || {};
+    let input = body;
+    const kind = String(body.kind || "");
+    if (kind === "warranty" || kind === "brand" || kind === "color") {
+      const connection = await getElryanConnectionPublic();
+      input = { ...body, environment: connection.environment || "staging" };
+    }
+    const row = await upsertElryanValueMapping(input);
     res.json({ mapping: row });
   } catch (err) {
     fail(res, err, "Failed to save Elryan value mapping");
@@ -443,6 +464,14 @@ elryanConnectionRouter.post("/platforms/elryan/sync-one/preview", async (req, re
   }
 });
 
+elryanConnectionRouter.get("/platforms/elryan/sync-one/send-attempt", async (req, res) => {
+  try {
+    res.json(await inspectElryanSendAttempt(req.query.productId));
+  } catch (err) {
+    fail(res, err, "Failed to inspect the Elryan send attempt");
+  }
+});
+
 elryanConnectionRouter.post("/platforms/elryan/sync-one/send", async (req, res) => {
   try {
     const result = assertNoElryanSecretLeak(
@@ -453,8 +482,116 @@ elryanConnectionRouter.post("/platforms/elryan/sync-one/send", async (req, res) 
       }),
       ""
     );
-    res.status(result.ok ? 200 : 403).json(result);
+    const status = result.ok
+      ? 200
+      : result.httpStatus >= 400 && result.httpStatus < 600
+        ? result.httpStatus
+        : 403;
+    res.status(status).json(result);
   } catch (err) {
     fail(res, err, "Failed to send Elryan product");
   }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/staging-overrides", async (req, res) => {
+  try {
+    const connection = await getElryanConnectionPublic();
+    res.json(
+      await saveElryanStagingProductOverride({
+        environment: connection.environment,
+        productId: req.body?.productId,
+        sku: req.body?.sku,
+        attributes: req.body?.attributes,
+        confirm: req.body?.confirm === true,
+      })
+    );
+  } catch (err) {
+    fail(res, err, "Failed to save the Staging product override");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/staging-dimensions", async (req, res) => {
+  try {
+    const connection = await getElryanConnectionPublic();
+    res.json(
+      await confirmElryanStagingDimensions({
+        environment: connection.environment,
+        productId: req.body?.productId,
+        sku: req.body?.sku,
+        unit: req.body?.unit,
+        width: req.body?.width,
+        height: req.body?.height,
+        depth: req.body?.depth,
+        axesConfirmed: req.body?.axesConfirmed === true,
+        confirm: req.body?.confirm === true,
+      })
+    );
+  } catch (err) {
+    fail(res, err, "Failed to confirm Staging dimensions");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/staging-price-approvals", async (req, res) => {
+  try {
+    res.json(
+      await approveElryanStagingPrice({
+        productId: req.body?.productId,
+        confirm: req.body?.confirm === true,
+      })
+    );
+  } catch (err) {
+    fail(res, err, "Failed to approve the Staging price");
+  }
+});
+
+elryanConnectionRouter.get("/platforms/elryan/sync-all", async (_req, res) => {
+  try {
+    res.json(assertNoElryanSecretLeak(await getElryanSyncAllStatus(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to load Elryan sync preview");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/sync-all/preview", async (req, res) => {
+  try {
+    const result = assertNoElryanSecretLeak(
+      await runElryanSyncPreview({
+        strategy: req.body?.strategy === "changed" ? "changed" : "full",
+        origin: originFromReq(req),
+      }),
+      ""
+    );
+    res.status(202).json(result);
+  } catch (err) {
+    fail(res, err, "Failed to start Elryan preview");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/sync-all/pause", async (_req, res) => {
+  try {
+    res.json(assertNoElryanSecretLeak(await pauseElryanSyncAll(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to pause Elryan preview");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/sync-all/resume", async (_req, res) => {
+  try {
+    res.json(assertNoElryanSecretLeak(await resumeElryanSyncAll(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to resume Elryan preview");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/sync-all/stop", async (_req, res) => {
+  try {
+    res.json(assertNoElryanSecretLeak(await stopElryanSyncAll(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to stop Elryan preview");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/sync-all/start", async (_req, res) => {
+  const result = await startElryanSyncAll();
+  res.status(403).json(result);
 });
