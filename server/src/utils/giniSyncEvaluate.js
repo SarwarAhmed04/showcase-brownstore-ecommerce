@@ -54,6 +54,12 @@ const BLOCKER_TEXT = {
   vendor_brand_inactive: "Vendor brand is inactive",
   taxonomy_config_missing: "Gini category/subcategory values are missing",
   confirmed_local_send: "This SKU already has a confirmed GINI product id.",
+  confirmed_send_missing:
+    "A confirmed GINI product id is saved for this SKU, but the current GINI API does not return it. The saved id was kept and no second create was sent.",
+  confirmed_send_unverified:
+    "A confirmed GINI product id is saved for this SKU, but GINI could not confirm it. It is not counted as currently existing. The saved id was kept and no second create was sent.",
+  confirmed_send_id_mismatch:
+    "GINI returned a different product id for this SKU than the saved confirmed id. The saved id was kept and no second create was sent.",
   not_in_approved_preview: "This product was not ready to create in the approved Full Preview.",
   product_not_found: "Product not found.",
   create_uncertain: "The create response was lost. No second create was sent.",
@@ -281,6 +287,49 @@ export function classifyGiniBulk({ plan, isActive = true, eligibility = null, lo
     return pack("LOOKUP_UNCERTAIN", ["gini_lookup_failed"], [blockerMessage("gini_lookup_failed")], plan, null);
   }
   return pack("READY_CREATE", [], [], plan, null);
+}
+
+/**
+ * A saved send id is duplicate protection, not proof the SKU is currently on GINI.
+ * Missing or unreadable remote products stay out of the create set and keep the saved id.
+ */
+export function classifyConfirmedSend({ plan, localSend, found }) {
+  const storedId = String(localSend?.giniProductId || "");
+  const liveId = found?.giniProductId == null ? "" : String(found.giniProductId);
+  if (found?.exists && liveId && liveId === storedId) {
+    return pack(
+      "ALREADY_EXISTS",
+      ["confirmed_local_send"],
+      [blockerMessage("confirmed_local_send")],
+      plan,
+      localSend
+    );
+  }
+  if (found?.exists && liveId) {
+    return pack(
+      "RECONCILE",
+      ["confirmed_send_id_mismatch"],
+      [blockerMessage("confirmed_send_id_mismatch")],
+      plan,
+      localSend
+    );
+  }
+  if (found?.error || found?.exists !== false) {
+    return pack(
+      "RECONCILE",
+      ["confirmed_send_unverified"],
+      [blockerMessage("confirmed_send_unverified")],
+      plan,
+      localSend
+    );
+  }
+  return pack(
+    "RECONCILE",
+    ["confirmed_send_missing"],
+    [blockerMessage("confirmed_send_missing")],
+    plan,
+    localSend
+  );
 }
 
 function pack(classification, codes, messages, plan, localSend) {

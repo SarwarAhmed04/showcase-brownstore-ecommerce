@@ -7,6 +7,11 @@ import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import { translations } from "../../client/src/i18n.js";
+import {
+  confirmedCreateCount,
+  reconciliationWarnings,
+  selectGiniSyncDisplay,
+} from "../../client/src/components/admin/platform/giniSyncAllDisplay.js";
 import { adminRouter } from "./routes/admin.js";
 import { User } from "./models/User.js";
 import { Partner } from "./models/Partner.js";
@@ -14,13 +19,16 @@ import { Product } from "./models/Product.js";
 import { Commission } from "./models/Commission.js";
 import { PlatformTaxonomyConfig } from "./models/PlatformTaxonomyConfig.js";
 import { PlatformVisibilityRule } from "./models/PlatformVisibilityRule.js";
+import { GiniConnection } from "./models/GiniConnection.js";
 import { GiniSyncJob } from "./models/GiniSyncJob.js";
 import { GiniSyncProductResult } from "./models/GiniSyncProductResult.js";
 import { GiniSyncSendState } from "./models/GiniSyncSendState.js";
 import { GINI_CATEGORIES_PATH, GINI_PING_PATH } from "./utils/giniSigner.js";
 import { GINI_DEFAULT_BASE_URL, getGiniConnectionPublic, setGiniFetch } from "./services/giniConnection.js";
+import { encryptApiKey } from "./utils/partnerAuth.js";
 import { previewGiniSyncOne, setGiniMediaFetch } from "./services/giniSyncOne.js";
 import { GINI_PRODUCTS_PATH, giniSkuKey, isAllowedMediaUrl } from "./utils/giniSyncOnePlan.js";
+import { classifyConfirmedSend } from "./utils/giniSyncEvaluate.js";
 import {
   ensureGiniSyncRunner,
   getLatestGiniSyncJob,
@@ -407,12 +415,26 @@ describe("GINI sync all contract", () => {
     assert.equal(page.includes("approveFullRun: true"), true);
     assert.equal(page.includes("process.env"), false);
     assert.equal(page.includes("data-gini-sync-all"), true);
+    assert.equal(page.includes("selectGiniSyncDisplay"), true);
+    assert.equal(page.includes("confirmedCreateCount"), true);
+    assert.equal(page.includes("active ? job : approved || job"), false);
+    assert.equal(page.includes("data-gini-sync-mode"), true);
+    assert.equal(page.includes("data-gini-created"), true);
+    assert.equal(page.includes("data-gini-preview-summary"), true);
+    assert.equal(page.includes("data-gini-reconcile"), true);
+    assert.equal(page.includes("data-gini-job-error"), true);
+    assert.equal(page.includes("current.lastError"), true);
+    assert.equal(page.includes("current.errorCode"), true);
     assert.equal(page.includes("progressbar"), true);
     assert.equal(sidebar.includes('["syncAll", "giniSyncAllTitle"]'), true);
     for (const language of ["ku", "en", "ar"]) {
       assert.equal(typeof translations[language].giniSyncAllTitle, "string");
       assert.equal(typeof translations[language].giniStartFullSync, "string");
       assert.equal(typeof translations[language].giniSyncBlocked, "string");
+      assert.equal(typeof translations[language].giniSyncJobError, "string");
+      assert.equal(typeof translations[language].giniSyncPreviewSeparate, "string");
+      assert.equal(typeof translations[language].giniSyncReconcileMissing, "string");
+      assert.equal(typeof translations[language].giniSyncReconcileUnverified, "string");
     }
     for (const name of [".env", ".env.local", ".env.example", "server/.env", "server/.env.local", "server/.env.example"]) {
       const path = new URL(name, root);
@@ -421,6 +443,63 @@ describe("GINI sync all contract", () => {
       assert.equal(/GINI_BULK_WRITES_ENABLED\s*=\s*true/.test(text), false);
       assert.equal(/GINI_ALLOW_LIVE_BULK_WRITES\s*=\s*true/.test(text), false);
     }
+  });
+
+  it("keeps a completed full sync separate from preview counters", () => {
+    const status = {
+      job: {
+        id: "sync-job",
+        status: "completed",
+        mode: "sync",
+        runScope: "full",
+        created: 57,
+        failed: 0,
+        createUncertain: 0,
+        finishedAt: "2026-11-02T11:35:20.425Z",
+      },
+      preview: {
+        id: "preview-job",
+        status: "preview",
+        mode: "preview",
+        readyCreate: 57,
+        created: 0,
+        finishedAt: "2026-11-02T11:30:45.136Z",
+      },
+      reconciliation: [{ code: "confirmed_send_missing", sku: "LP-ID141232", giniProductId: "521043" }],
+    };
+    const shown = selectGiniSyncDisplay(status);
+    const reloaded = selectGiniSyncDisplay(JSON.parse(JSON.stringify(status)));
+    assert.equal(shown.current.status, "completed");
+    assert.equal(shown.current.mode, "sync");
+    assert.equal(shown.current.runScope, "full");
+    assert.equal(confirmedCreateCount(shown.current), 57);
+    assert.equal(shown.preview.mode, "preview");
+    assert.equal(shown.preview.readyCreate, 57);
+    assert.equal(confirmedCreateCount(shown.preview), 0);
+    assert.equal(reloaded.current.id, "sync-job");
+    assert.equal(reloaded.current.status, "completed");
+    assert.equal(confirmedCreateCount(reloaded.current), 57);
+    assert.deepEqual(reconciliationWarnings(status, shown.current), status.reconciliation);
+  });
+
+  it("does not classify an unverified saved send as currently on GINI", () => {
+    const plan = { sku: "E6310221", blockers: [], lookupState: "absent" };
+    const localSend = { giniProductId: "522091" };
+    const missing = classifyConfirmedSend({ plan, localSend, found: { exists: false } });
+    const unverified = classifyConfirmedSend({ plan, localSend, found: { error: true, status: 500 } });
+    const matched = classifyConfirmedSend({ plan, localSend, found: { exists: true, giniProductId: "522091" } });
+    const mismatch = classifyConfirmedSend({ plan, localSend, found: { exists: true, giniProductId: "999" } });
+    assert.equal(missing.classification, "RECONCILE");
+    assert.equal(missing.errorCode, "confirmed_send_missing");
+    assert.equal(missing.giniProductId, "522091");
+    assert.equal(unverified.classification, "RECONCILE");
+    assert.equal(unverified.errorCode, "confirmed_send_unverified");
+    assert.equal(unverified.giniProductId, "522091");
+    assert.equal(matched.classification, "ALREADY_EXISTS");
+    assert.equal(matched.giniProductId, "522091");
+    assert.equal(mismatch.classification, "RECONCILE");
+    assert.equal(mismatch.errorCode, "confirmed_send_id_mismatch");
+    assert.equal(mismatch.giniProductId, "522091");
   });
 });
 
@@ -551,9 +630,11 @@ describe("GINI sync all", { concurrency: 1, timeout: 180000 }, () => {
     const again = await previewAll();
     const againRow = (await rowsFor(again))[0];
     assert.equal(againRow.classification, "ALREADY_EXISTS");
+    assert.equal(againRow.errorCode, "confirmed_local_send");
     assert.equal(againRow.giniProductId, "501");
     assert.equal(posts().length, 0);
-    assert.equal(productGets().length, 0);
+    assert.equal(productGets().some((item) => decodeURIComponent(item.url).includes("PRICE-1000")), true);
+    assert.equal((await GiniSyncSendState.findOne({ skuKey: giniSkuKey("PRICE-1000") }).lean()).giniProductId, "501");
   });
 
   it("blocks missing, inactive, and invalid category mappings without a create", async () => {
@@ -1151,6 +1232,227 @@ describe("GINI sync all", { concurrency: 1, timeout: 180000 }, () => {
     assert.equal(denied.json.code, "bulk_writes_disabled");
     assert.equal(posts().length, 0);
     assertNoSecret(status.json);
+  });
+
+  it("refuses Full Preview before any batch when the saved GINI secret cannot be read", async () => {
+    await makeProduct({ itemCode: "UNREADABLE-1" });
+    const previous = process.env.JWT_SECRET;
+    process.env.JWT_SECRET = "gini-sync-all-other-seal";
+    const sealed = encryptApiKey("temporary-unread-secret");
+    process.env.JWT_SECRET = previous;
+    await GiniConnection.updateOne(
+      { singletonKey: "default" },
+      { $set: { clientSecretEnc: sealed, hasSecret: true, lastStatus: "connected" } }
+    );
+    try {
+      const response = await call("POST", "/api/admin/platforms/gini/sync-all/preview");
+      assert.equal(response.status, 409);
+      assert.equal(response.json.code, "secret_unreadable");
+      assert.match(response.json.message, /could not be read/);
+      assert.equal(response.json.message.includes(sealed), false);
+      assert.equal(await GiniSyncJob.countDocuments(), 0);
+      assert.equal(calls.length, 0);
+      assert.equal(posts().length, 0);
+    } finally {
+      await connectGini();
+    }
+  });
+
+  it("shows a failed preview error code and message without secrets", async () => {
+    const job = await GiniSyncJob.create({
+      partner: "gini",
+      status: "failed",
+      mode: "preview",
+      runScope: "preview",
+      total: 42317,
+      processed: 0,
+      lastError: "The saved GINI client secret could not be read. Save the GINI API connection again.",
+      errorCode: "secret_unreadable",
+      startedAt: new Date(),
+      finishedAt: new Date(),
+    });
+    const status = await call("GET", "/api/admin/platforms/gini/sync-all");
+    assert.equal(status.status, 200);
+    assert.equal(status.json.job.id, String(job._id));
+    assert.equal(status.json.job.status, "failed");
+    assert.equal(status.json.job.processed, 0);
+    assert.equal(status.json.job.errorCode, "secret_unreadable");
+    assert.match(status.json.job.lastError, /could not be read/);
+    assert.equal(status.json.writesEnabled, false);
+    assert.equal(posts().length, 0);
+    assertNoSecret(status.json);
+  });
+
+  it("returns a completed full sync on refresh and reload without starting another send", async () => {
+    const preview = await GiniSyncJob.create({
+      partner: "gini",
+      status: "preview",
+      mode: "preview",
+      runScope: "preview",
+      total: 42316,
+      processed: 42316,
+      readyCreate: 57,
+      created: 0,
+      finishedAt: new Date("2026-11-02T11:30:45.136Z"),
+    });
+    const sync = await GiniSyncJob.create({
+      partner: "gini",
+      status: "completed",
+      mode: "sync",
+      runScope: "full",
+      previewJobId: String(preview._id),
+      total: 42316,
+      processed: 42316,
+      created: 57,
+      failed: 0,
+      createUncertain: 0,
+      approveFullRun: true,
+      finishedAt: new Date("2026-11-02T11:35:20.425Z"),
+    });
+    const first = await call("GET", "/api/admin/platforms/gini/sync-all");
+    const second = await call("GET", "/api/admin/platforms/gini/sync-all");
+    const shown = selectGiniSyncDisplay(first.json);
+    assert.equal(first.status, 200);
+    assert.equal(first.json.job.id, String(sync._id));
+    assert.equal(first.json.job.status, "completed");
+    assert.equal(first.json.job.mode, "sync");
+    assert.equal(first.json.job.created, 57);
+    assert.equal(first.json.job.failed, 0);
+    assert.equal(first.json.job.createUncertain, 0);
+    assert.equal(first.json.preview.id, String(preview._id));
+    assert.equal(first.json.preview.mode, "preview");
+    assert.equal(first.json.preview.readyCreate, 57);
+    assert.equal(first.json.preview.created, 0);
+    assert.equal(first.json.sentToGini, 57);
+    assert.equal(second.json.job.id, first.json.job.id);
+    assert.equal(second.json.job.status, "completed");
+    assert.equal(second.json.job.created, 57);
+    assert.equal(shown.current.status, "completed");
+    assert.equal(confirmedCreateCount(shown.current), 57);
+    assert.equal(shown.preview.readyCreate, 57);
+    assert.equal(confirmedCreateCount(shown.preview), 0);
+    assert.equal(posts().length, 0);
+    assert.equal(await GiniSyncJob.countDocuments({ status: { $in: ["running", "preview_running"] } }), 0);
+    assertNoSecret(first.json);
+  });
+
+  it("keeps a missing historical send out of the create set and does not overwrite it", async () => {
+    const product = await makeProduct({ itemCode: "LP-ID141232" });
+    await mapCollection();
+    await GiniSyncSendState.create({
+      partner: "gini",
+      productId: String(product._id),
+      sku: "LP-ID141232",
+      skuKey: giniSkuKey("LP-ID141232"),
+      giniProductId: "521043",
+      jobId: "historical-preview",
+    });
+    const preview = await previewAll();
+    const row = (await rowsFor(preview))[0];
+    assert.equal(row.classification, "RECONCILE");
+    assert.equal(row.errorCode, "confirmed_send_missing");
+    assert.equal(row.giniProductId, "521043");
+    assert.equal(preview.readyCreate, 0);
+    assert.equal(preview.alreadyExists, 0);
+    assert.equal(preview.reconcile, 1);
+    assert.equal(posts().length, 0);
+    enableWrites();
+    await rejectsCode(
+      () =>
+        startGiniSyncAll({
+          confirm: true,
+          previewJobId: preview.id,
+          catalogSignature: preview.catalogSignature,
+          expectedReady: preview.readyCreate,
+          scope: "full",
+          approveFullRun: true,
+        }),
+      "nothing_to_send"
+    );
+    assert.equal(posts().length, 0);
+    const kept = await GiniSyncSendState.findOne({ skuKey: giniSkuKey("LP-ID141232") }).lean();
+    assert.equal(kept.giniProductId, "521043");
+    assert.equal(kept.sku, "LP-ID141232");
+    assert.equal(kept.jobId, "historical-preview");
+    const status = await call("GET", "/api/admin/platforms/gini/sync-all");
+    const warnings = reconciliationWarnings(status.json, status.json.job);
+    assert.equal(
+      warnings.some((item) => item.sku === "LP-ID141232" && item.code === "confirmed_send_missing" && item.giniProductId === "521043"),
+      true
+    );
+    assert.equal((await Product.findById(product._id).lean()).price, 6500);
+    assert.equal(posts().length, 0);
+  });
+
+  it("does not resend a saved product after GINI stops returning it", async () => {
+    const product = await makeProduct({ itemCode: "E6310221" });
+    await mapCollection();
+    const preview = await previewAll();
+    assert.equal(preview.readyCreate, 1);
+    await GiniSyncSendState.create({
+      partner: "gini",
+      productId: String(product._id),
+      sku: "E6310221",
+      skuKey: giniSkuKey("E6310221"),
+      giniProductId: "522091",
+      jobId: "historical-preview",
+    });
+    const sync = await runSync(preview);
+    const row = (await rowsFor(sync))[0];
+    assert.equal(sync.status, "completed");
+    assert.equal(sync.created, 0);
+    assert.equal(row.classification, "RECONCILE");
+    assert.equal(row.errorCode, "confirmed_send_missing");
+    assert.equal(posts().length, 0);
+    const kept = await GiniSyncSendState.findOne({ skuKey: giniSkuKey("E6310221") }).lean();
+    assert.equal(kept.giniProductId, "522091");
+    assert.equal(kept.jobId, "historical-preview");
+    assert.equal((await Product.findById(product._id).lean()).price, 6500);
+  });
+
+  it("does not adopt a different live id over a saved GINI id", async () => {
+    const product = await makeProduct({ itemCode: "LP-ID141232" });
+    await mapCollection();
+    remote.set(giniSkuKey("LP-ID141232"), { id: "999", sku: "LP-ID141232" });
+    await GiniSyncSendState.create({
+      partner: "gini",
+      productId: String(product._id),
+      sku: "LP-ID141232",
+      skuKey: giniSkuKey("LP-ID141232"),
+      giniProductId: "521043",
+      jobId: "historical-preview",
+    });
+    const preview = await previewAll();
+    const row = (await rowsFor(preview))[0];
+    assert.equal(row.classification, "RECONCILE");
+    assert.equal(row.errorCode, "confirmed_send_id_mismatch");
+    assert.equal(row.giniProductId, "521043");
+    assert.equal(posts().length, 0);
+    assert.equal((await GiniSyncSendState.findOne({ skuKey: giniSkuKey("LP-ID141232") }).lean()).giniProductId, "521043");
+  });
+
+  it("does not count an unreadable saved send as a product currently on GINI", async () => {
+    const product = await makeProduct({ itemCode: "E6310221" });
+    await mapCollection();
+    await GiniSyncSendState.create({
+      partner: "gini",
+      productId: String(product._id),
+      sku: "E6310221",
+      skuKey: giniSkuKey("E6310221"),
+      giniProductId: "522091",
+      jobId: "historical-preview",
+    });
+    lookupMode = "error";
+    const preview = await previewAll();
+    const row = (await rowsFor(preview))[0];
+    assert.equal(preview.status, "preview");
+    assert.equal(row.classification, "RECONCILE");
+    assert.equal(row.errorCode, "confirmed_send_unverified");
+    assert.equal(row.giniProductId, "522091");
+    assert.equal(preview.alreadyExists, 0);
+    assert.equal(preview.readyCreate, 0);
+    assert.equal(posts().length, 0);
+    assert.equal((await GiniSyncSendState.findOne({ skuKey: giniSkuKey("E6310221") }).lean()).giniProductId, "522091");
   });
 
   it("processes more than 30000 catalog rows in bounded batches without product lookups or writes", { timeout: 300000 }, async () => {

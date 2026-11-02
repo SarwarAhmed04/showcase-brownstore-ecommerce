@@ -511,6 +511,15 @@ export const translations = {
     giniSyncNeedsReview: "پێویستی پێداچوونەوەیە",
     giniSyncLookupUncertain: "گەڕانی SKU دڵنیا نییە",
     giniSyncCreateUncertain: "وەڵامی دروستکردن دڵنیا نییە",
+    giniSyncPreviewTitle: "ئەنجامی پێشبینینی تەواو",
+    giniSyncPreviewSeparate: "ئەم ژمارانە تەنها پێشبینینن. ژمارەی دروستکردنی سەرکەوتوو لە ئەنجامی ناردنەکە دەخوێندرێتەوە.",
+    giniSyncReconcileTitle: "پێویستی ڕێکخستنەوە هەیە",
+    giniSyncReconcileMissing:
+      "SKU {sku} ناسنامەی جینی پاشەکەوتکراوی {id}ی هەیە، بەڵام APIی ئێستای جینی ناگەڕێنێتەوە. تۆماری ناردنەکە هێڵدرایەوە و بەرهەمەکە دووبارە نەنێردرا.",
+    giniSyncReconcileUnverified:
+      "SKU {sku} ناسنامەی جینی پاشەکەوتکراوی {id}ی هەیە، بەڵام نەتوانرا لە جینی پشتڕاست بکرێتەوە. وەک بەرهەمێکی ئێستای جینی هەژمار ناکرێت. تۆمارەکە هێڵدرایەوە و دووبارە نەنێردرا.",
+    giniSyncReconcileMismatch:
+      "جینی بۆ SKU {sku} ناسنامەیەکی جیاوازی لە {id}ی پاشەکەوتکراو گەڕاندەوە. ناسنامەی پاشەکەوتکراو هێڵدرایەوە و بەرهەمەکە دووبارە نەنێردرا.",
     giniRecentFailures: "دوایین بەرهەمە شکستهاتووەکان",
     giniBlockerExamples: "نموونەی ڕێگرییەکان",
     giniSyncNoJob: "هێشتا هیچ پێشبینینێکی جینی دەستپێنەکراوە.",
@@ -541,6 +550,7 @@ export const translations = {
     giniSyncStateRateLimited: "سنووری داواکاری",
     giniSyncStateEdgeBlocked: "لە لێوار ڕاگیرا",
     giniSyncStateFailed: "شکستی هێنا",
+    giniSyncJobError: "هەڵەی کار",
     giniSyncStateStale: "پێشبینین کۆن بووە",
     elryanApiConnection: "پەیوەندی Elryan",
     elryanApiConnectionHint:
@@ -1746,6 +1756,15 @@ export const translations = {
     giniSyncNeedsReview: "Needs review",
     giniSyncLookupUncertain: "SKU lookup uncertain",
     giniSyncCreateUncertain: "Create response uncertain",
+    giniSyncPreviewTitle: "Full Preview results",
+    giniSyncPreviewSeparate: "These numbers are the preview only. Successfully created is read from the send job.",
+    giniSyncReconcileTitle: "Reconciliation needed",
+    giniSyncReconcileMissing:
+      "SKU {sku} has saved GINI id {id}, but the current GINI API does not return it. The saved send record was kept and the product was not sent again.",
+    giniSyncReconcileUnverified:
+      "SKU {sku} has saved GINI id {id}, but GINI could not confirm it. It is not counted as currently on GINI. The saved send record was kept and the product was not sent again.",
+    giniSyncReconcileMismatch:
+      "GINI returned a different id for SKU {sku} than the saved id {id}. The saved id was kept and the product was not sent again.",
     giniRecentFailures: "Recently failed products",
     giniBlockerExamples: "Blocker examples",
     giniSyncNoJob: "No GINI sync preview has been started.",
@@ -1778,6 +1797,7 @@ export const translations = {
     giniSyncStateRateLimited: "Rate limited",
     giniSyncStateEdgeBlocked: "Edge blocked",
     giniSyncStateFailed: "Failed",
+    giniSyncJobError: "Job error",
     giniSyncStateStale: "Preview is stale",
     elryanApiConnection: "Elryan API Connection",
     elryanApiConnectionHint:
@@ -2982,6 +3002,15 @@ export const translations = {
     giniSyncNeedsReview: "تحتاج مراجعة",
     giniSyncLookupUncertain: "البحث عن SKU غير مؤكد",
     giniSyncCreateUncertain: "استجابة الإنشاء غير مؤكدة",
+    giniSyncPreviewTitle: "نتائج المعاينة الكاملة",
+    giniSyncPreviewSeparate: "هذه الأرقام للمعاينة فقط. عدد الإنشاء الناجح يُقرأ من مهمة الإرسال.",
+    giniSyncReconcileTitle: "تحتاج مطابقة",
+    giniSyncReconcileMissing:
+      "SKU {sku} له معرف جيني محفوظ {id}، لكن واجهة جيني الحالية لا ترجعه. بقي سجل الإرسال محفوظًا ولم يُرسل المنتج مرة أخرى.",
+    giniSyncReconcileUnverified:
+      "SKU {sku} له معرف جيني محفوظ {id}، لكن تعذر التحقق منه في جيني. لا يُحسب كمنتج موجود حاليًا. بقي السجل محفوظًا ولم يُرسل مرة أخرى.",
+    giniSyncReconcileMismatch:
+      "أعاد جيني معرفًا مختلفًا لـ SKU {sku} عن المعرف المحفوظ {id}. بقي المعرف المحفوظ ولم يُرسل المنتج مرة أخرى.",
     giniRecentFailures: "المنتجات التي فشلت مؤخرًا",
     giniBlockerExamples: "أمثلة أسباب المنع",
     giniSyncNoJob: "لم تبدأ معاينة جيني بعد.",
@@ -3011,6 +3040,7 @@ export const translations = {
     giniSyncStateRateLimited: "تم تجاوز الحد",
     giniSyncStateEdgeBlocked: "أُوقف عند الحافة",
     giniSyncStateFailed: "فشل",
+    giniSyncJobError: "خطأ المهمة",
     giniSyncStateStale: "المعاينة لم تعد صالحة",
     elryanApiConnection: "اتصال Elryan API",
     elryanApiConnectionHint:

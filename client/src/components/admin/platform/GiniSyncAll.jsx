@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../../api";
+import { confirmedCreateCount, reconciliationWarnings, selectGiniSyncDisplay, sendCounter } from "./giniSyncAllDisplay.js";
 
 const CONTROL =
   "w-full rounded-full border border-brown/10 bg-cream px-4 py-2.5 text-sm font-semibold text-brown outline-none ring-tan/40 focus:ring-2";
@@ -29,21 +30,25 @@ function fill(template, value) {
   return String(template || "").replace("{count}", count(value));
 }
 
-function Stat({ label, value }) {
+function warningText(t, row) {
+  const keys = {
+    confirmed_send_missing: "giniSyncReconcileMissing",
+    confirmed_send_unverified: "giniSyncReconcileUnverified",
+    confirmed_send_id_mismatch: "giniSyncReconcileMismatch",
+  };
+  return String(t[keys[row.code]] || row.code)
+    .replaceAll("{sku}", row.sku || "")
+    .replaceAll("{id}", row.giniProductId || "");
+}
+
+function Stat({ label, value, marker, markerValue }) {
+  const marked = marker ? { [marker]: markerValue ?? "" } : {};
   return (
-    <div className="rounded-2xl bg-cream px-4 py-3">
+    <div className="rounded-2xl bg-cream px-4 py-3" {...marked}>
       <p className="text-[11px] font-semibold tracking-wide text-brown/45 uppercase">{label}</p>
       <p className="mt-1 font-display text-2xl tabular-nums text-brown">{value ?? "—"}</p>
     </div>
   );
-}
-
-function approvedPreview(status) {
-  const preview = status?.preview?.status === "preview" && status.preview.finishedAt ? status.preview : null;
-  const job = status?.job;
-  if (preview) return preview;
-  if (job?.mode === "preview" && job.status === "preview" && job.finishedAt) return job;
-  return null;
 }
 
 export default function GiniSyncAll({ t }) {
@@ -82,18 +87,19 @@ export default function GiniSyncAll({ t }) {
       if (data?.job || data?.writesEnabled != null) setStatus((current) => ({ ...(current || {}), ...data }));
       setMessage(data?.message || t.giniSyncUpdated);
     } catch (err) {
-      setError(err.message);
+      setError(err.code ? `${err.code}: ${err.message}` : err.message);
     } finally {
       setBusy("");
       refresh().catch(() => {});
     }
   }
 
-  const job = status?.job || null;
-  const approved = approvedPreview(status);
+  const view = selectGiniSyncDisplay(status);
+  const approved = view.preview;
   const writesEnabled = status?.writesEnabled === true;
-  const active = job && ["preview_running", "running", "paused", "auth_failed", "rate_limited", "edge_blocked"].includes(job.status);
-  const current = active ? job : approved || job;
+  const active = view.active;
+  const current = view.current;
+  const warnings = reconciliationWarnings(status, current);
   const percent = Number(current?.percent) || 0;
   const ready = Number(approved?.readyCreate) || 0;
   const maxLimit = Number(status?.limitedRunMax) || 25;
@@ -231,10 +237,19 @@ export default function GiniSyncAll({ t }) {
       <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
         {current ? (
           <div className="space-y-4">
-            <p className="text-sm text-brown/60">
+            <p className="text-sm text-brown/60" data-gini-sync-mode={current.mode || ""} data-gini-sync-status={current.status || ""}>
               {t.status}: <span className="font-semibold text-brown">{stateLabel}</span>
               {current.runScope ? ` · ${current.runScope}` : ""}
             </p>
+            {current.lastError ? (
+              <p className="text-sm text-red-700" data-gini-job-error="true">
+                <span className="font-semibold">{t.giniSyncJobError}</span>
+                {current.errorCode ? <span dir="ltr"> · {current.errorCode}</span> : null}
+                <span className="mt-1 block" dir="ltr">
+                  {current.lastError}
+                </span>
+              </p>
+            ) : null}
             <div>
               <div className="flex items-center justify-between text-xs font-semibold text-brown/50">
                 <span>{t.giniSyncProgress}</span>
@@ -261,11 +276,41 @@ export default function GiniSyncAll({ t }) {
               <Stat label={t.giniSyncInactive} value={count(current.inactive)} />
               <Stat label={t.giniSyncNeedsReview} value={count(current.needsReview)} />
               <Stat label={t.giniSyncLookupUncertain} value={count(current.lookupUncertain)} />
-              <Stat label={t.giniSyncCreated} value={count(current.mode === "preview" ? 0 : current.created)} />
-              <Stat label={t.giniSyncFailed} value={count(current.failed)} />
-              <Stat label={t.giniSyncCreateUncertain} value={count(current.createUncertain)} />
+              <Stat
+                label={t.giniSyncCreated}
+                value={count(confirmedCreateCount(current))}
+                marker="data-gini-created"
+                markerValue={String(confirmedCreateCount(current))}
+              />
+              <Stat label={t.giniSyncFailed} value={count(sendCounter(current, "failed"))} />
+              <Stat label={t.giniSyncCreateUncertain} value={count(sendCounter(current, "createUncertain"))} />
               <Stat label={t.giniSyncProgress} value={`${count(current.processed)} / ${count(current.total)}`} />
             </div>
+            {warnings.length ? (
+              <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950" data-gini-reconcile="true">
+                <p className="font-semibold">{t.giniSyncReconcileTitle}</p>
+                <ul className="mt-2 space-y-2">
+                  {warnings.map((row) => (
+                    <li key={`${row.code}-${row.sku}-${row.giniProductId}`} dir="ltr">
+                      {warningText(t, row)}
+                      {row.liveGiniProductId ? <span> · {row.liveGiniProductId}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {current.mode === "sync" && approved ? (
+              <div className="rounded-2xl bg-cream px-4 py-4" data-gini-preview-summary="true">
+                <p className="text-xs font-semibold tracking-wide text-brown/50 uppercase">{t.giniSyncPreviewTitle}</p>
+                <p className="mt-1 text-sm text-brown/60">{t.giniSyncPreviewSeparate}</p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <Stat label={t.giniSyncReady} value={count(approved.readyCreate)} />
+                  <Stat label={t.giniSyncExists} value={count(approved.alreadyExists)} />
+                  <Stat label={t.giniSyncBlocked} value={count(approved.blocked)} />
+                  <Stat label={t.giniSyncLookupUncertain} value={count(approved.lookupUncertain)} />
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : (
           <p className="text-sm text-brown/50">{t.giniSyncNoJob}</p>

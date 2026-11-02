@@ -10,6 +10,7 @@ const CLASSIFICATIONS = [
   "CREATED",
   "FAILED",
   "CREATE_UNCERTAIN",
+  "RECONCILE",
 ];
 
 const giniSyncProductResultSchema = new mongoose.Schema(

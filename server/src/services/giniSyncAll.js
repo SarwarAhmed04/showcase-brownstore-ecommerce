@@ -12,13 +12,20 @@ import { toResolvedProduct } from "../utils/productView.js";
 import {
   blockerMessage,
   buildGiniPlanFromParts,
+  classifyConfirmedSend,
   classifyGiniBulk,
   giniPayloadHash,
   mappingFromTree,
 } from "../utils/giniSyncEvaluate.js";
 import { GINI_PRODUCTS_PATH, giniSkuKey, normalizeGiniItemCode } from "../utils/giniSyncOnePlan.js";
 import { buildGiniCreateForm, downloadGiniProductImage } from "./giniSyncOne.js";
-import { fetchGiniCategoryTree, getGiniConnectionPublic, performGiniRequest, sanitizeGiniText } from "./giniConnection.js";
+import {
+  fetchGiniCategoryTree,
+  getGiniConnectionPublic,
+  GINI_SECRET_UNREADABLE_MESSAGE,
+  performGiniRequest,
+  sanitizeGiniText,
+} from "./giniConnection.js";
 import { findExistingGiniProduct } from "./giniSkuLookup.js";
 
 export const GINI_SYNC_BATCH_SIZE = 100;
@@ -37,6 +44,7 @@ const CLASS_FIELDS = {
   CREATED: "created",
   FAILED: "failed",
   CREATE_UNCERTAIN: "createUncertain",
+  RECONCILE: "reconcile",
 };
 
 let activeRunner = null;
@@ -47,6 +55,8 @@ let beforeSend = null;
 let batchSizes = [];
 let skuIndexScans = 0;
 let remoteLookupCount = 0;
+let reconcileCache = { key: "", at: 0, warnings: [] };
+const RECONCILE_CACHE_MS = 30000;
 
 export class GiniBulkError extends Error {
   constructor(message, { status = 400, code = "gini_bulk_error" } = {}) {
@@ -127,6 +137,7 @@ export function resetGiniBulkForTests() {
   batchSizes = [];
   skuIndexScans = 0;
   remoteLookupCount = 0;
+  reconcileCache = { key: "", at: 0, warnings: [] };
 }
 
 export function giniBulkBatchSizes() {
@@ -162,6 +173,7 @@ function emptyCounters() {
     created: 0,
     failed: 0,
     createUncertain: 0,
+    reconcile: 0,
     remoteLookups: 0,
   };
 }
@@ -185,6 +197,7 @@ function counterPatch(counters, extras = {}) {
     created: counters.created,
     failed: counters.failed,
     createUncertain: counters.createUncertain,
+    reconcile: counters.reconcile,
     remoteLookups: counters.remoteLookups,
     ...extras,
   };
@@ -459,9 +472,11 @@ async function evaluateCatalogProduct(doc, shared) {
   if (localPlan.blockers.length) {
     return withIdentity(doc, classifyGiniBulk({ plan: localPlan, isActive: true, eligibility, localSend: null }));
   }
-  const localSend = shared.sendByProduct.get(productId) || null;
+  const localSend =
+    shared.sendByProduct.get(productId) || (skuKey ? shared.sendBySku.get(skuKey) : null) || null;
   if (localSend?.giniProductId) {
-    return withIdentity(doc, classifyGiniBulk({ plan: localPlan, isActive: true, eligibility: null, localSend }));
+    const found = await lookupSku(sku, shared, { fresh: true });
+    return withIdentity(doc, classifyConfirmedSend({ plan: localPlan, localSend, found }));
   }
   const approved = !shared.approvedIds || shared.approvedIds.has(productId);
   if (!approved) {
@@ -509,19 +524,46 @@ async function recoverSku(sku, shared) {
   }
 }
 
+async function savedSend(evaluation) {
+  return GiniSyncSendState.findOne({
+    partner: "gini",
+    $or: [{ skuKey: evaluation.skuKey }, { productId: evaluation.productId }],
+  }).lean();
+}
+
+function reconcileResult(doc, evaluation, code, giniProductId, httpStatus = 0) {
+  return withIdentity(doc, evaluation, {
+    classification: "RECONCILE",
+    blockers: [code],
+    reason: blockerMessage(code),
+    errorCode: code,
+    giniProductId: String(giniProductId || ""),
+    httpStatus,
+    attemptedSend: false,
+  });
+}
+
 async function postCreate(doc, evaluation, shared) {
+  const prior = await savedSend(evaluation);
   const freshLookup = await lookupSku(evaluation.sku, shared, { fresh: true });
   if (freshLookup.exists) {
+    const liveId = String(freshLookup.giniProductId || "");
+    if (prior?.giniProductId && liveId && String(prior.giniProductId) !== liveId) {
+      return reconcileResult(doc, evaluation, "confirmed_send_id_mismatch", prior.giniProductId, 200);
+    }
     return withIdentity(doc, evaluation, {
       classification: "ALREADY_EXISTS",
       blockers: ["existing_gini_product"],
       reason: blockerMessage("existing_gini_product"),
       errorCode: "existing_gini_product",
-      giniProductId: String(freshLookup.giniProductId || ""),
+      giniProductId: liveId,
       attemptedSend: false,
     });
   }
   if (freshLookup.error || freshLookup.exists !== false) {
+    if (prior?.giniProductId) {
+      return reconcileResult(doc, evaluation, "confirmed_send_unverified", prior.giniProductId, Number(freshLookup.status) || 0);
+    }
     return withIdentity(doc, evaluation, {
       classification: "LOOKUP_UNCERTAIN",
       blockers: ["gini_lookup_failed"],
@@ -531,19 +573,8 @@ async function postCreate(doc, evaluation, shared) {
       attemptedSend: false,
     });
   }
-  const prior = await GiniSyncSendState.findOne({
-    partner: "gini",
-    $or: [{ skuKey: evaluation.skuKey }, { productId: evaluation.productId }],
-  }).lean();
   if (prior?.giniProductId) {
-    return withIdentity(doc, evaluation, {
-      classification: "ALREADY_EXISTS",
-      blockers: ["confirmed_local_send"],
-      reason: blockerMessage("confirmed_local_send"),
-      errorCode: "confirmed_local_send",
-      giniProductId: String(prior.giniProductId),
-      attemptedSend: false,
-    });
+    return reconcileResult(doc, evaluation, "confirmed_send_missing", prior.giniProductId, 404);
   }
   let files = [];
   try {
@@ -737,11 +768,17 @@ async function pauseJob(jobId, token, status, message) {
 async function failJob(jobId, token, err) {
   const filter = { _id: jobId, status: { $in: RUNNING } };
   if (token) filter.runnerToken = token;
+  const lastError = safeText(err?.message || "GINI sync failed");
+  const errorCode = String(err?.code || "gini_sync_failed")
+    .replace(/[^a-z0-9_]/gi, "")
+    .slice(0, 80) || "gini_sync_failed";
+  console.error(`GINI sync job failed (${errorCode}): ${lastError}`);
   await GiniSyncJob.updateOne(filter, {
     $set: {
       status: "failed",
       finishedAt: new Date(),
-      lastError: safeText(err?.message || "GINI sync failed"),
+      lastError,
+      errorCode,
     },
   });
 }
@@ -999,6 +1036,7 @@ function publicJob(job, extras = {}) {
     created: raw.created || 0,
     failed: raw.failed || 0,
     createUncertain: raw.createUncertain || 0,
+    reconcile: raw.reconcile || 0,
     remoteLookups: raw.remoteLookups || 0,
     skipped: raw.blocked || 0,
     percent: total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0,
@@ -1006,6 +1044,7 @@ function publicJob(job, extras = {}) {
     blockerExamples: Array.isArray(raw.blockerExamples) ? raw.blockerExamples : [],
     failureSummary: raw.failureSummary || "",
     lastError: raw.lastError || "",
+    errorCode: raw.errorCode || "",
     startedAt: raw.startedAt,
     finishedAt: raw.finishedAt,
     pausedAt: raw.pausedAt,
@@ -1019,11 +1058,29 @@ function publicJob(job, extras = {}) {
   };
 }
 
+function warningFromRow(row, code) {
+  return {
+    sku: row.sku || "",
+    productId: row.productId || "",
+    giniProductId: String(row.giniProductId || ""),
+    liveGiniProductId: "",
+    code,
+    httpStatus: Number(row.httpStatus) || 0,
+  };
+}
+
 async function decorate(job) {
   if (!job) return null;
   const failures = await GiniSyncProductResult.find({
     jobId: job._id,
     classification: { $in: ["FAILED", "CREATE_UNCERTAIN", "LOOKUP_UNCERTAIN"] },
+  })
+    .sort({ updatedAt: -1 })
+    .limit(25)
+    .lean();
+  const reconcileRows = await GiniSyncProductResult.find({
+    jobId: job._id,
+    classification: "RECONCILE",
   })
     .sort({ updatedAt: -1 })
     .limit(25)
@@ -1038,7 +1095,54 @@ async function decorate(job) {
       httpStatus: row.httpStatus,
       giniProductId: row.giniProductId,
     })),
+    reconciliation: reconcileRows.map((row) => warningFromRow(row, row.errorCode || "confirmed_send_unverified")),
   });
+}
+
+async function historicalSendWarnings() {
+  const sends = await GiniSyncSendState.find({ partner: "gini" })
+    .select("productId sku skuKey giniProductId")
+    .lean();
+  const ids = [...new Set(sends.map((row) => String(row.giniProductId || "")).filter(Boolean))];
+  if (!ids.length) return [];
+  const created = await GiniSyncProductResult.find({
+    classification: "CREATED",
+    giniProductId: { $in: ids },
+  })
+    .select("giniProductId")
+    .lean();
+  const createdIds = new Set(created.map((row) => String(row.giniProductId)));
+  const pending = sends.filter((row) => row.giniProductId && !createdIds.has(String(row.giniProductId)));
+  const key = pending
+    .map((row) => `${row.skuKey || row.sku || ""}:${row.giniProductId}`)
+    .sort()
+    .join("|");
+  if (reconcileCache.key === key && Date.now() - reconcileCache.at < RECONCILE_CACHE_MS) return reconcileCache.warnings;
+  const warnings = [];
+  for (const row of pending) {
+    if (!row.sku) {
+      warnings.push(warningFromRow(row, "confirmed_send_unverified"));
+      continue;
+    }
+    try {
+      const found = await findExistingGiniProduct(row.sku);
+      const liveId = found?.giniProductId == null ? "" : String(found.giniProductId);
+      if (found?.exists && liveId && liveId === String(row.giniProductId)) continue;
+      if (found?.exists && liveId) {
+        warnings.push({ ...warningFromRow(row, "confirmed_send_id_mismatch"), liveGiniProductId: liveId, httpStatus: 200 });
+        continue;
+      }
+      if (found?.error || found?.exists !== false) {
+        warnings.push(warningFromRow({ ...row, httpStatus: found?.status }, "confirmed_send_unverified"));
+        continue;
+      }
+      warnings.push(warningFromRow({ ...row, httpStatus: 404 }, "confirmed_send_missing"));
+    } catch {
+      warnings.push(warningFromRow(row, "confirmed_send_unverified"));
+    }
+  }
+  reconcileCache = { key, at: Date.now(), warnings };
+  return warnings;
 }
 
 export async function ensureGiniSyncRunner() {
@@ -1069,9 +1173,16 @@ export async function getLatestGiniSyncJob() {
   if (job?.mode === "sync" && mongoose.isValidObjectId(job.previewJobId)) {
     preview = await GiniSyncJob.findById(job.previewJobId);
   }
+  let reconciliation = [];
+  try {
+    reconciliation = await historicalSendWarnings();
+  } catch {
+    reconciliation = [];
+  }
   return {
     job: job ? await decorate(job) : null,
     preview: preview ? await decorate(preview) : null,
+    reconciliation,
     writesEnabled: giniBulkWritesEnabled(),
     limitedRunMax: GINI_BULK_LIMIT_MAX,
     updatesSupported: false,
@@ -1097,6 +1208,9 @@ export async function runGiniSyncPreview() {
     });
   }
   const connection = await getGiniConnectionPublic();
+  if (connection.secretUnreadable) {
+    throw new GiniBulkError(GINI_SECRET_UNREADABLE_MESSAGE, { status: 409, code: "secret_unreadable" });
+  }
   if (connection.status !== "connected") {
     throw new GiniBulkError("Connect GINI API first.", { status: 409, code: "connection_required" });
   }
@@ -1178,6 +1292,9 @@ export async function startGiniSyncAll({
     throw new GiniBulkError("Full Preview found no products ready to create.", { status: 409, code: "nothing_to_send" });
   }
   const connection = await getGiniConnectionPublic();
+  if (connection.secretUnreadable) {
+    throw new GiniBulkError(GINI_SECRET_UNREADABLE_MESSAGE, { status: 409, code: "secret_unreadable" });
+  }
   if (connection.status !== "connected") {
     throw new GiniBulkError("Connect GINI API first.", { status: 409, code: "connection_required" });
   }
