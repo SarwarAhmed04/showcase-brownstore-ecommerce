@@ -18,6 +18,8 @@ export const GINI_DEFAULT_BASE_URL = "https://merchant.gini.iq";
 export const GINI_OFFICIAL_HOSTS = Object.freeze(["merchant.gini.iq", "app.gini.iq"]);
 export const GINI_HOST_UNVERIFIED_MESSAGE =
   "GINI host could not be verified. Try the alternate official host.";
+export const GINI_SECRET_UNREADABLE_MESSAGE =
+  "The saved GINI client secret could not be read. Save the GINI API connection again.";
 
 const DEFAULT_TIMEOUT_MS = 20000;
 const HOST_ERROR_CODES = new Set([
@@ -96,12 +98,13 @@ export function sanitizeGiniText(message, secrets = [], maxLength = 300) {
   return text.replace(/\s+/g, " ").trim().slice(0, limit);
 }
 
-function decryptStored(enc) {
-  if (!enc) return "";
+function openStoredSecret(enc) {
+  if (!enc) return { secret: "", unreadable: false };
   try {
-    return decryptApiKey(enc);
+    const secret = String(decryptApiKey(enc) || "");
+    return { secret, unreadable: !secret.trim() };
   } catch {
-    return "";
+    return { secret: "", unreadable: true };
   }
 }
 
@@ -117,7 +120,8 @@ function configuredFrom(clientId, clientSecret) {
 
 export async function resolveGiniConfig(overrides = {}) {
   const stored = await loadStored(true);
-  const storedSecret = decryptStored(stored?.clientSecretEnc);
+  const opened = openStoredSecret(stored?.clientSecretEnc);
+  const storedSecret = opened.secret;
   const baseCandidate =
     overrides.baseUrl != null && String(overrides.baseUrl).trim()
       ? String(overrides.baseUrl).trim()
@@ -136,15 +140,19 @@ export async function resolveGiniConfig(overrides = {}) {
     clientSecret,
     hasSecret: Boolean(clientSecret),
     stored: Boolean(stored),
+    secretUnreadable: !submittedSecret && Boolean(stored?.clientSecretEnc) && opened.unreadable,
   };
 }
 
 export async function getGiniConnectionPublic() {
-  const stored = await loadStored(false);
+  const stored = await loadStored(true);
+  const opened = openStoredSecret(stored?.clientSecretEnc);
+  const secretUnreadable = Boolean(stored?.hasSecret) && opened.unreadable;
   const baseUrl = stored?.baseUrl || GINI_DEFAULT_BASE_URL;
   const ready = Boolean(stored?.clientId && stored?.hasSecret);
   let status = String(stored?.lastStatus || "not_configured");
   if (!ready) status = "not_configured";
+  else if (secretUnreadable) status = "configured";
   else if (!status || status === "not_configured") status = "configured";
   return {
     baseUrl,
@@ -157,7 +165,8 @@ export async function getGiniConnectionPublic() {
     alternateHost: alternateGiniBaseUrl(baseUrl),
     lastHttpStatus: Number(stored?.lastHttpStatus) || 0,
     lastEndpoint: stored?.lastEndpoint || "",
-    message: sanitizeGiniText(stored?.lastError || ""),
+    secretUnreadable,
+    message: secretUnreadable ? GINI_SECRET_UNREADABLE_MESSAGE : sanitizeGiniText(stored?.lastError || ""),
     categories:
       stored?.lastTestedAt && status === "connected"
         ? {
@@ -365,6 +374,9 @@ export async function performGiniRequest({
   timeoutMs = DEFAULT_TIMEOUT_MS,
 } = {}) {
   const config = await resolveGiniConfig();
+  if (config.secretUnreadable) {
+    throw new GiniConnectionError(GINI_SECRET_UNREADABLE_MESSAGE, { status: 409, code: "secret_unreadable" });
+  }
   if (!config.baseUrl || !config.clientId || !config.clientSecret) {
     throw new GiniConnectionError("Connect GINI API first", { status: 409, code: "connection_required" });
   }
@@ -439,6 +451,9 @@ function categorySummary(json) {
 
 export async function fetchGiniCategoryTree() {
   const config = await resolveGiniConfig();
+  if (config.secretUnreadable) {
+    throw new GiniConnectionError(GINI_SECRET_UNREADABLE_MESSAGE, { status: 409, code: "secret_unreadable" });
+  }
   const current = await getGiniConnectionPublic();
   if (current.status !== "connected" || !config.baseUrl || !config.clientId || !config.clientSecret) {
     return { connectionRequired: true, categories: [] };
