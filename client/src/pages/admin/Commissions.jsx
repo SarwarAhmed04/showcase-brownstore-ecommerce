@@ -5,6 +5,7 @@ import { api } from "../../api";
 import { useAuth } from "../../context/AuthContext";
 import { useLang } from "../../context/LangContext";
 import { tName } from "../../i18n";
+import { resolveElryanPlatformTab } from "../../utils/elryanCategoryMappingPage";
 import { imgUrl } from "../../lib/img";
 import Spinner from "../../components/Spinner";
 import AdminModal from "../../components/admin/AdminModal";
@@ -12,6 +13,7 @@ import ProductEditor from "../../components/admin/ProductEditor";
 import AvailabilityPanel from "../../components/admin/platform/AvailabilityPanel";
 import CategorySetupPanel from "../../components/admin/platform/CategorySetupPanel";
 import GiniApiConnection from "../../components/admin/platform/GiniApiConnection";
+import GiniSyncAll from "../../components/admin/platform/GiniSyncAll";
 import GiniSyncOneProduct from "../../components/admin/platform/GiniSyncOneProduct";
 import MiswagApiConnection from "../../components/admin/platform/MiswagApiConnection";
 
@@ -1026,6 +1028,12 @@ function PartnerCommission({ partnerSlug, t, lang }) {
   const [editImage, setEditImage] = useState("");
   const [tab, setTab] = useState("overview");
   const [noticeCount, setNoticeCount] = useState(0);
+
+  useEffect(() => {
+    if (partnerSlug !== "elryan") return;
+    const next = resolveElryanPlatformTab(tab);
+    if (next !== tab) setTab(next);
+  }, [partnerSlug, tab]);
 
   useEffect(() => {
     let ignore = false;
@@ -2101,6 +2109,8 @@ function PartnerCommission({ partnerSlug, t, lang }) {
 
       {tab === "syncOne" && partnerSlug === "gini" ? <GiniSyncOneProduct t={t} lang={lang} /> : null}
 
+      {tab === "syncAll" && partnerSlug === "gini" ? <GiniSyncAll t={t} /> : null}
+
       {ElryanHost ? <ElryanHost tab={tab} partnerSlug={partnerSlug} t={t} lang={lang} /> : null}
 
       {tab === "connection" && partnerSlug === "miswag" ? <MiswagApiConnection t={t} /> : null}
@@ -2111,7 +2121,7 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         <MiswagMappingCategories t={t} lang={lang} onNotices={setNoticeCount} />
       ) : null}
 
-      {tab === "mapping" && partnerSlug !== "miswag" ? (
+      {tab === "mapping" && partnerSlug !== "miswag" && partnerSlug !== "elryan" ? (
         <CategorySetupPanel
           partnerSlug={partnerSlug}
           t={t}

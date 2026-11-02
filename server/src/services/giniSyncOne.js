@@ -4,68 +4,27 @@ import { Commission } from "../models/Commission.js";
 import { GiniSyncOneAudit } from "../models/GiniSyncOneAudit.js";
 import { GiniSyncOnePreview } from "../models/GiniSyncOnePreview.js";
 import { Product } from "../models/Product.js";
-import { GINI_SAFETY_STOCK } from "../utils/platformExcel/gini.js";
 import { partnerPricePreview } from "../utils/partnerCatalog.js";
-import { productScopeIds } from "../utils/platformEligibility.js";
-import { giniMappingStatus } from "../utils/giniCategoryTree.js";
+import { blockerMessage, buildGiniPlanFromParts, mappingFromTree } from "../utils/giniSyncEvaluate.js";
 import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platformTaxonomy.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import {
-  GINI_DESCRIPTION_MAX_WORDS,
-  GINI_IMAGE_LIMIT,
   GINI_IMAGE_MAX_BYTES,
-  GINI_NAME_MAX,
   GINI_PRODUCTS_PATH,
-  assessSimpleProduct,
-  buildSimplePayloadPreview,
-  decideSyncAction,
-  giniCatalogText,
   giniSkuKey,
   isAllowedMediaUrl,
-  listGiniImageUrls,
   normalizeGiniItemCode,
   sniffImage,
-  wordCount,
 } from "../utils/giniSyncOnePlan.js";
 import { fetchGiniCategoryTree, performGiniRequest, sanitizeGiniText } from "./giniConnection.js";
+import { findExistingGiniProduct } from "./giniSkuLookup.js";
 
 const PREVIEW_TTL_MS = 20 * 60 * 1000;
-const BLOCKER_TEXT = {
-  duplicate_brownstore_sku: "More than one BrownStore product uses this SKU.",
-  existing_gini_product: "This SKU already exists on GINI. A future action would be UPDATE.",
-  missing_sku: "This product has no itemCode SKU.",
-  missing_mapping: "This collection has no saved GINI category mapping.",
-  invalid_mapping: "The saved GINI category mapping is not in the live category tree.",
-  inactive_mapping: "The saved GINI category or subcategory is inactive.",
-  missing_brand: "Missing brand.",
-  missing_name: "Missing Arabic or English product name.",
-  missing_description: "Missing Arabic description.",
-  name_too_long: "The GINI product name is longer than 255 characters.",
-  description_too_long: "The GINI description is longer than 1000 words.",
-  invalid_price: "GINI price must be a positive whole number of IQD.",
-  price_needs_review: "The original IBSHER regular price is missing or ambiguous.",
-  invalid_quantity: "Quantity must be a whole number of 0 or more.",
-  missing_image: "At least one usable image is required.",
-  invalid_image: "An image could not be downloaded as a valid GINI image file.",
-  gini_variant_mapping_required: "This product has more than a single simple sellable variant.",
-  connection_required: "Connect GINI API first.",
-  categories_unavailable: "The live GINI category tree could not be read.",
-  gini_lookup_failed: "The current GINI product list could not be read.",
-  confirm_required: "Send requires an explicit confirmation after Preview.",
-  preview_required: "Preview this product again before sending.",
-  preview_expired: "This preview expired. Preview the product again.",
-  preview_mismatch: "The preview does not match this product.",
-  existing_gini_product_requires_update_flow: "This SKU already exists on GINI. Update is not part of this first create flow.",
-};
 
 let mediaFetchImpl = globalThis.fetch.bind(globalThis);
 
 export function setGiniMediaFetch(fn) {
   mediaFetchImpl = typeof fn === "function" ? fn : globalThis.fetch.bind(globalThis);
-}
-
-function blockerMessage(code) {
-  return BLOCKER_TEXT[code] || code;
 }
 
 function safeMessage(value, max = 400) {
@@ -79,18 +38,6 @@ function createFailureCode(response) {
   if (response?.edgeBlocked) return "gini_edge_blocked";
   if (response?.status === 403 && response.json != null) return "gini_access_forbidden";
   return "gini_create_failed";
-}
-
-function integerOrNull(value, { min = 0 } = {}) {
-  const number = Number(value);
-  if (!Number.isInteger(number) || number < min) return null;
-  return number;
-}
-
-function numericId(value) {
-  const text = String(value ?? "").trim();
-  if (/^\d+$/.test(text)) return Number(text);
-  return text;
 }
 
 async function loadProduct(productId) {
@@ -108,53 +55,9 @@ async function ownersForSku(skuKey) {
   return owners;
 }
 
-function sameSku(item, skuKey) {
-  return giniSkuKey(item?.sku) === skuKey;
-}
-
-async function findExistingGiniProduct(sku) {
-  const skuKey = giniSkuKey(sku);
-  const shown = await performGiniRequest({
-    method: "GET",
-    path: `${GINI_PRODUCTS_PATH}/${encodeURIComponent(sku)}`,
-  });
-  if (shown.status === 404) return { exists: false };
-  if (shown.status === 200 && sameSku(shown.json?.data, skuKey)) {
-    return {
-      exists: true,
-      giniProductId: String(shown.json.data.id ?? ""),
-      sku: String(shown.json.data.sku || sku),
-    };
-  }
-  if (shown.status !== 200 && shown.status !== 404) {
-    return { error: true, status: shown.status };
-  }
-  let page = 1;
-  let lastPage = 1;
-  while (page <= lastPage && page <= 5) {
-    const listed = await performGiniRequest({
-      method: "GET",
-      path: GINI_PRODUCTS_PATH,
-      query: `?search=${encodeURIComponent(sku)}&per_page=100&page=${page}`,
-    });
-    if (listed.status !== 200 || !Array.isArray(listed.json?.data)) {
-      return { error: true, status: listed.status };
-    }
-    const match = listed.json.data.find((item) => sameSku(item, skuKey));
-    if (match) {
-      return { exists: true, giniProductId: String(match.id ?? ""), sku: String(match.sku || sku) };
-    }
-    lastPage = Number(listed.json?.meta?.last_page) || 1;
-    page += 1;
-  }
-  return { exists: false };
-}
-
 async function readLiveMapping(product) {
   const context = await loadEligibilityContext("gini");
   const saved = taxonomyValuesForProduct(product, context);
-  const categoryId = String(saved?.categoryId || "").trim();
-  const subcategoryId = String(saved?.subcategoryId || "").trim();
   let live;
   try {
     live = await fetchGiniCategoryTree();
@@ -164,33 +67,7 @@ async function readLiveMapping(product) {
   if (live.connectionRequired) {
     return { blockers: ["connection_required"], category: null, subcategory: null };
   }
-  const status = giniMappingStatus(saved, live.categories);
-  if (status === "missing") return { blockers: ["missing_mapping"], category: null, subcategory: null };
-  if (status === "invalid") {
-    return {
-      blockers: ["invalid_mapping"],
-      category: { id: numericId(categoryId), name: "" },
-      subcategory: { id: numericId(subcategoryId), name: "" },
-    };
-  }
-  if (status === "inactive") {
-    const category = live.categories.find((item) => String(item.id) === categoryId);
-    const subcategory = category?.subcategories?.find((item) => String(item.id) === subcategoryId);
-    return {
-      blockers: ["inactive_mapping"],
-      category: category ? { id: numericId(category.id), name: category.name } : { id: numericId(categoryId), name: "" },
-      subcategory: subcategory
-        ? { id: numericId(subcategory.id), name: subcategory.name }
-        : { id: numericId(subcategoryId), name: "" },
-    };
-  }
-  const category = live.categories.find((item) => String(item.id) === categoryId);
-  const subcategory = category.subcategories.find((item) => String(item.id) === subcategoryId);
-  return {
-    blockers: [],
-    category: { id: numericId(category.id), name: category.name },
-    subcategory: { id: numericId(subcategory.id), name: subcategory.name },
-  };
+  return mappingFromTree(saved, live.categories);
 }
 
 export async function buildGiniSyncPlan(productId) {
@@ -205,97 +82,17 @@ export async function buildGiniSyncPlan(productId) {
   const rules = await Commission.find({ partner: "gini", isActive: { $ne: false } }).lean();
   const priced = partnerPricePreview(doc, rules);
   const sku = normalizeGiniItemCode(doc.itemCode);
-  const text = giniCatalogText(resolved);
-  const simple = assessSimpleProduct({ ...resolved, itemCode: doc.itemCode, sellingPrice: priced.storePrice });
-  const imageUrls = listGiniImageUrls(resolved);
-  const plannedImages = imageUrls.slice(0, GINI_IMAGE_LIMIT);
-  const blockers = [];
-  let duplicateProductIds = [];
-  if (!sku) blockers.push("missing_sku");
-  if (sku) {
-    duplicateProductIds = await ownersForSku(giniSkuKey(sku));
-    if (duplicateProductIds.length !== 1 || !duplicateProductIds.includes(String(doc._id))) {
-      blockers.push("duplicate_brownstore_sku");
-    }
-  }
-  blockers.push(...simple.blockers);
-  if (!text.brand) blockers.push("missing_brand");
-  if (!text.nameAr || !text.nameEn) blockers.push("missing_name");
-  if (!text.description) blockers.push("missing_description");
-  if (text.name && text.name.length > GINI_NAME_MAX) blockers.push("name_too_long");
-  if (text.description && wordCount(text.description) > GINI_DESCRIPTION_MAX_WORDS) blockers.push("description_too_long");
-  const giniPrice = priced.priceReview ? null : integerOrNull(priced.price, { min: 1 });
-  const quantity = integerOrNull(resolved?.stock, { min: 0 });
-  if (priced.priceReview) blockers.push("price_needs_review");
-  else if (giniPrice == null) blockers.push("invalid_price");
-  if (quantity == null) blockers.push("invalid_quantity");
-  if (!plannedImages.length) blockers.push("missing_image");
-  if (plannedImages.some((url) => !isAllowedMediaUrl(url))) blockers.push("invalid_image");
-
+  const duplicateProductIds = sku ? await ownersForSku(giniSkuKey(sku)) : [];
   const mapping = await readLiveMapping(doc);
-  blockers.push(...mapping.blockers);
-
   let existing = null;
-  if (sku && !blockers.includes("connection_required") && !blockers.includes("categories_unavailable")) {
+  if (sku && !mapping.blockers.includes("connection_required") && !mapping.blockers.includes("categories_unavailable")) {
     try {
       existing = await findExistingGiniProduct(sku);
     } catch {
       existing = { error: true };
     }
-    if (existing?.error) blockers.push("gini_lookup_failed");
-    else if (existing?.exists) blockers.push("existing_gini_product");
   }
-
-  const decision = decideSyncAction(blockers);
-  const warnings = [];
-  if (imageUrls.length > GINI_IMAGE_LIMIT) warnings.push("Only the first 10 images will be sent.");
-  if (resolved?.outOfStock === true) warnings.push("BrownStore marks this product out of stock.");
-  if (simple.simple) {
-    warnings.push("GINI mode: SIMPLE_PRODUCT");
-    warnings.push("BrownStore variants collapsed: 1");
-  }
-  if (decision.action === "UPDATE_AVAILABLE") {
-    warnings.push("This SKU already exists on GINI. The future action would be UPDATE. Send stays blocked.");
-  }
-  const category = mapping.category;
-  const subcategory = mapping.subcategory;
-  const isVisible = resolved?.isActive === false ? 0 : 1;
-  const payloadPreview = buildSimplePayloadPreview({
-    text,
-    sku,
-    price: giniPrice,
-    quantity,
-    securityStock: GINI_SAFETY_STOCK,
-    category,
-    subcategory,
-    isVisible,
-    imageUrls: plannedImages,
-  });
-  return {
-    productId: String(doc._id),
-    sku,
-    action: decision.action,
-    canSend: decision.canSend,
-    giniMode: simple.giniMode,
-    brownStoreVariantsCollapsed: simple.brownStoreVariantsCollapsed,
-    variantCount: simple.variantCount,
-    brownStorePrice: priced.priceReview ? null : priced.storePrice,
-    commissionRate: priced.rate,
-    giniPrice: priced.priceReview ? null : giniPrice,
-    priceReview: Boolean(priced.priceReview),
-    priceReviewReason: priced.priceReviewReason || "",
-    quantity,
-    category,
-    subcategory,
-    imageCount: plannedImages.length,
-    payloadPreview,
-    warnings,
-    blockers: decision.blockers,
-    blockerMessages: decision.blockers.map(blockerMessage),
-    duplicateProductIds: blockers.includes("duplicate_brownstore_sku") ? duplicateProductIds : [],
-    existingGiniProductId: existing?.giniProductId || "",
-    collectionId: productScopeIds(doc).collection,
-  };
+  return buildGiniPlanFromParts({ doc, resolved, priced, duplicateProductIds, mapping, existing });
 }
 
 function publicPreview(plan, previewToken = "") {
@@ -340,7 +137,7 @@ export async function previewGiniSyncOne({ productId } = {}) {
   return publicPreview(plan, previewToken);
 }
 
-async function downloadImage(url, index) {
+export async function downloadGiniProductImage(url, index) {
   if (!isAllowedMediaUrl(url)) {
     const error = new Error(blockerMessage("invalid_image"));
     error.code = "invalid_image";
@@ -388,6 +185,12 @@ function appendPayload(form, payload, files) {
   form.append("subcategory_id", formValue(payload.subcategory_id));
   form.append("is_visible", formValue(payload.is_visible));
   for (const file of files) form.append("images[]", file.blob, file.filename);
+}
+
+export function buildGiniCreateForm(payload, files) {
+  const form = new FormData();
+  appendPayload(form, payload, files);
+  return form;
 }
 
 async function recordAudit(fields) {
@@ -451,7 +254,7 @@ export async function sendGiniSyncOne({ productId, confirm = false, previewToken
   try {
     files = [];
     for (let index = 0; index < plan.payloadPreview.images.length; index += 1) {
-      files.push(await downloadImage(plan.payloadPreview.images[index].url, index));
+      files.push(await downloadGiniProductImage(plan.payloadPreview.images[index].url, index));
     }
   } catch (err) {
     return blockedResult({ ...plan, blockers: ["invalid_image"] }, err.code || "invalid_image");
@@ -463,8 +266,7 @@ export async function sendGiniSyncOne({ productId, confirm = false, previewToken
   );
   if (!claimed) return blockedResult(plan, "preview_required");
 
-  const form = new FormData();
-  appendPayload(form, plan.payloadPreview, files);
+  const form = buildGiniCreateForm(plan.payloadPreview, files);
   let response;
   try {
     response = await performGiniRequest({

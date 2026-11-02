@@ -7,6 +7,14 @@ import {
   testGiniConnection,
 } from "../services/giniConnection.js";
 import { previewGiniSyncOne, searchGiniSyncProducts, sendGiniSyncOne } from "../services/giniSyncOne.js";
+import {
+  getLatestGiniSyncJob,
+  pauseGiniSyncAll,
+  resumeGiniSyncAll,
+  runGiniSyncPreview,
+  startGiniSyncAll,
+  stopGiniSyncAll,
+} from "../services/giniSyncAll.js";
 
 export const giniConnectionRouter = Router();
 
@@ -118,6 +126,64 @@ giniConnectionRouter.post("/platforms/gini/sync-one/send", async (req, res) => {
     res.status(result.ok ? 200 : 400).json(result);
   } catch (err) {
     fail(res, err, "Failed to send GINI product");
+  }
+});
+
+giniConnectionRouter.get("/platforms/gini/sync-all", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await getLatestGiniSyncJob(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to load GINI sync");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/preview", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await runGiniSyncPreview(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to preview GINI catalog");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/start", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await startGiniSyncAll({
+      confirm: body.confirm === true,
+      previewJobId: body.previewJobId,
+      catalogSignature: body.catalogSignature,
+      expectedReady: body.expectedReady,
+      scope: body.scope,
+      limit: body.limit,
+      approveFullRun: body.approveFullRun === true,
+    });
+    res.json(assertNoSecretLeak(result, ""));
+  } catch (err) {
+    fail(res, err, "Failed to start GINI sync");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/pause", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await pauseGiniSyncAll(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to pause GINI sync");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/resume", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await resumeGiniSyncAll(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to resume GINI sync");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/stop", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await stopGiniSyncAll(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to stop GINI sync");
   }
 });
 

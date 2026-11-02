@@ -12,6 +12,7 @@ const elryanSyncProductResultSchema = new mongoose.Schema(
     blockerCodes: { type: [String], default: [] },
     payloadHash: { type: String, default: "" },
     readiness: { type: String, default: "" },
+    dimensionSource: { type: String, default: "" },
   },
   { timestamps: true }
 );

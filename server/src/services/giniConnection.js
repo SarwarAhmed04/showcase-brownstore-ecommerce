@@ -412,6 +412,7 @@ export async function performGiniRequest({
       edgeBlocked: isEdgeBlock(status, contentType, text),
       safeErrorMessage: buildSafeErrorMessage(json, safeBodySnippet, secrets),
       safeBodySnippet,
+      retryAfter: retryAfterSeconds(response),
     };
   } finally {
     clearTimeout(timer);

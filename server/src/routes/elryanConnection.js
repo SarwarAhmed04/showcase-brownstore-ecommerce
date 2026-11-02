@@ -55,6 +55,13 @@ import {
   saveElryanStagingProductOverride,
 } from "../services/elryanStagingInput.js";
 import {
+  getElryanCollectionDimensionDetail,
+  listElryanCollectionDimensionCatalog,
+  listElryanDimensionExceptions,
+  saveElryanCollectionDimension,
+  setElryanDimensionExclusion,
+} from "../services/elryanCollectionDimensions.js";
+import {
   getElryanSyncAllStatus,
   pauseElryanSyncAll,
   resumeElryanSyncAll,
@@ -62,6 +69,10 @@ import {
   startElryanSyncAll,
   stopElryanSyncAll,
 } from "../services/elryanSyncAll.js";
+import {
+  listElryanWarrantyMappingPage,
+  saveElryanBrandWarrantyMapping,
+} from "../services/elryanWarrantyMapping.js";
 import { assertNoElryanSecretLeak } from "../utils/elryanRedact.js";
 
 export const elryanConnectionRouter = Router();
@@ -391,6 +402,32 @@ elryanConnectionRouter.get("/platforms/elryan/warranties", async (_req, res) => 
   }
 });
 
+elryanConnectionRouter.get("/platforms/elryan/warranty-mapping", async (_req, res) => {
+  try {
+    res.json(assertNoElryanSecretLeak(await listElryanWarrantyMappingPage(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to load Elryan warranty mapping");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/warranty-mapping", async (req, res) => {
+  try {
+    res.json(
+      assertNoElryanSecretLeak(
+        await saveElryanBrandWarrantyMapping({
+          brownKey: req.body?.brownKey,
+          elryanCode: req.body?.elryanCode,
+          confirmCoverage: req.body?.confirmCoverage === true,
+          confirmOverwrite: req.body?.confirmOverwrite === true,
+        }),
+        ""
+      )
+    );
+  } catch (err) {
+    fail(res, err, "Failed to save Elryan warranty mapping");
+  }
+});
+
 elryanConnectionRouter.get("/platforms/elryan/sku-exists", async (req, res) => {
   try {
     res.json(
@@ -507,6 +544,83 @@ elryanConnectionRouter.post("/platforms/elryan/staging-overrides", async (req, r
     );
   } catch (err) {
     fail(res, err, "Failed to save the Staging product override");
+  }
+});
+
+elryanConnectionRouter.get("/platforms/elryan/collection-dimensions", async (_req, res) => {
+  try {
+    res.json(await listElryanCollectionDimensionCatalog());
+  } catch (err) {
+    fail(res, err, "Failed to load Elryan collection dimensions");
+  }
+});
+
+elryanConnectionRouter.get("/platforms/elryan/collection-dimensions/detail", async (req, res) => {
+  try {
+    res.json(await getElryanCollectionDimensionDetail(req.query.brownCollectionId));
+  } catch (err) {
+    fail(res, err, "Failed to load the Elryan collection dimension rule");
+  }
+});
+
+elryanConnectionRouter.get("/platforms/elryan/collection-dimensions/exceptions", async (req, res) => {
+  try {
+    res.json(
+      await listElryanDimensionExceptions({
+        brownCollectionId: req.query.brownCollectionId,
+        reason: req.query.reason,
+        page: req.query.page,
+        limit: req.query.limit,
+      })
+    );
+  } catch (err) {
+    fail(res, err, "Failed to load Elryan dimension exceptions");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/collection-dimensions", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(
+      await saveElryanCollectionDimension(
+        {
+          environment: body.environment || "staging",
+          brownCollectionId: body.brownCollectionId,
+          width: body.width,
+          height: body.height,
+          depth: body.depth,
+          unit: body.unit,
+          applyMode: body.applyMode,
+          enabled: body.enabled === true,
+          verifiedForCollection: body.verifiedForCollection === true,
+          confirm: body.confirm === true,
+          confirmAutoApply: body.confirmAutoApply === true,
+        },
+        req.user
+      )
+    );
+  } catch (err) {
+    fail(res, err, "Failed to save the Elryan collection dimension rule");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/collection-dimensions/exclusions", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(
+      await setElryanDimensionExclusion(
+        {
+          environment: body.environment || "staging",
+          productId: body.productId,
+          sku: body.sku,
+          excluded: body.excluded === true ? true : body.excluded === false ? false : body.excluded,
+          confirm: body.confirm === true,
+        },
+        req.user
+      )
+    );
+  } catch (err) {
+    fail(res, err, "Failed to update the Elryan dimension exclusion");
   }
 });
 

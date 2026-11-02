@@ -34,6 +34,13 @@ const elryanSyncJobSchema = new mongoose.Schema(
     warrantySummary: { type: mongoose.Schema.Types.Mixed, default: null },
     pricingSummary: { type: mongoose.Schema.Types.Mixed, default: null },
     packageDimensions: { type: mongoose.Schema.Types.Mixed, default: null },
+    dimensionSummary: {
+      productOverride: { type: Number, default: 0 },
+      collectionAuto: { type: Number, default: 0 },
+      suggested: { type: Number, default: 0 },
+      missing: { type: Number, default: 0 },
+      invalid: { type: Number, default: 0 },
+    },
     lastError: { type: String, default: "" },
     startedAt: { type: Date, default: null },
     finishedAt: { type: Date, default: null },

@@ -666,5 +666,6 @@ function ManualCategorySetup({ partnerSlug, t, lang, onNotices }) {
 
 export default function CategorySetupPanel(props) {
   if (props.partnerSlug === "gini") return <GiniCategorySetup {...props} />;
+  if (props.partnerSlug === "elryan") return null;
   return <ManualCategorySetup {...props} />;
 }

@@ -1,4 +1,5 @@
 import { ELRYAN_PATHS, elryanProductWritesEnabled } from "../utils/elryanConstants.js";
+import { collectElryanWarrantyRows } from "../utils/elryanWarranty.js";
 import { interpretElryanSkuAvailability } from "../utils/elryanSku.js";
 import {
   normalizeElryanAttributeValueList,
@@ -236,10 +237,16 @@ export async function elryanCalculateCommission(query = {}) {
   };
 }
 
-/** READ — GET /v1/warranty */
+/** READ — GET /v1/warranty, following pagination when the response reports a total. */
 export async function elryanListWarranties() {
-  const result = await read(ELRYAN_PATHS.warranty);
-  return { classification: "READ", httpStatus: result.httpStatus, warranties: asList(result.json), raw: result.json };
+  const collected = await collectElryanWarrantyRows((query) => read(ELRYAN_PATHS.warranty, query));
+  return {
+    classification: "READ",
+    httpStatus: collected.httpStatus,
+    warranties: collected.rows,
+    pagination: collected.pagination,
+    raw: collected.raw,
+  };
 }
 
 /** READ — GET /v1/products/sku-exists */

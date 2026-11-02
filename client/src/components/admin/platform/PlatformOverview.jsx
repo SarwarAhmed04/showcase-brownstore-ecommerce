@@ -63,9 +63,14 @@ export default function PlatformOverview({ partnerSlug, partner, t, onOpen, onPa
 
   const actions = [
     ...(partnerSlug === "miswag" ? [["connection", t.miswagApiConnection]] : []),
+    ...(partnerSlug === "gini" ? [["connection", t.giniApiConnection]] : []),
+    ...(partnerSlug === "gini" ? [["syncOne", t.giniSyncOneTitle]] : []),
+    ...(partnerSlug === "gini" ? [["syncAll", t.giniSyncAllTitle]] : []),
     ...(partnerSlug === "miswag"
       ? [["mappingCategories", t.miswagMappingCategories]]
-      : [["mapping", t.categoryMapping]]),
+      : partnerSlug === "elryan"
+        ? [["elryanCategoryMapping", t.elryanCategoryMappingTitle || "Category Mapping"]]
+        : [["mapping", t.categoryMapping]]),
     ...(partnerSlug === "miswag" ? [["syncAll", t.miswagSyncAllTitle]] : []),
     ["availability", t.availabilityTab],
     ["commissions", t.existingCommissions],

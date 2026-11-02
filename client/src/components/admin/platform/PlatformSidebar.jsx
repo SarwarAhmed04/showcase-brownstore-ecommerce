@@ -2,6 +2,11 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { imgUrl } from "../../../lib/img";
+import {
+  ELRYAN_CATEGORY_MAPPING_TAB,
+  isElryanLegacyCategoryTab,
+  withElryanSharedSections,
+} from "../../../utils/elryanCategoryMappingPage";
 
 export const PLATFORM_SECTIONS = [
   ["overview", "overviewTab"],
@@ -39,11 +44,12 @@ export function platformSectionsFor(partnerSlug, elryanSections = null) {
     return [
       ["connection", "giniApiConnection"],
       ["syncOne", "giniSyncOneTitle"],
+      ["syncAll", "giniSyncAllTitle"],
       ...PLATFORM_SECTIONS,
     ];
   }
   if (partnerSlug === "elryan" && Array.isArray(elryanSections) && elryanSections.length) {
-    return [...elryanSections, ...PLATFORM_SECTIONS];
+    return withElryanSharedSections(elryanSections, PLATFORM_SECTIONS);
   }
   return PLATFORM_SECTIONS;
 }
@@ -128,11 +134,16 @@ export function PlatformNavBody({ nav, t, onNavigate }) {
         {sections.map(([id, labelKey]) => (
           <SectionButton
             key={id}
-            active={nav?.tab === id}
+            active={
+              nav?.tab === id ||
+              (id === ELRYAN_CATEGORY_MAPPING_TAB && isElryanLegacyCategoryTab(nav?.tab))
+            }
             disabled={!nav?.setTab}
             label={t[labelKey]}
             badge={
-              id === "mapping" || id === "mappingCategories" ? Number(nav?.noticeCount) || 0 : 0
+              id === "mapping" || id === "mappingCategories" || id === ELRYAN_CATEGORY_MAPPING_TAB
+                ? Number(nav?.noticeCount) || 0
+                : 0
             }
             onClick={() => {
               nav?.setTab?.(id);

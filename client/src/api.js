@@ -264,6 +264,23 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  giniSyncAllStatus: () => request("/api/admin/platforms/gini/sync-all"),
+  giniSyncAllPreview: () =>
+    request("/api/admin/platforms/gini/sync-all/preview", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  giniSyncAllStart: (body) =>
+    request("/api/admin/platforms/gini/sync-all/start", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  giniSyncAllPause: () =>
+    request("/api/admin/platforms/gini/sync-all/pause", { method: "POST", body: JSON.stringify({}) }),
+  giniSyncAllResume: () =>
+    request("/api/admin/platforms/gini/sync-all/resume", { method: "POST", body: JSON.stringify({}) }),
+  giniSyncAllStop: () =>
+    request("/api/admin/platforms/gini/sync-all/stop", { method: "POST", body: JSON.stringify({}) }),
   giniConnection: () => request("/api/admin/platforms/gini/connection"),
   saveGiniConnection: (body) =>
     request("/api/admin/platforms/gini/connection", {
@@ -395,6 +412,12 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  elryanWarrantyMapping: () => request("/api/admin/platforms/elryan/warranty-mapping"),
+  saveElryanWarrantyMapping: (body) =>
+    request("/api/admin/platforms/elryan/warranty-mapping", {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }),
   deleteElryanValueMapping: (kind, brownKey) =>
     request(
       `/api/admin/platforms/elryan/value-mappings/${encodeURIComponent(kind)}/${encodeURIComponent(brownKey)}`,
@@ -429,6 +452,33 @@ export const api = {
     request("/api/admin/platforms/elryan/sync-all/resume", { method: "POST", body: "{}" }),
   elryanSyncAllStop: () =>
     request("/api/admin/platforms/elryan/sync-all/stop", { method: "POST", body: "{}" }),
+  elryanCollectionDimensions: () => request("/api/admin/platforms/elryan/collection-dimensions"),
+  elryanCollectionDimensionDetail: (brownCollectionId) =>
+    request(
+      `/api/admin/platforms/elryan/collection-dimensions/detail?brownCollectionId=${encodeURIComponent(brownCollectionId || "")}`
+    ),
+  elryanCollectionDimensionExceptions: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.fromEntries(Object.entries(params).filter(([, value]) => value !== "" && value != null))
+    );
+    const suffix = qs.toString();
+    return request(`/api/admin/platforms/elryan/collection-dimensions/exceptions${suffix ? `?${suffix}` : ""}`);
+  },
+  saveElryanCollectionDimension: (body) =>
+    request("/api/admin/platforms/elryan/collection-dimensions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  elryanDimensionExclusion: (body) =>
+    request("/api/admin/platforms/elryan/collection-dimensions/exclusions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  elryanStagingDimensions: (body) =>
+    request("/api/admin/platforms/elryan/staging-dimensions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   miswagConnection: () => request("/api/admin/platforms/miswag/connection"),
   saveMiswagConnection: (body) =>
     request("/api/admin/platforms/miswag/connection", {

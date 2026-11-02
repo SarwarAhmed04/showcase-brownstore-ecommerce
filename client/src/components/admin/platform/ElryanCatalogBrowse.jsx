@@ -70,7 +70,7 @@ function CategoryMeta({ row, t }) {
   );
 }
 
-export default function ElryanCatalogBrowse({ t }) {
+export default function ElryanCatalogBrowse({ t, embedded = false }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState([]);
@@ -259,12 +259,14 @@ export default function ElryanCatalogBrowse({ t }) {
 
   return (
     <div className="space-y-8">
-      <div>
-        <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
-          {t.elryanCategoriesTitle}
-        </p>
-        <p className="mt-2 max-w-2xl text-sm text-brown/60">{t.elryanCategoriesHint}</p>
-      </div>
+      {embedded ? null : (
+        <div>
+          <p className="text-[11px] font-semibold tracking-[0.2em] text-tan uppercase">
+            {t.elryanCategoriesTitle}
+          </p>
+          <p className="mt-2 max-w-2xl text-sm text-brown/60">{t.elryanCategoriesHint}</p>
+        </div>
+      )}
 
       <section className="space-y-3 rounded-[1.5rem] bg-white p-4 ring-1 ring-brown/10">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-tan">

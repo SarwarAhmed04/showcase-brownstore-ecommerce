@@ -21,7 +21,11 @@ import { evaluatePlatformEligibility } from "../utils/platformEligibility.js";
 import { validateElryanPreviewParts } from "../utils/elryanValidator.js";
 import { assessElryanSellableUnits } from "../utils/elryanVariations.js";
 import { toResolvedProduct } from "../utils/productView.js";
-import { normalizeElryanWarrantyCatalog, uncheckedWarrantyCatalog } from "../utils/elryanWarranty.js";
+import {
+  collectElryanWarrantyRows,
+  normalizeElryanWarrantyCatalog,
+  uncheckedWarrantyCatalog,
+} from "../utils/elryanWarranty.js";
 import {
   brownColourKeyFromResolved,
   listElryanValueMappings,
@@ -32,8 +36,14 @@ import {
   resolveElryanWarrantyFromRows,
 } from "../utils/elryanWarrantyResolve.js";
 import { resolveElryanScopedValue } from "../utils/elryanValueResolve.js";
+import { brownCollectionIdentity, resolveElryanDimensions } from "../utils/elryanDimensionResolve.js";
+import { elryanDimensionBlockers } from "../utils/elryanStagingGate.js";
 import { ElryanClientError, elryanRequest } from "./elryanClient.js";
 import { resolveElryanConfig } from "./elryanConnection.js";
+import {
+  loadAllElryanCollectionDimensionRules,
+  loadElryanDimensionInputs,
+} from "./elryanCollectionDimensions.js";
 
 export const ELRYAN_SYNC_PREVIEW_BATCH = 25;
 
@@ -164,12 +174,39 @@ function publicJob(job, extras = {}) {
     createdAt: raw.createdAt || null,
     productWritesEnabled: elryanProductWritesEnabled(),
     liveWritesAllowed: false,
+    dimensionSummary: raw.dimensionSummary || {
+      productOverride: 0,
+      collectionAuto: 0,
+      suggested: 0,
+      missing: 0,
+      invalid: 0,
+    },
     ...extras,
   };
 }
 
+function bumpDimensionSummary(job, result) {
+  if (result.status === "INACTIVE" || result.status === "FAILED") return;
+  if (!job.dimensionSummary) {
+    job.dimensionSummary = {
+      productOverride: 0,
+      collectionAuto: 0,
+      suggested: 0,
+      missing: 0,
+      invalid: 0,
+    };
+  }
+  if (result.dimensionSource === "PRODUCT_OVERRIDE") job.dimensionSummary.productOverride += 1;
+  else if (result.dimensionSource === "COLLECTION_AUTO") job.dimensionSummary.collectionAuto += 1;
+  else if (result.dimensionSource === "SUGGESTED") job.dimensionSummary.suggested += 1;
+  else if (result.dimensionReason === "invalid_dimensions") job.dimensionSummary.invalid += 1;
+  else job.dimensionSummary.missing += 1;
+  job.markModified("dimensionSummary");
+}
+
 function tally(job, result) {
   job.processed += 1;
+  bumpDimensionSummary(job, result);
   const codes = result.blockerCodes || [];
   if (result.status === "FAILED") {
     job.failed += 1;
@@ -203,25 +240,38 @@ async function loadWarrantyCatalog(config) {
     );
   }
   try {
-    const result = await elryanRequest({
-      baseUrl: config.baseUrl,
-      apiKey: config.apiKey,
-      path: ELRYAN_PATHS.warranty,
-      method: "GET",
-      classification: "READ",
-      retries: 0,
+    const collected = await collectElryanWarrantyRows(async (query) => {
+      const result = await elryanRequest({
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        path: ELRYAN_PATHS.warranty,
+        method: "GET",
+        query,
+        classification: "READ",
+        retries: 0,
+      });
+      if (!result.ok) {
+        return {
+          ok: false,
+          httpStatus: result.httpStatus,
+          json: result.json,
+          message: sanitizeElryanText(
+            result.text || `Warranty list returned HTTP ${result.httpStatus}`,
+            [config.apiKey]
+          ),
+        };
+      }
+      return result;
     });
-    const rows = Array.isArray(result.json?.data) ? result.json.data : [];
-    if (!result.ok) {
-      return uncheckedWarrantyCatalog(
-        sanitizeElryanText(result.text || `Warranty list returned HTTP ${result.httpStatus}`, [config.apiKey])
-      );
-    }
-    return normalizeElryanWarrantyCatalog(rows, result.httpStatus);
+    const catalog = normalizeElryanWarrantyCatalog(collected.rows, collected.httpStatus);
+    catalog.pagination = collected.pagination;
+    return catalog;
   } catch (err) {
-    return uncheckedWarrantyCatalog(
+    const catalog = uncheckedWarrantyCatalog(
       sanitizeElryanText(err?.message || "Warranty list could not be read.", [config.apiKey])
     );
+    catalog.httpStatus = Number(err?.httpStatus) || 0;
+    return catalog;
   }
 }
 
@@ -250,6 +300,8 @@ async function prepareContext(environment) {
     warrantyCatalog,
     categoryIndex,
     attributeSets: new Map(),
+    collectionDimensions:
+      environment === "staging" ? await loadAllElryanCollectionDimensionRules() : new Map(),
   };
 }
 
@@ -292,7 +344,7 @@ function lookupWarranty(context, doc) {
   }).mapping;
 }
 
-export async function evaluateElryanProductForSync(doc, context, { origin = "" } = {}) {
+export async function evaluateElryanProductForSync(doc, context, { origin = "", dimensionRow = null, excluded = false } = {}) {
   const productId = String(doc._id);
   const resolved = toResolvedProduct(doc);
   const sku = resolved?.sku || doc.itemCode || "";
@@ -322,7 +374,18 @@ export async function evaluateElryanProductForSync(doc, context, { origin = "" }
     : null;
   const warranty = lookupWarranty(context, doc);
   const attributes = mappingAttributes(mapping, context.environment);
-  const extraBlockers = [];
+  const collectionIdentity = brownCollectionIdentity(doc);
+  const dimensions = resolveElryanDimensions({
+    environment: context.environment,
+    product: doc,
+    dimensionRow: context.environment === "staging" ? dimensionRow : null,
+    collectionRule:
+      context.environment === "staging" && !collectionIdentity.ambiguous
+        ? context.collectionDimensions?.get(collectionIdentity.collectionId) || null
+        : null,
+    excluded: context.environment === "staging" && excluded === true,
+  });
+  const extraBlockers = [...elryanDimensionBlockers(dimensions)];
   const category = mapping.categoryId ? context.categoryIndex.get(String(mapping.categoryId)) : null;
   if (category && category.isParent === true) {
     extraBlockers.push({
@@ -363,6 +426,7 @@ export async function evaluateElryanProductForSync(doc, context, { origin = "" }
     warranty,
     attributes,
     pricing,
+    dimensions,
     origin,
     quantity: qty,
   });
@@ -379,6 +443,8 @@ export async function evaluateElryanProductForSync(doc, context, { origin = "" }
     changeType: "",
     payloadHash: ready ? elryanOutboundPriceHash(payload, pricing.pricingSource) : "",
     readiness: validation.readiness,
+    dimensionSource: dimensions.source,
+    dimensionReason: dimensions.reason,
   };
 }
 
@@ -492,8 +558,8 @@ function summaries(context) {
       message: ELRYAN_PRICING_NOTE,
     },
     packageDimensions: {
-      status: "UNVERIFIED",
-      note: ELRYAN_PACKAGE_DIMENSIONS_NOTE,
+      status: "RESOLVED_PER_PRODUCT",
+      note: `${ELRYAN_PACKAGE_DIMENSIONS_NOTE} Sync All uses the same Staging dimension resolver as Sync One. A collection AUTO_APPLY rule is used only after an operator confirms that collection. Unverified products are not READY. Nothing is sent.`,
     },
   };
 }
@@ -524,6 +590,13 @@ export async function runElryanSyncPreview({ strategy = "full", origin = "" } = 
     startedAt: new Date(),
     origin: String(origin || ""),
     sentToElryan: 0,
+    dimensionSummary: {
+      productOverride: 0,
+      collectionAuto: 0,
+      suggested: 0,
+      missing: 0,
+      invalid: 0,
+    },
   });
   kick(job._id);
   return {
@@ -546,11 +619,21 @@ async function processPreviewBatch(job, context, token) {
   }
   const batch = await Product.find(filter).sort({ _id: 1 }).limit(size).lean();
   if (!batch.length) return { done: true, finished: true };
+  const dimensionInputs = await loadElryanDimensionInputs(
+    context.environment,
+    batch,
+    context.collectionDimensions
+  );
   const evaluated = [];
   for (const doc of batch) {
     if (!loopIsCurrent(job._id, token)) return { done: true };
+    const productId = String(doc._id);
     try {
-      const result = await evaluateElryanProductForSync(doc, context, { origin: context.origin || "" });
+      const result = await evaluateElryanProductForSync(doc, context, {
+        origin: context.origin || "",
+        dimensionRow: dimensionInputs.checks.get(productId) || null,
+        excluded: dimensionInputs.exclusions.has(productId),
+      });
       evaluated.push(result);
     } catch (err) {
       evaluated.push({
@@ -584,6 +667,7 @@ async function processPreviewBatch(job, context, token) {
             blockerCodes: result.blockerCodes || [],
             payloadHash: result.payloadHash || "",
             readiness: result.readiness || "",
+            dimensionSource: result.dimensionSource || "",
           },
         },
         upsert: true,

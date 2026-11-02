@@ -7,7 +7,12 @@ import { ElryanConfirmedSend } from "../models/ElryanConfirmedSend.js";
 import { ElryanSendAttempt } from "../models/ElryanSendAttempt.js";
 import { ElryanStagingProductOverride } from "../models/ElryanStagingProductOverride.js";
 import { ElryanStagingPriceApproval } from "../models/ElryanStagingPriceApproval.js";
-import { ElryanStagingDimensionCheck } from "../models/ElryanStagingDimensionCheck.js";
+import { loadElryanDimensionInputs } from "./elryanCollectionDimensions.js";
+import {
+  brownCollectionIdentity,
+  presentElryanPackageDimensions,
+  resolveElryanDimensions,
+} from "../utils/elryanDimensionResolve.js";
 import {
   elryanLiveProductWritesEnabled,
   elryanProductWritesEnabled,
@@ -17,7 +22,6 @@ import {
 import {
   attachCommissionInvestigation,
   buildElryanPricingView,
-  ELRYAN_PACKAGE_DIMENSIONS_NOTE,
   elryanOutboundPriceHash,
 } from "../utils/elryanPricing.js";
 import { buildElryanProductPayload, collectElryanImageUrls } from "../utils/elryanPayloadBuilder.js";
@@ -45,7 +49,6 @@ import { normalizeElryanWarrantyCatalog, uncheckedWarrantyCatalog } from "../uti
 import { getElryanConnectionPublic, getElryanWritesGatePublic, resolveElryanConfig } from "./elryanConnection.js";
 import {
   ELRYAN_FIRST_STAGING_CREATE_SKU,
-  assessElryanDimensionConfirmation,
   elryanDimensionBlockers,
   elryanPublicationFromCreate,
   matchElryanStagingPriceApproval,
@@ -155,14 +158,21 @@ export async function assembleElryanSyncOne({ productId, origin = "", investigat
   const warrantyResolved = await resolveElryanWarrantyForProduct(doc, config.environment);
   const warrantyFallback = warrantyResolved.mapping;
 
-  const [override, approvalRow, dimensionRow] = await Promise.all([
+  const [override, approvalRow, dimensionInputs] = await Promise.all([
     ElryanStagingProductOverride.findOne({ environment: "staging", productId: productKey }).lean(),
     ElryanStagingPriceApproval.findOne({ environment: "staging", productId: productKey }).lean(),
-    ElryanStagingDimensionCheck.findOne({ environment: "staging", productId: productKey }).lean(),
+    loadElryanDimensionInputs(config.environment, [doc]),
   ]);
-  const dimensions = assessElryanDimensionConfirmation(
-    config.environment === "staging" ? dimensionRow : null
-  );
+  const collectionIdentity = brownCollectionIdentity(doc);
+  const dimensions = resolveElryanDimensions({
+    environment: config.environment,
+    product: doc,
+    dimensionRow: dimensionInputs.checks.get(productKey) || null,
+    collectionRule: collectionIdentity.ambiguous
+      ? null
+      : dimensionInputs.rules.get(collectionIdentity.collectionId) || null,
+    excluded: dimensionInputs.exclusions.has(productKey),
+  });
   const attributes = mergeElryanStagingAttributes(
     config.environment,
     mappingAttributes(mappingValues),
@@ -402,23 +412,7 @@ export async function previewElryanSyncOne({ productId, origin = "", investigate
       catalogCount: assembled.warrantyCatalog.codes?.length || 0,
       message: assembled.warrantyCatalog.message || "",
     },
-    packageDimensions: dimensions.confirmed
-      ? {
-          status: "CONFIRMED",
-          unit: dimensions.unit,
-          width: dimensions.width,
-          height: dimensions.height,
-          depth: dimensions.depth,
-          note: "The operator explicitly confirmed the unit and the width, height, and depth for this Staging product.",
-        }
-      : {
-          status: "UNVERIFIED",
-          unit: "",
-          width: null,
-          height: null,
-          depth: null,
-          note: `${ELRYAN_PACKAGE_DIMENSIONS_NOTE} Sending stays blocked until the operator explicitly confirms the unit and which side is width, height, and depth.`,
-        },
+    packageDimensions: presentElryanPackageDimensions(dimensions),
     proposedPayload: assembled.payload,
     sendAttempt,
     connection: {

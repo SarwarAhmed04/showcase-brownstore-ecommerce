@@ -62,12 +62,14 @@ export function assessElryanDimensionConfirmation(row) {
 
 export function elryanDimensionBlockers(confirmation) {
   if (confirmation?.confirmed === true) return [];
+  const suggested = confirmation?.source === "SUGGESTED";
   return [
     {
       code: "dimensions_unverified",
       status: ELRYAN_READINESS.MISSING_REQUIRED_FIELD,
-      message:
-        "Packed width, height, and depth stay blocked until an operator explicitly confirms the measurement unit and which side is width, height, and depth. No unit or axis was assumed.",
+      message: suggested
+        ? "A collection dimension suggestion is visible, but it is not confirmed and does not authorize sending."
+        : "Packed width, height, and depth stay blocked until an operator explicitly confirms the measurement unit and which side is width, height, and depth. No unit or axis was assumed.",
     },
   ];
 }

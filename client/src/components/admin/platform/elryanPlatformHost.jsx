@@ -2,40 +2,31 @@
  * Local Elryan WIP host — keep untracked for GINI-only deploys.
  * Imported optionally from Commissions.jsx / PlatformSidebar.jsx.
  */
+import ElryanDimensionsMapping from "./ElryanDimensionsMapping";
 import ElryanApiConnection from "./ElryanApiConnection";
 import ElryanAttributeMappings from "./ElryanAttributeMappings";
-import ElryanCatalogBrowse from "./ElryanCatalogBrowse";
+import ElryanWarrantyMapping from "./ElryanWarrantyMapping";
 import ElryanSmartMapping from "./ElryanSmartMapping";
 import ElryanPanelErrorBoundary from "./ElryanPanelErrorBoundary";
 import ElryanSyncAll from "./ElryanSyncAll";
 import ElryanSyncOneProduct from "./ElryanSyncOneProduct";
+import {
+  elryanPlatformSectionEntries,
+  isElryanCategoryMappingTab,
+} from "../../../utils/elryanCategoryMappingPage";
 
 export function elryanPlatformSections() {
-  return [
-    ["connection", "elryanApiConnection"],
-    ["elryanCategories", "elryanCategoriesTitle"],
-    ["elryanSmartMapping", "elryanSmartMappingTitle"],
-    ["elryanAttributes", "elryanAttributesTitle"],
-    ["syncOne", "elryanSyncOneTitle"],
-    ["syncAll", "elryanSyncAllTitle"],
-  ];
+  return elryanPlatformSectionEntries();
 }
 
 export default function ElryanPlatformHost({ tab, partnerSlug, t, lang }) {
   if (partnerSlug !== "elryan") return null;
 
   if (tab === "connection") return <ElryanApiConnection t={t} />;
-  if (tab === "elryanCategories") {
+  if (isElryanCategoryMappingTab(tab)) {
     return (
       <ElryanPanelErrorBoundary t={t}>
-        <ElryanCatalogBrowse t={t} />
-      </ElryanPanelErrorBoundary>
-    );
-  }
-  if (tab === "elryanSmartMapping") {
-    return (
-      <ElryanPanelErrorBoundary t={t}>
-        <ElryanSmartMapping t={t} />
+        <ElryanSmartMapping t={t} lang={lang} />
       </ElryanPanelErrorBoundary>
     );
   }
@@ -43,6 +34,20 @@ export default function ElryanPlatformHost({ tab, partnerSlug, t, lang }) {
     return (
       <ElryanPanelErrorBoundary t={t}>
         <ElryanAttributeMappings t={t} />
+      </ElryanPanelErrorBoundary>
+    );
+  }
+  if (tab === "elryanWarrantyMapping") {
+    return (
+      <ElryanPanelErrorBoundary t={t}>
+        <ElryanWarrantyMapping t={t} lang={lang} />
+      </ElryanPanelErrorBoundary>
+    );
+  }
+  if (tab === "elryanDimensionsMapping") {
+    return (
+      <ElryanPanelErrorBoundary t={t}>
+        <ElryanDimensionsMapping t={t} lang={lang} />
       </ElryanPanelErrorBoundary>
     );
   }

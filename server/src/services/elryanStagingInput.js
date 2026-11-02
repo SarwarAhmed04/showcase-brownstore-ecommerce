@@ -2,6 +2,7 @@ import { Product } from "../models/Product.js";
 import { ElryanStagingDimensionCheck } from "../models/ElryanStagingDimensionCheck.js";
 import { ElryanStagingProductOverride } from "../models/ElryanStagingProductOverride.js";
 import { toResolvedProduct } from "../utils/productView.js";
+import { expireElryanPreviewTokens } from "./elryanCollectionDimensions.js";
 import {
   assessElryanDimensionConfirmation,
   normalizeElryanStagingAttributes,
@@ -111,6 +112,7 @@ export async function confirmElryanStagingDimensions({
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   ).lean();
+  await expireElryanPreviewTokens([String(loaded.doc._id)]);
   return {
     ok: true,
     environment: "staging",

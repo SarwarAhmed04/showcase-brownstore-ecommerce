@@ -178,6 +178,11 @@ export default function ElryanSyncAll({ t }) {
             <Stat label={t.elryanSyncPricingUnverified} value={job.pricingUnverified ?? 0} />
             <Stat label={t.elryanSyncMissingRequired} value={job.missingRequired ?? 0} />
             <Stat label={t.elryanSyncVariationBlocked} value={job.variationBlocked ?? 0} />
+            <Stat label={t.elryanDimOverrideCount} value={job.dimensionSummary?.productOverride ?? 0} />
+            <Stat label={t.elryanDimInheritedCount} value={job.dimensionSummary?.collectionAuto ?? 0} />
+            <Stat label={t.elryanDimSuggestedCount} value={job.dimensionSummary?.suggested ?? 0} />
+            <Stat label={t.elryanDimMissingCount} value={job.dimensionSummary?.missing ?? 0} />
+            <Stat label={t.elryanDimInvalidCount} value={job.dimensionSummary?.invalid ?? 0} />
           </div>
           <p className="text-xs text-brown/45">{t.elryanSyncPreviewNote}</p>
           {samples.length ? (

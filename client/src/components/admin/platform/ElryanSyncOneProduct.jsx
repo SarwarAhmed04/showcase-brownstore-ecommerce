@@ -434,11 +434,18 @@ export default function ElryanSyncOneProduct({ t, lang }) {
             </div>
             <div>
               <dt className="text-brown/45">{t.elryanDimensions}</dt>
-              <dd className="font-semibold">{preview.packageDimensions?.status || "UNVERIFIED"}</dd>
+              <dd className="font-semibold">
+                {preview.packageDimensions?.source || preview.packageDimensions?.status || "UNVERIFIED"}
+              </dd>
             </div>
           </dl>
           {preview.packageDimensions?.note ? (
             <p className="text-sm text-brown/60">{preview.packageDimensions.note}</p>
+          ) : null}
+          {preview.packageDimensions?.suggestion ? (
+            <p className="text-sm text-brown/60">
+              {t.elryanDimSuggestion}: {preview.packageDimensions.suggestion.height} × {preview.packageDimensions.suggestion.width} × {preview.packageDimensions.suggestion.depth} cm
+            </p>
           ) : null}
           {preview.sendAttempt?.blocked ? (
             <p className="text-sm text-brown/70">

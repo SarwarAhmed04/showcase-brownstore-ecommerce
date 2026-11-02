@@ -9,8 +9,11 @@ import { MongoMemoryServer } from "mongodb-memory-server";
 import { fileURLToPath } from "node:url";
 import { adminRouter } from "./routes/admin.js";
 import { Commission } from "./models/Commission.js";
+import { ElryanCollectionDimension } from "./models/ElryanCollectionDimension.js";
 import { ElryanConfirmedSend } from "./models/ElryanConfirmedSend.js";
 import { ElryanConnection } from "./models/ElryanConnection.js";
+import { ElryanDimensionExclusion } from "./models/ElryanDimensionExclusion.js";
+import { ElryanStagingDimensionCheck } from "./models/ElryanStagingDimensionCheck.js";
 import { ElryanSyncJob } from "./models/ElryanSyncJob.js";
 import { ElryanSyncProductResult } from "./models/ElryanSyncProductResult.js";
 import { ElryanValueMapping } from "./models/ElryanValueMapping.js";
@@ -32,7 +35,9 @@ import {
   stopElryanSyncAll,
 } from "./services/elryanSyncAll.js";
 import { buildElryanProductPayload } from "./utils/elryanPayloadBuilder.js";
+import { elryanOutboundPriceHash } from "./utils/elryanPricing.js";
 import { ELRYAN_READINESS } from "./utils/elryanConstants.js";
+import { previewElryanSyncOne } from "./services/elryanSyncOne.js";
 import { validateElryanPreviewParts } from "./utils/elryanValidator.js";
 import { normalizeElryanWarrantyCatalog, warrantyBlockersFor } from "./utils/elryanWarranty.js";
 import { encryptApiKey } from "./utils/partnerAuth.js";
@@ -266,6 +271,9 @@ describe("Elryan Sync All preview", { concurrency: 1 }, () => {
       ElryanSyncJob.deleteMany({}),
       ElryanSyncProductResult.deleteMany({}),
       ElryanConfirmedSend.deleteMany({}),
+      ElryanCollectionDimension.deleteMany({}),
+      ElryanStagingDimensionCheck.deleteMany({}),
+      ElryanDimensionExclusion.deleteMany({}),
       ElryanValueMapping.deleteMany({}),
       PlatformTaxonomyConfig.deleteMany({ partner: "elryan" }),
       PlatformVisibilityRule.deleteMany({ partner: "elryan" }),
@@ -348,14 +356,16 @@ describe("Elryan Sync All preview", { concurrency: 1 }, () => {
     const done = await waitFor((status) => status.job?.status === "preview" && status.job?.finishedAt);
     const job = done.job;
     assert.equal(job.scanned, 4);
-    assert.equal(job.ready, 1);
-    assert.equal(job.newCount, 1);
+    assert.equal(job.ready, 0);
+    assert.equal(job.newCount, 0);
     assert.equal(job.changedCount, 0);
     assert.equal(job.unchangedCount, 0);
     assert.equal(job.missingBrand, 1);
     assert.equal(job.missingRequired, 1);
     assert.equal(job.inactive, 1);
-    assert.equal(job.skipped, 2);
+    assert.equal(job.skipped, 3);
+    assert.equal(job.dimensionSummary.missing, 3);
+    assert.equal(job.dimensionSummary.collectionAuto, 0);
     assert.equal(job.failed, 0);
     assert.equal(job.sentToElryan, 0);
     assert.equal(job.pricingUnverified, 0);
@@ -366,20 +376,22 @@ describe("Elryan Sync All preview", { concurrency: 1 }, () => {
     assert.equal(calls.some((line) => line.startsWith("POST") || line.startsWith("PATCH") || line.startsWith("PUT")), false);
 
     const complete = await ElryanSyncProductResult.findOne({ sku: "EL-READY-1" }).lean();
-    assert.equal(complete.status, "READY");
-    assert.equal(complete.readiness, ELRYAN_READINESS.READY);
+    assert.equal(complete.status, "SKIPPED");
+    assert.notEqual(complete.readiness, ELRYAN_READINESS.READY);
+    assert.equal(complete.blockerCodes.includes("dimensions_unverified"), true);
+    assert.equal(complete.dimensionSource, "MISSING");
     assert.equal(complete.blockerCodes.includes("pricing_unverified"), false);
-    assert.equal(await ElryanSyncProductResult.countDocuments({ status: "READY" }), 1);
+    assert.equal(await ElryanSyncProductResult.countDocuments({ status: "READY" }), 0);
     assert.equal(await ElryanConfirmedSend.countDocuments({}), 0);
 
     await runElryanSyncPreview({ strategy: "changed" });
     const changed = await waitFor((status) => status.job?.strategy === "changed" && status.job?.status === "preview");
-    assert.equal(changed.job.ready, 1);
-    assert.equal(changed.job.newCount, 1);
+    assert.equal(changed.job.ready, 0);
+    assert.equal(changed.job.newCount, 0);
     assert.equal(changed.job.changedCount, 0);
     assert.equal(changed.job.unchangedCount, 0);
     assert.equal(changed.job.sentToElryan, 0);
-    assert.equal(await ElryanSyncProductResult.countDocuments({ status: "READY" }), 2);
+    assert.equal(await ElryanSyncProductResult.countDocuments({ status: "READY" }), 0);
   });
 
   it("pauses, resumes, stops, and rejects an overlapping preview", async () => {
@@ -457,8 +469,8 @@ describe("Elryan Sync All preview", { concurrency: 1 }, () => {
     const back = await getElryanSyncAllStatus();
     assert.equal(back.environment, "staging");
     assert.equal(back.job.environment, "staging");
-    assert.equal(staging.job.ready, 1);
-    assert.equal(back.job.ready, 1);
+    assert.equal(staging.job.ready, 0);
+    assert.equal(back.job.ready, 0);
     const stored = await ElryanSyncJob.find({}).select("environment ready").lean();
     assert.deepEqual(stored.map((row) => row.environment).sort(), ["production", "staging"]);
   });
@@ -475,5 +487,211 @@ describe("Elryan Sync All preview", { concurrency: 1 }, () => {
     assert.equal(http.json.sentToElryan, 0);
     assert.equal(await Product.countDocuments({}), before);
     assert.equal(calls.some((line) => !line.startsWith("GET")), false);
+  });
+
+  it("inherits one confirmed collection rule in Sync All and Sync One without writing product dimensions", async () => {
+    const beforeProduct = await Product.findOne({ itemCode: "EL-READY-1" }).lean();
+    await ElryanCollectionDimension.create({
+      environment: "staging",
+      brownCollectionId: "col-1",
+      width: 10,
+      height: 20,
+      depth: 20,
+      unit: "cm",
+      applyMode: "AUTO_APPLY",
+      enabled: true,
+      verifiedForCollection: true,
+      verificationSource: "operator",
+      confirmedAt: new Date(),
+      confirmedBy: "elryan-sync@brownstore.test",
+    });
+    await Product.create(productShape({
+      ibsherId: "ibs-new-in-collection",
+      itemCode: "EL-NEW-1",
+      collectionName: { _id: "col-1", name: { en: "Lamps" } },
+    }));
+    const started = await runElryanSyncPreview({ strategy: "full" });
+    assert.equal(started.sentToElryan, 0);
+    const done = await waitFor((status) => status.job?.status === "preview" && status.job?.processed === 5);
+    assert.equal(done.job.ready, 2);
+    assert.equal(done.job.dimensionSummary.collectionAuto, 3);
+    assert.equal(done.job.sentToElryan, 0);
+    const inherited = await ElryanSyncProductResult.findOne({ sku: "EL-READY-1" }).lean();
+    const added = await ElryanSyncProductResult.findOne({ sku: "EL-NEW-1" }).lean();
+    const otherCollection = await ElryanSyncProductResult.findOne({ sku: "EL-ATTR-1" }).lean();
+    assert.equal(inherited.status, "READY");
+    assert.equal(inherited.dimensionSource, "COLLECTION_AUTO");
+    assert.equal(added.status, "READY");
+    assert.equal(added.dimensionSource, "COLLECTION_AUTO");
+    assert.equal(otherCollection.dimensionSource, "MISSING");
+    assert.notEqual(otherCollection.status, "READY");
+    assert.equal(await ElryanStagingDimensionCheck.countDocuments({}), 0);
+    assert.equal(await ElryanConfirmedSend.countDocuments({}), 0);
+    const preview = await previewElryanSyncOne({ productId: String(beforeProduct._id) });
+    assert.equal(preview.packageDimensions.source, "COLLECTION_AUTO");
+    assert.equal(preview.proposedPayload.width, 10);
+    assert.equal(preview.proposedPayload.height, 20);
+    assert.equal(preview.proposedPayload.depth, 20);
+    assert.equal(preview.readiness, ELRYAN_READINESS.READY);
+    assert.equal(
+      inherited.payloadHash,
+      elryanOutboundPriceHash(preview.proposedPayload, preview.pricing.pricingSource)
+    );
+    const afterProduct = await Product.findById(beforeProduct._id).lean();
+    assert.equal(afterProduct.price, beforeProduct.price);
+    assert.equal(String(afterProduct.updatedAt), String(beforeProduct.updatedAt));
+    assert.equal(calls.some((line) => line.startsWith("POST") || line.startsWith("PATCH") || line.startsWith("PUT")), false);
+  });
+
+  it("lets a verified product override beat the collection rule and detects a changed payload hash", async () => {
+    const product = await Product.findOne({ itemCode: "EL-READY-1" }).lean();
+    await ElryanCollectionDimension.create({
+      environment: "staging",
+      brownCollectionId: "col-1",
+      width: 10,
+      height: 20,
+      depth: 20,
+      unit: "cm",
+      applyMode: "AUTO_APPLY",
+      enabled: true,
+      verifiedForCollection: true,
+      verificationSource: "operator",
+      confirmedAt: new Date(),
+      confirmedBy: "elryan-sync@brownstore.test",
+    });
+    await ElryanStagingDimensionCheck.create({
+      environment: "staging",
+      productId: String(product._id),
+      sku: "EL-READY-1",
+      unit: "cm",
+      width: 30,
+      height: 40,
+      depth: 20,
+      axesConfirmed: true,
+      confirmedAt: new Date(),
+    });
+    await runElryanSyncPreview({ strategy: "full" });
+    const first = await waitFor((status) => status.job?.status === "preview" && status.job?.finishedAt);
+    const overridden = await ElryanSyncProductResult.findOne({ sku: "EL-READY-1" }).lean();
+    assert.equal(overridden.status, "READY");
+    assert.equal(overridden.dimensionSource, "PRODUCT_OVERRIDE");
+    assert.equal(first.job.dimensionSummary.productOverride, 1);
+    const preview = await previewElryanSyncOne({ productId: String(product._id) });
+    assert.equal(preview.proposedPayload.width, 30);
+    assert.equal(preview.proposedPayload.height, 40);
+    assert.equal(preview.packageDimensions.source, "PRODUCT_OVERRIDE");
+    assert.equal(overridden.payloadHash, elryanOutboundPriceHash(preview.proposedPayload, preview.pricing.pricingSource));
+    await ElryanConfirmedSend.create({
+      environment: "staging",
+      productId: String(product._id),
+      sku: "EL-READY-1",
+      payloadHash: overridden.payloadHash,
+      httpStatus: 200,
+      published: false,
+      confirmedAt: new Date(),
+    });
+    await ElryanCollectionDimension.updateOne({ brownCollectionId: "col-1" }, { $set: { depth: 21 } });
+    const unchangedPreview = await previewElryanSyncOne({ productId: String(product._id) });
+    assert.equal(unchangedPreview.proposedPayload.depth, 20);
+    await ElryanStagingDimensionCheck.deleteMany({ productId: String(product._id) });
+    await runElryanSyncPreview({ strategy: "changed" });
+    const changed = await waitFor((status) => status.job?.strategy === "changed" && status.job?.status === "preview");
+    const row = await ElryanSyncProductResult.findOne({ jobId: changed.job.id, sku: "EL-READY-1" }).lean();
+    assert.equal(row.dimensionSource, "COLLECTION_AUTO");
+    assert.equal(row.changeType, "changed");
+    assert.notEqual(row.payloadHash, overridden.payloadHash);
+    const ledger = await ElryanConfirmedSend.findOne({ productId: String(product._id) }).lean();
+    assert.equal(ledger.payloadHash, overridden.payloadHash);
+    assert.equal(await ElryanConfirmedSend.countDocuments({}), 1);
+    assert.equal(changed.job.sentToElryan, 0);
+    const storedCheck = await ElryanStagingDimensionCheck.findOne({ productId: String(product._id) }).lean();
+    assert.equal(storedCheck, null);
+    const afterProduct = await Product.findById(product._id).lean();
+    assert.equal(String(afterProduct.updatedAt), String(product.updatedAt));
+  });
+
+  it("does not let a suggest, disabled, excluded, or production path authorize dimensions", async () => {
+    const product = await Product.findOne({ itemCode: "EL-READY-1" }).lean();
+    await ElryanCollectionDimension.create({
+      environment: "staging",
+      brownCollectionId: "col-1",
+      width: 10,
+      height: 20,
+      depth: 20,
+      unit: "cm",
+      applyMode: "SUGGEST_REVIEW",
+      enabled: true,
+      verifiedForCollection: false,
+      verificationSource: "",
+      confirmedAt: new Date(),
+    });
+    await runElryanSyncPreview({ strategy: "full" });
+    const suggested = await waitFor((status) => status.job?.status === "preview" && status.job?.finishedAt);
+    const row = await ElryanSyncProductResult.findOne({ sku: "EL-READY-1" }).lean();
+    assert.equal(row.dimensionSource, "SUGGESTED");
+    assert.notEqual(row.status, "READY");
+    assert.equal(row.blockerCodes.includes("dimensions_unverified"), true);
+    assert.equal(suggested.job.dimensionSummary.suggested, 2);
+    assert.equal(suggested.job.ready, 0);
+    const preview = await previewElryanSyncOne({ productId: String(product._id) });
+    assert.equal(preview.proposedPayload.width, undefined);
+    assert.equal(preview.packageDimensions.source, "SUGGESTED");
+    assert.equal(preview.packageDimensions.suggestion.height, 20);
+    assert.notEqual(preview.readiness, ELRYAN_READINESS.READY);
+
+    await ElryanCollectionDimension.updateOne(
+      { brownCollectionId: "col-1" },
+      { $set: { applyMode: "DISABLED", enabled: false } }
+    );
+    await ElryanDimensionExclusion.create({
+      environment: "staging",
+      productId: String(product._id),
+      sku: "EL-READY-1",
+      excluded: true,
+    });
+    await ElryanConnection.updateOne({ singletonKey: "default" }, { $set: { environment: "production" } });
+    await runElryanSyncPreview({ strategy: "full" });
+    const production = await waitFor((status) => status.environment === "production" && status.job?.status === "preview");
+    const isolated = await ElryanSyncProductResult.findOne({
+      environment: "production",
+      sku: "EL-READY-1",
+    }).lean();
+    assert.equal(production.job.ready, 0);
+    assert.equal(isolated.dimensionSource, "MISSING");
+    assert.equal(await ElryanConfirmedSend.countDocuments({}), 0);
+  });
+
+  it("resolves collection dimensions across preview batches without per-product writes", async () => {
+    setElryanSyncBatchSizeForTests(10);
+    await ElryanCollectionDimension.create({
+      environment: "staging",
+      brownCollectionId: "col-1",
+      width: 10,
+      height: 20,
+      depth: 20,
+      unit: "cm",
+      applyMode: "AUTO_APPLY",
+      enabled: true,
+      verifiedForCollection: true,
+      verificationSource: "operator",
+      confirmedAt: new Date(),
+    });
+    const extras = Array.from({ length: 30 }, (_, index) => productShape({
+      ibsherId: `ibs-batch-${index}`,
+      itemCode: `EL-BATCH-${index}`,
+      collectionName: { _id: "col-1", name: { en: "Lamps" } },
+    }));
+    await Product.create(extras);
+    await runElryanSyncPreview({ strategy: "full" });
+    const done = await waitFor((status) => status.job?.status === "preview" && status.job?.processed === 34, 20000);
+    assert.equal(done.job.batchSize, 10);
+    assert.equal(done.job.ready, 31);
+    assert.equal(done.job.dimensionSummary.collectionAuto, 32);
+    assert.equal(done.job.dimensionSummary.missing, 1);
+    assert.equal(await ElryanStagingDimensionCheck.countDocuments({}), 0);
+    assert.equal(await ElryanCollectionDimension.countDocuments({}), 1);
+    assert.equal(await ElryanConfirmedSend.countDocuments({}), 0);
+    assert.equal(done.job.sentToElryan, 0);
+    assert.equal(calls.some((line) => line.startsWith("POST") || line.startsWith("PATCH") || line.startsWith("PUT")), false);
   });
 });

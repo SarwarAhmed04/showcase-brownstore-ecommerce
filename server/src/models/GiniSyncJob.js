@@ -1,0 +1,63 @@
+import mongoose from "mongoose";
+
+const giniSyncJobSchema = new mongoose.Schema(
+  {
+    partner: { type: String, required: true, default: "gini", index: true },
+    status: {
+      type: String,
+      enum: [
+        "preview_running",
+        "preview",
+        "running",
+        "paused",
+        "completed",
+        "stopped",
+        "auth_failed",
+        "rate_limited",
+        "edge_blocked",
+        "failed",
+        "stale",
+      ],
+      default: "preview_running",
+      index: true,
+    },
+    mode: { type: String, enum: ["preview", "sync"], default: "preview" },
+    runScope: { type: String, enum: ["preview", "limited", "full"], default: "preview" },
+    batchSize: { type: Number, default: 100 },
+    cursorProductId: { type: String, default: "" },
+    previewJobId: { type: String, default: "" },
+    catalogSignature: { type: String, default: "" },
+    expectedReady: { type: Number, default: 0 },
+    sendLimit: { type: Number, default: null },
+    approveFullRun: { type: Boolean, default: false },
+    limitReached: { type: Boolean, default: false },
+    total: { type: Number, default: 0 },
+    processed: { type: Number, default: 0 },
+    eligible: { type: Number, default: 0 },
+    readyCreate: { type: Number, default: 0 },
+    alreadyExists: { type: Number, default: 0 },
+    blocked: { type: Number, default: 0 },
+    inactive: { type: Number, default: 0 },
+    needsReview: { type: Number, default: 0 },
+    lookupUncertain: { type: Number, default: 0 },
+    created: { type: Number, default: 0 },
+    failed: { type: Number, default: 0 },
+    createUncertain: { type: Number, default: 0 },
+    remoteLookups: { type: Number, default: 0 },
+    blockerCounts: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+    blockerExamples: { type: [mongoose.Schema.Types.Mixed], default: () => [] },
+    failureSummary: { type: String, default: "" },
+    lastError: { type: String, default: "" },
+    runnerToken: { type: String, default: "" },
+    heartbeatAt: { type: Date, default: null },
+    startedAt: { type: Date, default: null },
+    finishedAt: { type: Date, default: null },
+    pausedAt: { type: Date, default: null },
+  },
+  { timestamps: true }
+);
+
+giniSyncJobSchema.index({ partner: 1, createdAt: -1 });
+giniSyncJobSchema.index({ partner: 1, status: 1 });
+
+export const GiniSyncJob = mongoose.model("GiniSyncJob", giniSyncJobSchema);
