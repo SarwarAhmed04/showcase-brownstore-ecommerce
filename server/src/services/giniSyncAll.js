@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
 import { Commission } from "../models/Commission.js";
+import { GiniChangedPreviewSnapshot } from "../models/GiniChangedPreviewSnapshot.js";
 import { GiniSyncJob } from "../models/GiniSyncJob.js";
 import { GiniSyncProductResult } from "../models/GiniSyncProductResult.js";
 import { GiniSyncSendState } from "../models/GiniSyncSendState.js";
@@ -14,10 +15,22 @@ import {
   buildGiniPlanFromParts,
   classifyConfirmedSend,
   classifyGiniBulk,
+  classifyGiniChangedPreview,
+  giniChangedFieldDiffs,
   giniPayloadHash,
   mappingFromTree,
 } from "../utils/giniSyncEvaluate.js";
 import { GINI_PRODUCTS_PATH, giniSkuKey, normalizeGiniItemCode } from "../utils/giniSyncOnePlan.js";
+import {
+  assessGiniImageChange,
+  explainGiniPriceQuantityChange,
+  giniChangedPreviewSignature,
+  giniImageReplacementIsolation,
+  giniImageWritesEnabled,
+  GINI_CHANGED_PREVIEW_TTL_MS,
+  GINI_PRODUCT_UPDATE_CONTENT_TYPE,
+  GINI_PRODUCT_UPDATE_METHOD,
+} from "../utils/giniProductUpdateContract.js";
 import { buildGiniCreateForm, downloadGiniProductImage } from "./giniSyncOne.js";
 import {
   fetchGiniCategoryTree,
@@ -27,6 +40,8 @@ import {
   sanitizeGiniText,
 } from "./giniConnection.js";
 import { findExistingGiniProduct } from "./giniSkuLookup.js";
+import { giniUpdateWritesEnabled } from "./giniProductUpdate.js";
+import { confirmedFieldSnapshotKey, loadConfirmedFieldSnapshots } from "../utils/giniConfirmedFields.js";
 
 export const GINI_SYNC_BATCH_SIZE = 100;
 export const GINI_BULK_LIMIT_MAX = 25;
@@ -1166,6 +1181,359 @@ export async function ensureGiniSyncRunner() {
   return job;
 }
 
+function changedPreviewName(doc, plan) {
+  const payloadName = String(plan?.payloadPreview?.name || "").trim();
+  if (payloadName) return payloadName;
+  const name = doc?.name;
+  if (typeof name === "string") return name.trim();
+  return String(name?.en || name?.ar || name?.ku || "").trim();
+}
+
+async function lookupForChangedPreview(sku, shared) {
+  if (!sku) return { error: true, failure: "error", status: 0 };
+  if (shared.apiDown) return { error: true, failure: shared.apiDown, status: 0 };
+  const key = giniSkuKey(sku);
+  if (key && shared.lookupCache.has(key)) return shared.lookupCache.get(key);
+  let attempt = 0;
+  let found = { error: true, failure: "error", status: 0 };
+  while (attempt < 4) {
+    await pace();
+    remoteLookupCount += 1;
+    try {
+      found = await findExistingGiniProduct(sku);
+    } catch (err) {
+      found = {
+        error: true,
+        status: Number(err?.status) || 0,
+        failure: err?.code === "connection_required" || err?.code === "secret_unreadable" ? "auth" : "error",
+      };
+    }
+    if (found.failure === "auth" || found.failure === "edge") {
+      shared.apiDown = found.failure;
+      return found;
+    }
+    const retry = found.failure === "rate_limited" || (found.error && (found.status === 0 || found.status >= 500));
+    if (!retry || attempt >= 3) break;
+    await sleep(backoff(attempt, found.retryAfter));
+    attempt += 1;
+  }
+  if (!found.error && key) shared.lookupCache.set(key, found);
+  return found;
+}
+
+function changedUpdateContract() {
+  return {
+    updatesSupported: true,
+    updateContractVerified: true,
+    updateWritesEnabled: giniUpdateWritesEnabled(),
+    updateMethod: GINI_PRODUCT_UPDATE_METHOD,
+    updateContentType: GINI_PRODUCT_UPDATE_CONTENT_TYPE,
+    updatePartial: true,
+    imageContractVerified: true,
+    imageWritesEnabled: giniImageWritesEnabled(),
+    imageWriteSupported: false,
+    imageOrderSupported: false,
+    previewId: "",
+    previewSignature: "",
+    expiresAt: null,
+  };
+}
+
+function emptyChangedPreview(message) {
+  return {
+    readOnly: true,
+    dryRun: true,
+    sentToGini: 0,
+    writesEnabled: giniBulkWritesEnabled(),
+    ...changedUpdateContract(),
+    checked: 0,
+    changed: 0,
+    unchanged: 0,
+    reconciliationNeeded: 0,
+    blocked: 0,
+    changedProducts: [],
+    reconciliationProducts: [],
+    blockedProducts: [],
+    provesRemoteChange: false,
+    message,
+  };
+}
+
+/**
+ * Rebuilds one BrownStore payload the same way Changed Preview does.
+ * It only reads BrownStore, commission, and the GINI category tree.
+ */
+export async function rebuildGiniChangedPayload(productId) {
+  if (!mongoose.isValidObjectId(String(productId || ""))) return null;
+  const doc = await Product.findById(productId).lean();
+  if (!doc) return null;
+  const resolved = toResolvedProduct(doc);
+  const [rules, eligibility, live, skuOwners] = await Promise.all([
+    Commission.find({ partner: "gini", isActive: { $ne: false } }).lean(),
+    loadEligibilityContext("gini"),
+    fetchGiniCategoryTree(),
+    buildSkuOwnerIndex(),
+  ]);
+  if (!live?.categories) return null;
+  const skuKey = giniSkuKey(doc.itemCode);
+  const owners = skuKey ? skuOwners.get(skuKey) || [] : [];
+  const mapping = mappingFromTree(taxonomyValuesForProduct(doc, eligibility), live.categories);
+  const plan = buildGiniPlanFromParts({
+    doc,
+    resolved,
+    priced: partnerPricePreview(doc, rules),
+    duplicateProductIds: owners,
+    mapping,
+    existing: null,
+  });
+  return {
+    doc,
+    payload: plan.payloadPreview,
+    hash: giniPayloadHash(plan.payloadPreview),
+    giniPrice: plan.giniPrice,
+    quantity: plan.quantity,
+    imageCount: plan.imageCount,
+  };
+}
+
+/**
+ * Read-only preview of confirmed GINI sends.
+ * Rebuilds the current payload, compares it with the saved hash, and checks the live id and SKU with GET.
+ * It does not write send history, BrownStore products, category mappings, or GINI.
+ * It stores a preview snapshot so a later one-product update can prove the preview is still the one the operator saw.
+ */
+export async function runGiniChangedPreview() {
+  const sends = await GiniSyncSendState.find({ partner: "gini" })
+    .select("productId sku skuKey giniProductId payloadHash createPayloadHash")
+    .lean();
+  if (!sends.length) {
+    return emptyChangedPreview("No confirmed GINI products to check. Nothing was sent or updated.");
+  }
+  const connection = await getGiniConnectionPublic();
+  if (connection.secretUnreadable) {
+    throw new GiniBulkError(GINI_SECRET_UNREADABLE_MESSAGE, { status: 409, code: "secret_unreadable" });
+  }
+  if (connection.status !== "connected") {
+    throw new GiniBulkError("Connect GINI API first.", { status: 409, code: "connection_required" });
+  }
+  const live = await fetchGiniCategoryTree();
+  if (live.connectionRequired) {
+    throw new GiniBulkError("Connect GINI API first.", { status: 409, code: "connection_required" });
+  }
+  const [rules, eligibility, skuOwners, snapshots] = await Promise.all([
+    Commission.find({ partner: "gini", isActive: { $ne: false } }).lean(),
+    loadEligibilityContext("gini"),
+    buildSkuOwnerIndex(),
+    loadConfirmedFieldSnapshots(sends),
+  ]);
+  const productIds = sends.map((row) => String(row.productId || "")).filter((id) => mongoose.isValidObjectId(id));
+  const products = productIds.length ? await Product.find({ _id: { $in: productIds } }).lean() : [];
+  const productsById = new Map(products.map((doc) => [String(doc._id), doc]));
+  const shared = {
+    rules,
+    eligibility,
+    categories: live.categories,
+    skuOwners,
+    mappingCache: new Map(),
+    lookupCache: new Map(),
+    apiDown: "",
+  };
+  const rows = [];
+  for (const saved of sends) {
+    const savedSku = normalizeGiniItemCode(saved.sku);
+    const savedId = String(saved.giniProductId || "");
+    const savedHash = String(saved.payloadHash || "");
+    const doc = productsById.get(String(saved.productId || "")) || null;
+    const resolved = doc ? toResolvedProduct(doc) : null;
+    let plan = null;
+    let inactive = false;
+    let inactiveReasons = [];
+    if (doc && resolved) {
+      const priced = partnerPricePreview(doc, rules);
+      const skuKey = giniSkuKey(doc.itemCode);
+      const owners = skuKey ? skuOwners.get(skuKey) || [] : [];
+      const collectionId = productScopeIds(doc).collection || "";
+      let mapping = shared.mappingCache.get(collectionId);
+      if (!mapping) {
+        mapping = mappingFromTree(taxonomyValuesForProduct(doc, eligibility), live.categories);
+        shared.mappingCache.set(collectionId, mapping);
+      }
+      plan = buildGiniPlanFromParts({
+        doc,
+        resolved,
+        priced,
+        duplicateProductIds: owners,
+        mapping,
+        existing: null,
+      });
+      const decision = evaluatePlatformEligibility(doc, eligibility);
+      const reasons = (decision.reasons || []).filter((reason) => reason.code !== "taxonomy_config_missing");
+      inactive = resolved.isActive === false || reasons.length > 0;
+      if (resolved.isActive === false) inactiveReasons.push("product_inactive");
+      inactiveReasons.push(...reasons.map((reason) => reason.code));
+    }
+    const found = await lookupForChangedPreview(savedSku, shared);
+    const currentHash = plan ? giniPayloadHash(plan.payloadPreview) : "";
+    const outcome = classifyGiniChangedPreview({
+      savedSku,
+      savedGiniProductId: savedId,
+      savedHash,
+      currentSku: plan?.sku || "",
+      currentHash,
+      planBlockers: plan?.blockers || [],
+      inactive,
+      inactiveReasons,
+      productFound: Boolean(doc && resolved && plan),
+      found,
+    });
+    const snapshot = snapshots.get(confirmedFieldSnapshotKey(saved.skuKey || savedSku, savedId, savedHash)) || null;
+    const changes =
+      outcome.classification === "CHANGED"
+        ? giniChangedFieldDiffs(
+            snapshot
+              ? { price: snapshot.giniPrice, quantity: snapshot.quantity, imageCount: snapshot.imageCount }
+              : null,
+            {
+              price: plan?.giniPrice ?? null,
+              quantity: plan?.quantity ?? null,
+              imageCount: plan?.imageCount ?? null,
+            }
+          )
+        : [];
+    const explained =
+      outcome.classification === "CHANGED"
+        ? explainGiniPriceQuantityChange({
+            savedHash,
+            currentPayload: plan?.payloadPreview,
+            savedPrice: snapshot?.giniPrice,
+            savedQuantity: snapshot?.quantity,
+          })
+        : { ok: false, code: "", changes: [], currentHash: currentHash };
+    const identityMatched = outcome.classification === "CHANGED" || outcome.classification === "UNCHANGED";
+    const imageIsolation =
+      outcome.classification === "CHANGED" && plan?.payloadPreview
+        ? giniImageReplacementIsolation({
+            savedHash,
+            currentPayload: plan.payloadPreview,
+            savedPrice: snapshot?.giniPrice,
+            savedQuantity: snapshot?.quantity,
+            savedImageUrls: null,
+          })
+        : { block: false, code: "" };
+    const images = assessGiniImageChange({
+      savedImageCount: snapshot ? snapshot.imageCount : null,
+      currentImageUrls: plan?.payloadPreview?.images || [],
+      savedImageUrls: null,
+      savedContentFingerprints: null,
+      currentContentFingerprints: null,
+      hashExplainedByPriceQuantity: explained.confirmFullHash === true,
+      liveImageUrls: identityMatched && Array.isArray(found?.images) ? found.images : null,
+    });
+    rows.push({
+      classification: outcome.classification,
+      code: outcome.code,
+      sku: savedSku,
+      skuKey: giniSkuKey(savedSku),
+      productId: String(saved.productId || ""),
+      name: changedPreviewName(doc, plan),
+      reason: outcome.reason,
+      giniProductId: savedId,
+      liveGiniProductId: outcome.liveGiniProductId || "",
+      savedHash,
+      currentHash,
+      changes,
+      updateChanges: explained.ok ? explained.changes : [],
+      updateEligible: explained.ok === true,
+      updateBlocker: explained.ok ? "" : explained.code || "",
+      identityMatched,
+      fieldsCompared: Boolean(snapshot),
+      images,
+      remoteImages: images.remoteImages || [],
+      sourceImages: images.currentImages || [],
+      imageSelectionRequired: images.selectionRequired === true,
+      imageReplacementBlocked: imageIsolation.block === true,
+      imageReplacementBlocker: imageIsolation.block ? imageIsolation.code : "",
+      provesRemoteChange: false,
+    });
+  }
+  const changedProducts = rows
+    .filter((row) => row.classification === "CHANGED")
+    .sort((left, right) => left.sku.localeCompare(right.sku));
+  const reconciliationProducts = rows
+    .filter((row) => row.classification === "RECONCILIATION_NEEDED")
+    .sort((left, right) => left.sku.localeCompare(right.sku));
+  const blockedProducts = rows
+    .filter((row) => row.classification === "BLOCKED")
+    .sort((left, right) => left.sku.localeCompare(right.sku));
+  const previewSignature = giniChangedPreviewSignature(rows);
+  const expiresAt = new Date(Date.now() + GINI_CHANGED_PREVIEW_TTL_MS);
+  const savedPreview = await GiniChangedPreviewSnapshot.create({
+    partner: "gini",
+    signature: previewSignature,
+    expiresAt,
+    rows: rows.map((row) => ({
+      sku: row.sku,
+      skuKey: row.skuKey,
+      productId: row.productId,
+      classification: row.classification,
+      code: row.code,
+      giniProductId: row.giniProductId,
+      liveGiniProductId: row.liveGiniProductId,
+      savedHash: row.savedHash,
+      currentHash: row.currentHash,
+      changes: row.changes,
+      updateChanges: row.updateChanges,
+      updateEligible: row.updateEligible,
+      updateBlocker: row.updateBlocker,
+      identityMatched: row.identityMatched,
+      remoteImages: row.remoteImages || [],
+      sourceImages: row.sourceImages || [],
+      imageSelectionRequired: row.imageSelectionRequired === true,
+    })),
+  });
+  const present = (row) => ({
+    classification: row.classification,
+    code: row.code,
+    sku: row.sku,
+    name: row.name,
+    reason: row.reason,
+    giniProductId: row.giniProductId,
+    liveGiniProductId: row.liveGiniProductId,
+    changes: row.changes,
+    updateChanges: row.updateChanges,
+    updateEligible: row.updateEligible,
+    updateBlocker: row.updateBlocker,
+    identityMatched: row.identityMatched,
+    fieldsCompared: row.fieldsCompared,
+    images: row.images,
+    imageSelectionRequired: row.imageSelectionRequired === true,
+    imageReplacementBlocked: row.imageReplacementBlocked === true,
+    imageReplacementBlocker: row.imageReplacementBlocker || "",
+    provesRemoteChange: false,
+  });
+  return {
+    readOnly: true,
+    dryRun: true,
+    sentToGini: 0,
+    writesEnabled: giniBulkWritesEnabled(),
+    ...changedUpdateContract(),
+    previewId: String(savedPreview._id),
+    previewSignature,
+    expiresAt,
+    checked: rows.length,
+    changed: changedProducts.length,
+    unchanged: rows.filter((row) => row.classification === "UNCHANGED").length,
+    reconciliationNeeded: reconciliationProducts.length,
+    blocked: blockedProducts.length,
+    imageVerificationNeeded: changedProducts.filter((row) => row.images?.verificationNeeded === true).length,
+    changedProducts: changedProducts.map(present),
+    reconciliationProducts: reconciliationProducts.map(present),
+    blockedProducts: blockedProducts.map(present),
+    provesRemoteChange: false,
+    message: "Changed Preview finished. No GINI products were sent or updated.",
+  };
+}
+
 export async function getLatestGiniSyncJob() {
   await ensureGiniSyncRunner();
   const job = await GiniSyncJob.findOne({ partner: "gini" }).sort({ createdAt: -1 });
@@ -1184,6 +1552,8 @@ export async function getLatestGiniSyncJob() {
     preview: preview ? await decorate(preview) : null,
     reconciliation,
     writesEnabled: giniBulkWritesEnabled(),
+    updateWritesEnabled: giniUpdateWritesEnabled(),
+    imageWritesEnabled: giniImageWritesEnabled(),
     limitedRunMax: GINI_BULK_LIMIT_MAX,
     updatesSupported: false,
     idempotencyKeySupported: false,

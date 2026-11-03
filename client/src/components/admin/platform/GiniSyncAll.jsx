@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../../api";
-import { confirmedCreateCount, reconciliationWarnings, selectGiniSyncDisplay, sendCounter } from "./giniSyncAllDisplay.js";
+import { canReplaceGiniImage, confirmedCreateCount, giniImageSelectionRequired, reconciliationWarnings, selectGiniSyncDisplay, sendCounter } from "./giniSyncAllDisplay.js";
 
 const CONTROL =
   "w-full rounded-full border border-brown/10 bg-cream px-4 py-2.5 text-sm font-semibold text-brown outline-none ring-tan/40 focus:ring-2";
@@ -41,6 +41,152 @@ function warningText(t, row) {
     .replaceAll("{id}", row.giniProductId || "");
 }
 
+const PREVIEW_REASON_KEYS = {
+  local_payload_hash_differs: "giniChangedReasonHash",
+  local_payload_hash_matches: "giniChangedReasonSame",
+  historical_sku_unresolved: "giniChangedReasonHistorical",
+  confirmed_send_missing: "giniSyncReconcileMissing",
+  confirmed_send_unverified: "giniSyncReconcileUnverified",
+  confirmed_send_id_mismatch: "giniSyncReconcileMismatch",
+  confirmed_send_sku_mismatch: "giniChangedReasonLiveSku",
+  confirmed_sku_mismatch: "giniChangedReasonLocalSku",
+  confirmed_hash_missing: "giniChangedReasonHashMissing",
+};
+
+const FIELD_KEYS = {
+  price: "giniChangedFieldPrice",
+  quantity: "giniChangedFieldQuantity",
+  imageCount: "giniChangedFieldImages",
+};
+
+function previewReason(t, row) {
+  const key = PREVIEW_REASON_KEYS[row?.code];
+  if (key && t[key]) {
+    return String(t[key]).replaceAll("{sku}", row.sku || "").replaceAll("{id}", row.giniProductId || "");
+  }
+  return row?.reason || row?.code || "";
+}
+
+function fieldLabel(t, field) {
+  return t[FIELD_KEYS[field]] || field;
+}
+
+function safeImageUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function imageMark(t, images, url, side) {
+  if (side === "previous" && (images?.removed || []).includes(url)) return t.giniImageRemoved;
+  if (side === "current" && (images?.added || []).includes(url)) return t.giniImageAdded;
+  if ((images?.replaced || []).some((item) => item.url === url)) return t.giniImageReplaced;
+  return "";
+}
+
+function ImageColumn({ label, urls, mark, name, selected, onSelect }) {
+  const visible = (urls || []).map(safeImageUrl).filter(Boolean);
+  if (!visible.length) return null;
+  return (
+    <div>
+      <p className="text-xs font-semibold text-brown/50">{label}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {visible.map((url) => (
+          <figure key={url} className="w-16">
+            {onSelect ? (
+              <label className="block">
+                <input
+                  type="radio"
+                  className="mb-1"
+                  name={name}
+                  value={url}
+                  checked={selected === url}
+                  onChange={() => onSelect(url)}
+                  data-gini-image-choice={name}
+                />
+                <img src={url} alt={label} className="h-16 w-16 rounded-xl bg-cream object-cover ring-1 ring-brown/10" />
+              </label>
+            ) : (
+              <img src={url} alt={label} className="h-16 w-16 rounded-xl bg-cream object-cover ring-1 ring-brown/10" />
+            )}
+            {mark(url) ? <figcaption className="mt-1 text-[11px] leading-4 text-brown/70">{mark(url)}</figcaption> : null}
+          </figure>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ImageReview({ t, images, sku, selectedDelete, selectedSource, onSelectDelete, onSelectSource }) {
+  if (!images) return null;
+  const countLine =
+    images.savedImageCount == null
+      ? ""
+      : String(t.giniImageCountLine || "")
+          .replaceAll("{old}", String(images.savedImageCount))
+          .replaceAll("{new}", String(images.currentImageCount ?? 0));
+  const showCurrentOnly = images.verificationNeeded && !(images.previousImages || []).length;
+  return (
+    <div className="mt-3 rounded-2xl bg-white px-3 py-3 ring-1 ring-brown/10" data-gini-image-review={images.status || ""}>
+      {images.verificationNeeded ? <p className="text-sm font-semibold text-brown">{t.giniImageVerificationNeeded}</p> : null}
+      {images.verificationNeeded ? <p className="mt-1 text-sm text-brown/70">{t.giniImageVerificationDetail}</p> : null}
+      {countLine ? (
+        <p className="mt-1 text-sm text-brown/70" dir="ltr">
+          {countLine}
+        </p>
+      ) : null}
+      {images.status === "urls_match_content_unverified" ? <p className="mt-1 text-sm text-brown/70">{t.giniImageContentUnverified}</p> : null}
+      {images.orderChanged ? <p className="mt-1 text-sm text-brown/70">{t.giniImageOrderUnsupported}</p> : null}
+      {images.verificationNeeded || images.added?.length || images.removed?.length || images.replaced?.length || images.orderChanged ? (
+        <p className="mt-1 text-sm text-brown/70">{t.giniImageNotSent}</p>
+      ) : null}
+      {(images.previousImages || []).length ? (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <ImageColumn label={t.giniImagePreviousLabel} urls={images.previousImages} mark={(url) => imageMark(t, images, url, "previous")} />
+          <ImageColumn label={t.giniImageCurrentLabel} urls={images.currentImages} mark={(url) => imageMark(t, images, url, "current")} />
+        </div>
+      ) : null}
+      {(images.remoteImages || []).length || (images.selectionRequired && (images.currentImages || []).length) ? (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <ImageColumn
+            label={t.giniImageRemoteLabel}
+            urls={images.remoteImages}
+            mark={() => ""}
+            name={images.selectionRequired ? `gini-image-delete-${sku}` : ""}
+            selected={selectedDelete}
+            onSelect={images.selectionRequired ? onSelectDelete : null}
+          />
+          {images.selectionRequired ? (
+            <ImageColumn
+              label={t.giniImageCurrentLabel}
+              urls={images.currentImages}
+              mark={() => ""}
+              name={`gini-image-source-${sku}`}
+              selected={selectedSource}
+              onSelect={onSelectSource}
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {showCurrentOnly && !images.selectionRequired ? <div className="mt-3"><ImageColumn label={t.giniImageCurrentLabel} urls={images.currentImages} mark={() => ""} /></div> : null}
+      {images.selectionRequired ? <p className="mt-2 text-sm text-brown/70">{t.giniImageReplaceSelect}</p> : null}
+    </div>
+  );
+}
+
+function confirmChangedSync(t, row) {
+  const changes = (row?.updateChanges || [])
+    .map((change) => `${fieldLabel(t, change.field)} ${change.old} → ${change.new}`)
+    .join(", ");
+  return String(t.giniStartChangedConfirm || "")
+    .replaceAll("{sku}", row?.sku || "")
+    .replaceAll("{changes}", changes);
+}
+
 function Stat({ label, value, marker, markerValue }) {
   const marked = marker ? { [marker]: markerValue ?? "" } : {};
   return (
@@ -53,10 +199,21 @@ function Stat({ label, value, marker, markerValue }) {
 
 export default function GiniSyncAll({ t }) {
   const [status, setStatus] = useState(null);
+  const [changedPreview, setChangedPreview] = useState(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [limit, setLimit] = useState("1");
+  const [selectedSku, setSelectedSku] = useState("");
+  const [deleteImageUrl, setDeleteImageUrl] = useState("");
+  const [replacementImageUrl, setReplacementImageUrl] = useState("");
+  const previewId = changedPreview?.previewId || "";
+
+  useEffect(() => {
+    setSelectedSku("");
+    setDeleteImageUrl("");
+    setReplacementImageUrl("");
+  }, [previewId]);
 
   async function refresh() {
     const data = await api.giniSyncAllStatus();
@@ -84,7 +241,10 @@ export default function GiniSyncAll({ t }) {
     setMessage("");
     try {
       const data = await action();
-      if (data?.job || data?.writesEnabled != null) setStatus((current) => ({ ...(current || {}), ...data }));
+      if (label === "changed-preview") setChangedPreview(data);
+      if (data?.job || (data?.writesEnabled != null && label !== "changed-preview")) {
+        setStatus((current) => ({ ...(current || {}), ...data }));
+      }
       setMessage(data?.message || t.giniSyncUpdated);
     } catch (err) {
       setError(err.code ? `${err.code}: ${err.message}` : err.message);
@@ -106,6 +266,39 @@ export default function GiniSyncAll({ t }) {
   const parsedLimit = Number(limit);
   const limitOk = Number.isInteger(parsedLimit) && parsedLimit >= 1 && parsedLimit <= maxLimit;
   const canSend = writesEnabled && approved && !active && !busy;
+  const updateWritesEnabled = status?.updateWritesEnabled === true;
+  const eligibleUpdates = (changedPreview?.changedProducts || []).filter(
+    (row) => row.updateEligible === true && row.identityMatched === true && row.liveGiniProductId === row.giniProductId
+  );
+  const selectedUpdate = eligibleUpdates.find((row) => row.sku === selectedSku) || null;
+  const previewReady = Boolean(
+    changedPreview?.previewId &&
+      changedPreview?.previewSignature &&
+      changedPreview?.updatesSupported === true &&
+      changedPreview?.expiresAt &&
+      Date.parse(changedPreview.expiresAt) > Date.now()
+  );
+  const canStartChangedSync = Boolean(
+    updateWritesEnabled && previewReady && selectedUpdate && !active && !busy
+  );
+  const imageWritesEnabled = status?.imageWritesEnabled === true;
+  const selectedImage =
+    (changedPreview?.changedProducts || []).find(
+      (row) =>
+        row.sku === selectedSku &&
+        giniImageSelectionRequired(row) &&
+        row.identityMatched === true &&
+        row.liveGiniProductId === row.giniProductId
+    ) || null;
+  const canReplaceImage = canReplaceGiniImage({
+    imageWritesEnabled,
+    preview: changedPreview,
+    row: selectedImage,
+    deleteImageUrl,
+    replacementImageUrl,
+    active,
+    busy,
+  });
   const failures = current?.recentFailures || [];
   const examples = current?.blockerExamples || [];
   const stateLabel = current ? t[STATE_KEYS[current.status]] || current.status : "";
@@ -184,10 +377,138 @@ export default function GiniSyncAll({ t }) {
           <div className="rounded-2xl bg-cream px-4 py-4">
             <p className="text-xs font-semibold tracking-wide text-brown/50 uppercase">{t.giniChangedSyncTitle}</p>
             <p className="mt-1 text-sm text-brown/60">{t.giniChangedSyncHint}</p>
-            <p className="mt-2 text-sm text-brown/70">{t.giniChangedSyncUnsupported}</p>
-            <button type="button" className={`${BUTTON} mt-3`} disabled>
-              {t.giniStartChangedSync}
+            <button
+              type="button"
+              className={`${BUTTON} mt-3`}
+              data-gini-changed-preview-button="true"
+              disabled={Boolean(busy)}
+              onClick={() => run(() => api.giniChangedPreview(), "changed-preview")}
+            >
+              {busy === "changed-preview" ? t.loading : t.giniRunChangedPreview}
             </button>
+            <p className="mt-3 text-sm text-brown/70">{t.giniChangedSyncContractRequired}</p>
+            <p className="mt-2 text-sm text-brown/70">{t.giniChangedSyncUnsupported}</p>
+            <p className="mt-2 text-sm text-brown/70">{t.giniImageWriteBlocked}</p>
+            <p className="mt-2 text-sm text-brown/70">{updateWritesEnabled ? t.giniChangedSyncSelect : t.giniChangedSyncWritesOff}</p>
+            <p className="mt-2 text-sm text-brown/70">{imageWritesEnabled ? t.giniImageReplaceSelect : t.giniImageWritesOff}</p>
+            <p className="mt-2 text-xs text-brown/45" dir="ltr">
+              {t.giniChangedUpdateEndpoint}: PUT /api/v2.0/third-party/products/{"{sku}"}
+            </p>
+            <p className="mt-2 text-xs text-brown/45" dir="ltr">
+              POST /api/v2.0/third-party/products/{"{sku}"} · _method=PUT
+            </p>
+            <button
+              type="button"
+              className={`${BUTTON} mt-3`}
+              data-gini-start-changed-sync="true"
+              disabled={!canStartChangedSync}
+              onClick={() => {
+                if (!canStartChangedSync || !selectedUpdate) return;
+                if (!window.confirm(confirmChangedSync(t, selectedUpdate))) return;
+                run(
+                  () =>
+                    api.giniChangedSyncStart({
+                      confirm: true,
+                      previewId: changedPreview.previewId,
+                      previewSignature: changedPreview.previewSignature,
+                      sku: selectedUpdate.sku,
+                      expectedChanges: selectedUpdate.updateChanges,
+                    }),
+                  "changed-sync"
+                );
+              }}
+            >
+              {busy === "changed-sync" ? t.loading : t.giniStartChangedSync}
+            </button>
+            <button
+              type="button"
+              className={`${BUTTON} mt-3`}
+              data-gini-replace-image="true"
+              disabled={!canReplaceImage}
+              onClick={() => {
+                if (!canReplaceImage || !selectedImage) return;
+                const prompt = String(t.giniImageReplaceConfirm || "")
+                  .replaceAll("{sku}", selectedImage.sku || "")
+                  .replaceAll("{old}", deleteImageUrl)
+                  .replaceAll("{new}", replacementImageUrl);
+                if (!window.confirm(prompt)) return;
+                run(
+                  () =>
+                    api.giniImageReplacementStart({
+                      confirm: true,
+                      previewId: changedPreview.previewId,
+                      previewSignature: changedPreview.previewSignature,
+                      sku: selectedImage.sku,
+                      deleteImageUrl,
+                      replacementImageUrl,
+                    }),
+                  "image-replacement"
+                );
+              }}
+            >
+              {busy === "image-replacement" ? t.loading : t.giniImageReplaceOne}
+            </button>
+            <button
+              type="button"
+              className={`${GHOST} mt-3`}
+              data-gini-reconcile-image="true"
+              disabled={!selectedSku || Boolean(busy)}
+              onClick={() => {
+                if (!selectedSku || busy) return;
+                if (!window.confirm(t.giniImageReconcile)) return;
+                run(() => api.giniImageReplacementReconcile({ confirm: true, sku: selectedSku }), "image-reconcile");
+              }}
+            >
+              {busy === "image-reconcile" ? t.loading : t.giniImageReconcile}
+            </button>
+            <button
+              type="button"
+              className={`${GHOST} mt-3`}
+              data-gini-resolve-image="true"
+              disabled={!selectedSku || Boolean(busy)}
+              onClick={() => {
+                if (!selectedSku || busy) return;
+                if (!window.confirm(t.giniImageResolveConfirm)) return;
+                run(
+                  () =>
+                    api.giniImageReplacementResolve({
+                      confirm: true,
+                      sku: selectedSku,
+                      resolution: "not_applied",
+                      acknowledgeDelay: true,
+                    }),
+                  "image-resolve"
+                );
+              }}
+            >
+              {busy === "image-resolve" ? t.loading : t.giniImageResolve}
+            </button>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={GHOST}
+                disabled={busy !== "changed-sync"}
+                onClick={() => api.giniChangedSyncPause().catch((err) => setError(err.message))}
+              >
+                {t.giniPauseSync}
+              </button>
+              <button
+                type="button"
+                className={GHOST}
+                disabled={Boolean(busy)}
+                onClick={() => run(() => api.giniChangedSyncResume(), "changed-resume")}
+              >
+                {t.giniResumeSync}
+              </button>
+              <button
+                type="button"
+                className={GHOST}
+                disabled={busy !== "changed-sync"}
+                onClick={() => api.giniChangedSyncStop().catch((err) => setError(err.message))}
+              >
+                {t.giniStopSync}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -233,6 +554,150 @@ export default function GiniSyncAll({ t }) {
         {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
         {message ? <p className="mt-4 text-sm text-emerald-800">{message}</p> : null}
       </div>
+
+      {changedPreview ? (
+        <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5" data-gini-changed-preview="true">
+          <p className="text-xs font-semibold tracking-wide text-brown/45 uppercase">{t.giniChangedPreviewTitle}</p>
+          <p className="mt-2 text-sm text-brown/70">{t.giniChangedPreviewLocalNote}</p>
+          <p className="mt-2 text-sm text-brown/60">{t.giniChangedPreviewReadOnly}</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <Stat
+              label={t.giniChangedPreviewChecked}
+              value={count(changedPreview.checked)}
+              marker="data-gini-changed-checked"
+              markerValue={String(changedPreview.checked ?? 0)}
+            />
+            <Stat
+              label={t.giniChangedPreviewChanged}
+              value={count(changedPreview.changed)}
+              marker="data-gini-changed-changed"
+              markerValue={String(changedPreview.changed ?? 0)}
+            />
+            <Stat
+              label={t.giniChangedPreviewUnchanged}
+              value={count(changedPreview.unchanged)}
+              marker="data-gini-changed-unchanged"
+              markerValue={String(changedPreview.unchanged ?? 0)}
+            />
+            <Stat
+              label={t.giniChangedPreviewReconcile}
+              value={count(changedPreview.reconciliationNeeded)}
+              marker="data-gini-changed-reconcile"
+              markerValue={String(changedPreview.reconciliationNeeded ?? 0)}
+            />
+            <Stat
+              label={t.giniChangedPreviewBlocked}
+              value={count(changedPreview.blocked)}
+              marker="data-gini-changed-blocked"
+              markerValue={String(changedPreview.blocked ?? 0)}
+            />
+            <Stat
+              label={t.giniChangedPreviewImageChecks}
+              value={count(changedPreview.imageVerificationNeeded)}
+              marker="data-gini-changed-image-checks"
+              markerValue={String(changedPreview.imageVerificationNeeded ?? 0)}
+            />
+          </div>
+          <div className="mt-5">
+            <p className="text-xs font-semibold tracking-wide text-brown/45 uppercase">{t.giniChangedPreviewList}</p>
+            {changedPreview.changedProducts?.length ? (
+              <ul className="mt-3 max-h-96 space-y-2 overflow-y-auto text-sm">
+                {changedPreview.changedProducts.map((row) => (
+                  <li key={`${row.sku}-${row.giniProductId}`} className="rounded-2xl bg-cream px-4 py-3" data-gini-changed-product="true">
+                    {(row.updateEligible || giniImageSelectionRequired(row)) && row.identityMatched ? (
+                      <label className="flex items-center gap-2 text-sm font-semibold text-brown">
+                        <input
+                          type="radio"
+                          name="gini-changed-sync-sku"
+                          value={row.sku}
+                          checked={selectedSku === row.sku}
+                          onChange={() => setSelectedSku(row.sku)}
+                          data-gini-changed-sync-sku={row.sku}
+                        />
+                        <span dir="ltr">{row.sku}</span>
+                      </label>
+                    ) : (
+                      <span className="font-semibold text-brown" dir="ltr">
+                        {row.sku}
+                      </span>
+                    )}
+                    {row.name ? <span className="mt-1 block text-brown/80">{row.name}</span> : null}
+                    <span className="mt-1 block text-brown/70">{previewReason(t, row)}</span>
+                    {row.changes?.length ? (
+                      <ul className="mt-2 space-y-1">
+                        {row.changes.map((change) => (
+                          <li key={change.field} dir="ltr" data-gini-changed-field={change.field}>
+                            <span className="font-semibold text-brown">{fieldLabel(t, change.field)}</span>
+                            {": "}
+                            {t.giniChangedPreviewOld} {change.old}
+                            {" → "}
+                            {t.giniChangedPreviewNew} {change.new}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <span className="mt-1 block text-brown/60">{t.giniChangedPreviewHashOnly}</span>
+                    )}
+                    {row.updateEligible ? null : (
+                      <span className="mt-1 block text-brown/60">{t.giniChangedSyncNotSendable}</span>
+                    )}
+                    {row.imageReplacementBlocked ? <p className="mt-2 text-sm text-brown/70">{t.giniImageMixedBlocked}</p> : null}
+                    <ImageReview
+                      t={t}
+                      sku={row.sku}
+                      images={row.images}
+                      selectedDelete={selectedSku === row.sku ? deleteImageUrl : ""}
+                      selectedSource={selectedSku === row.sku ? replacementImageUrl : ""}
+                      onSelectDelete={(url) => {
+                        setSelectedSku(row.sku);
+                        setDeleteImageUrl(url);
+                      }}
+                      onSelectSource={(url) => {
+                        setSelectedSku(row.sku);
+                        setReplacementImageUrl(url);
+                      }}
+                    />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-3 text-sm text-brown/50">{t.giniChangedPreviewNone}</p>
+            )}
+          </div>
+          {changedPreview.reconciliationProducts?.length ? (
+            <div className="mt-5" data-gini-changed-reconcile-list="true">
+              <p className="text-xs font-semibold tracking-wide text-brown/45 uppercase">{t.giniChangedPreviewReconcileList}</p>
+              <ul className="mt-3 max-h-56 space-y-2 overflow-y-auto text-sm">
+                {changedPreview.reconciliationProducts.map((row) => (
+                  <li key={`${row.code}-${row.sku}-${row.giniProductId}`} className="rounded-2xl bg-amber-50 px-4 py-3 text-amber-950">
+                    <span className="font-semibold" dir="ltr">
+                      {row.sku || row.giniProductId}
+                    </span>
+                    {row.name ? <span className="mt-1 block">{row.name}</span> : null}
+                    <span className="mt-1 block">{previewReason(t, row)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {changedPreview.blockedProducts?.length ? (
+            <div className="mt-5" data-gini-changed-blocked-list="true">
+              <p className="text-xs font-semibold tracking-wide text-brown/45 uppercase">{t.giniChangedPreviewBlockedList}</p>
+              <ul className="mt-3 max-h-56 space-y-2 overflow-y-auto text-sm">
+                {changedPreview.blockedProducts.map((row) => (
+                  <li key={`${row.code}-${row.sku}-${row.giniProductId}`} className="rounded-2xl bg-cream px-4 py-3">
+                    <span className="font-semibold text-brown" dir="ltr">
+                      {row.sku || row.giniProductId}
+                    </span>
+                    {row.name ? <span className="mt-1 block text-brown/80">{row.name}</span> : null}
+                    <span className="mt-1 block text-brown/70">{previewReason(t, row)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
         {current ? (

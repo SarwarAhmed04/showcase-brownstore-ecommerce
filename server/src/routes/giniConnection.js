@@ -11,10 +11,18 @@ import {
   getLatestGiniSyncJob,
   pauseGiniSyncAll,
   resumeGiniSyncAll,
+  runGiniChangedPreview,
   runGiniSyncPreview,
   startGiniSyncAll,
   stopGiniSyncAll,
 } from "../services/giniSyncAll.js";
+import {
+  pauseGiniChangedSync,
+  resumeGiniChangedSync,
+  startGiniChangedSync,
+  stopGiniChangedSync,
+} from "../services/giniProductUpdate.js";
+import { reconcileGiniImageReplacement, resolveGiniImageReplacement, startGiniImageReplacement } from "../services/giniImageReplacement.js";
 
 export const giniConnectionRouter = Router();
 
@@ -142,6 +150,113 @@ giniConnectionRouter.post("/platforms/gini/sync-all/preview", async (_req, res) 
     res.json(assertNoSecretLeak(await runGiniSyncPreview(), ""));
   } catch (err) {
     fail(res, err, "Failed to preview GINI catalog");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/changed-preview", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await runGiniChangedPreview(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to preview GINI changes");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/changed-sync/start", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(
+      assertNoSecretLeak(
+        await startGiniChangedSync({
+          confirm: body.confirm === true,
+          previewId: body.previewId,
+          previewSignature: body.previewSignature,
+          sku: body.sku,
+          expectedChanges: body.expectedChanges,
+          scope: body.scope,
+          skus: body.skus,
+          all: body.all === true,
+        }),
+        ""
+      )
+    );
+  } catch (err) {
+    fail(res, err, "Failed to start the GINI update");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/changed-sync/pause", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await pauseGiniChangedSync(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to pause the GINI update");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/changed-sync/resume", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await resumeGiniChangedSync(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to resume the GINI update");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/image-replacement/start", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(
+      assertNoSecretLeak(
+        await startGiniImageReplacement({
+          confirm: body.confirm === true,
+          previewId: body.previewId,
+          previewSignature: body.previewSignature,
+          sku: body.sku,
+          deleteImageUrl: body.deleteImageUrl,
+          replacementImageUrl: body.replacementImageUrl,
+          scope: body.scope,
+          skus: body.skus,
+          all: body.all === true,
+        }),
+        ""
+      )
+    );
+  } catch (err) {
+    fail(res, err, "Failed to replace the GINI image");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/image-replacement/reconcile", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(assertNoSecretLeak(await reconcileGiniImageReplacement({ confirm: body.confirm === true, sku: body.sku }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to reconcile the GINI image");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/image-replacement/resolve", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(
+      assertNoSecretLeak(
+        await resolveGiniImageReplacement({
+          confirm: body.confirm === true,
+          sku: body.sku,
+          resolution: body.resolution,
+          acknowledgeDelay: body.acknowledgeDelay === true,
+        }),
+        ""
+      )
+    );
+  } catch (err) {
+    fail(res, err, "Failed to resolve the GINI image");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/changed-sync/stop", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await stopGiniChangedSync(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to stop the GINI update");
   }
 });
 

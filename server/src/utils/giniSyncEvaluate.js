@@ -60,6 +60,18 @@ const BLOCKER_TEXT = {
     "A confirmed GINI product id is saved for this SKU, but GINI could not confirm it. It is not counted as currently existing. The saved id was kept and no second create was sent.",
   confirmed_send_id_mismatch:
     "GINI returned a different product id for this SKU than the saved confirmed id. The saved id was kept and no second create was sent.",
+  confirmed_send_sku_mismatch:
+    "The live GINI SKU does not match the SKU saved with the confirmed GINI id. No update was prepared.",
+  confirmed_sku_mismatch:
+    "The BrownStore SKU no longer matches the SKU saved with the confirmed GINI id. No update was prepared.",
+  confirmed_hash_missing:
+    "The confirmed send has no saved payload hash, so a local change cannot be determined.",
+  historical_sku_unresolved:
+    "This historical SKU is still unresolved, so it is not an update candidate.",
+  local_payload_hash_differs:
+    "The current BrownStore payload hash differs from the hash saved when this GINI product was confirmed. This is not proof that the GINI product changed.",
+  local_payload_hash_matches:
+    "The current BrownStore payload hash matches the hash saved when this GINI product was confirmed, and the live GINI id and SKU match.",
   not_in_approved_preview: "This product was not ready to create in the approved Full Preview.",
   product_not_found: "Product not found.",
   create_uncertain: "The create response was lost. No second create was sent.",
@@ -330,6 +342,161 @@ export function classifyConfirmedSend({ plan, localSend, found }) {
     plan,
     localSend
   );
+}
+
+export const GINI_UNRESOLVED_HISTORICAL_SKUS = Object.freeze(["LP-ID141232", "E6310221"]);
+
+export function isUnresolvedHistoricalGiniSku(sku) {
+  const key = giniSkuKey(sku);
+  if (!key) return false;
+  return GINI_UNRESOLVED_HISTORICAL_SKUS.some((item) => giniSkuKey(item) === key);
+}
+
+function changedPreviewIdentity({ savedSku, savedGiniProductId, found }) {
+  const storedId = String(savedGiniProductId || "");
+  const savedKey = giniSkuKey(savedSku);
+  if (!storedId || !savedKey) return { state: "uncertain", code: "confirmed_send_unverified" };
+  if (!found || found.error || (found.exists !== true && found.exists !== false)) {
+    return { state: "uncertain", code: "confirmed_send_unverified" };
+  }
+  if (found.exists === false) return { state: "missing", code: "confirmed_send_missing" };
+  const liveId = found.giniProductId == null ? "" : String(found.giniProductId);
+  const liveKey = giniSkuKey(found.sku);
+  if (!liveId || !liveKey) return { state: "uncertain", code: "confirmed_send_unverified" };
+  if (liveKey !== savedKey) return { state: "mismatch", code: "confirmed_send_sku_mismatch", liveId };
+  if (liveId !== storedId) return { state: "mismatch", code: "confirmed_send_id_mismatch", liveId };
+  return { state: "match", code: "", liveId };
+}
+
+/**
+ * Read-only classification for one confirmed GINI send.
+ * A hash difference is a BrownStore payload difference. It is not evidence that GINI changed the remote product.
+ */
+export function classifyGiniChangedPreview({
+  savedSku = "",
+  savedGiniProductId = "",
+  savedHash = "",
+  currentSku = "",
+  currentHash = "",
+  planBlockers = [],
+  inactive = false,
+  inactiveReasons = [],
+  productFound = false,
+  found = null,
+} = {}) {
+  const identity = changedPreviewIdentity({ savedSku, savedGiniProductId, found });
+  if (identity.state !== "match") {
+    return {
+      classification: "RECONCILIATION_NEEDED",
+      code: identity.code,
+      blockers: [identity.code],
+      reason: blockerMessage(identity.code),
+      liveGiniProductId: identity.liveId || "",
+      provesRemoteChange: false,
+    };
+  }
+  if (!productFound) {
+    return {
+      classification: "BLOCKED",
+      code: "product_not_found",
+      blockers: ["product_not_found"],
+      reason: blockerMessage("product_not_found"),
+      liveGiniProductId: identity.liveId || "",
+      provesRemoteChange: false,
+    };
+  }
+  const savedKey = giniSkuKey(savedSku);
+  const currentKey = giniSkuKey(currentSku);
+  if (!currentKey || currentKey !== savedKey) {
+    return {
+      classification: "RECONCILIATION_NEEDED",
+      code: "confirmed_sku_mismatch",
+      blockers: ["confirmed_sku_mismatch"],
+      reason: blockerMessage("confirmed_sku_mismatch"),
+      liveGiniProductId: identity.liveId || "",
+      provesRemoteChange: false,
+    };
+  }
+  if (inactive) {
+    const codes = unique(inactiveReasons.length ? inactiveReasons : ["product_inactive"]);
+    return {
+      classification: "BLOCKED",
+      code: codes[0],
+      blockers: codes,
+      reason: codes.map(blockerMessage).join("; ").slice(0, 400),
+      liveGiniProductId: identity.liveId || "",
+      provesRemoteChange: false,
+    };
+  }
+  const blockers = unique((planBlockers || []).filter((code) => code && code !== "existing_gini_product"));
+  if (blockers.length) {
+    return {
+      classification: "BLOCKED",
+      code: blockers[0],
+      blockers,
+      reason: blockers.map(blockerMessage).join("; ").slice(0, 400),
+      liveGiniProductId: identity.liveId || "",
+      provesRemoteChange: false,
+    };
+  }
+  const previous = String(savedHash || "");
+  const current = String(currentHash || "");
+  if (!previous || !current) {
+    return {
+      classification: "RECONCILIATION_NEEDED",
+      code: "confirmed_hash_missing",
+      blockers: ["confirmed_hash_missing"],
+      reason: blockerMessage("confirmed_hash_missing"),
+      liveGiniProductId: identity.liveId || "",
+      provesRemoteChange: false,
+    };
+  }
+  if (previous !== current) {
+    if (isUnresolvedHistoricalGiniSku(savedSku) || isUnresolvedHistoricalGiniSku(currentSku)) {
+      return {
+        classification: "RECONCILIATION_NEEDED",
+        code: "historical_sku_unresolved",
+        blockers: ["historical_sku_unresolved"],
+        reason: blockerMessage("historical_sku_unresolved"),
+        liveGiniProductId: identity.liveId || "",
+        provesRemoteChange: false,
+      };
+    }
+    return {
+      classification: "CHANGED",
+      code: "local_payload_hash_differs",
+      blockers: [],
+      reason: blockerMessage("local_payload_hash_differs"),
+      liveGiniProductId: identity.liveId || "",
+      provesRemoteChange: false,
+    };
+  }
+  return {
+    classification: "UNCHANGED",
+    code: "local_payload_hash_matches",
+    blockers: [],
+    reason: blockerMessage("local_payload_hash_matches"),
+    liveGiniProductId: identity.liveId || "",
+    provesRemoteChange: false,
+  };
+}
+
+const COMPARABLE_CHANGED_FIELDS = ["price", "quantity", "imageCount"];
+
+/** Field diffs only when both sides were stored as numbers. Missing history is not treated as a change. */
+export function giniChangedFieldDiffs(savedFields, currentFields) {
+  if (!savedFields || !currentFields) return [];
+  const diffs = [];
+  for (const field of COMPARABLE_CHANGED_FIELDS) {
+    const oldValue = savedFields[field];
+    const newValue = currentFields[field];
+    if (oldValue == null || newValue == null) continue;
+    const previous = Number(oldValue);
+    const next = Number(newValue);
+    if (!Number.isFinite(previous) || !Number.isFinite(next) || previous === next) continue;
+    diffs.push({ field, old: previous, new: next });
+  }
+  return diffs;
 }
 
 function pack(classification, codes, messages, plan, localSend) {

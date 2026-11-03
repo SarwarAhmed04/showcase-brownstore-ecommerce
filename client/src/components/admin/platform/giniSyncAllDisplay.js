@@ -26,6 +26,44 @@ export function confirmedCreateCount(job) {
   return sendCounter(job, "created");
 }
 
+export function giniImageSelectionRequired(row) {
+  if (row?.imageSelectionRequired === true) return true;
+  if (row?.imageSelectionRequired === false) return false;
+  return row?.images?.selectionRequired === true;
+}
+
+export function canReplaceGiniImage({
+  imageWritesEnabled = false,
+  preview = null,
+  row = null,
+  deleteImageUrl = "",
+  replacementImageUrl = "",
+  active = false,
+  busy = false,
+  now = Date.now(),
+} = {}) {
+  const previewReady = Boolean(
+    preview?.previewId &&
+      preview?.previewSignature &&
+      preview?.updatesSupported === true &&
+      preview?.expiresAt &&
+      Date.parse(preview.expiresAt) > now
+  );
+  return Boolean(
+    imageWritesEnabled === true &&
+      previewReady &&
+      row &&
+      giniImageSelectionRequired(row) &&
+      row.identityMatched === true &&
+      row.liveGiniProductId === row.giniProductId &&
+      row.imageReplacementBlocked !== true &&
+      (row.images?.remoteImages || []).includes(deleteImageUrl) &&
+      (row.images?.currentImages || []).includes(replacementImageUrl) &&
+      !active &&
+      !busy
+  );
+}
+
 export function reconciliationWarnings(status, current) {
   const rows = [...(status?.reconciliation || []), ...(current?.reconciliation || [])];
   const seen = new Set();

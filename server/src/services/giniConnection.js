@@ -431,6 +431,87 @@ export async function performGiniRequest({
   }
 }
 
+/**
+ * Signed JSON PUT. The raw body string is sent unchanged and is included in the HMAC.
+ * Create uploads stay on performGiniRequest, which signs an empty multipart body.
+ */
+export async function performGiniJsonRequest({ method = "PUT", path, rawBody, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const verb = String(method || "").trim().toUpperCase();
+  if (verb !== "PUT") {
+    throw new GiniConnectionError("This GINI helper only sends signed JSON PUT requests.", {
+      status: 500,
+      code: "update_method_rejected",
+    });
+  }
+  const body = String(rawBody ?? "");
+  if (!body.startsWith("{")) {
+    throw new GiniConnectionError("GINI JSON PUT requires a JSON object body.", {
+      status: 500,
+      code: "update_body_rejected",
+    });
+  }
+  const config = await resolveGiniConfig();
+  if (config.secretUnreadable) {
+    throw new GiniConnectionError(GINI_SECRET_UNREADABLE_MESSAGE, { status: 409, code: "secret_unreadable" });
+  }
+  if (!config.baseUrl || !config.clientId || !config.clientSecret) {
+    throw new GiniConnectionError("Connect GINI API first", { status: 409, code: "connection_required" });
+  }
+  const signed = signGiniRequest({
+    method: "PUT",
+    path,
+    body,
+    timestamp: giniTimestampSeconds(),
+    clientSecret: config.clientSecret,
+  });
+  const headers = {
+    ...giniAuthHeaders({
+      clientId: config.clientId,
+      signature: signed.signature,
+      timestamp: signed.timestamp,
+    }),
+    "Content-Type": "application/json",
+  };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(`${config.baseUrl}${signed.path}`, {
+      method: "PUT",
+      headers,
+      body,
+      redirect: "manual",
+      signal: controller.signal,
+    });
+    const contentType = response.headers?.get?.("content-type") || "";
+    const text = String(await response.text());
+    const status = Number(response.status) || 0;
+    const json = safeJson(text, contentType);
+    const secrets = [config.clientSecret, signed.signature, config.clientId];
+    const safeBodySnippet = buildSafeBodySnippet(text, contentType, secrets);
+    return {
+      status,
+      contentType,
+      text: text.slice(0, 20000),
+      json,
+      signedPath: signed.path,
+      requestId: safeRequestId(response),
+      edgeBlocked: isEdgeBlock(status, contentType, text),
+      safeErrorMessage: buildSafeErrorMessage(json, safeBodySnippet, secrets),
+      safeBodySnippet,
+      retryAfter: retryAfterSeconds(response),
+    };
+  } catch (err) {
+    if (err instanceof GiniConnectionError) throw err;
+    const timeout = isTimeout(err);
+    throw new GiniConnectionError(timeout ? "GINI update request timed out." : "GINI update request failed before a response.", {
+      status: timeout ? 504 : 502,
+      code: timeout ? "update_timeout" : "update_transport",
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function categorySummary(json) {
   const normalized = normalizeGiniCategories(json);
   if (!normalized.ok) {

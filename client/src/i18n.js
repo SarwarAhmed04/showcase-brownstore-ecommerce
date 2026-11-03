@@ -531,9 +531,76 @@ export const translations = {
     giniLimitedSyncHint: "تەنها ئەو ژمارەیە دەنێرێت کە دەینووسیت، زۆرترین ٢٥ بەرهەمی ئامادە، دوای پێشبینینی تەواو.",
     giniChangedSyncTitle: "هاوکاتکردنی گۆڕاوەکان",
     giniChangedSyncHint:
-      "ئامادە نییە. هیچ گرێبەستێکی پشتڕاستکراوی نوێکردنەوە بۆ جینی جێبەجێ نەکراوە. بەرهەمی هەبوو دەپەڕێنرێت و نانووسرێتەوە.",
-    giniChangedSyncUnsupported: "نوێکردنەوە و فرەجۆری ئاڵۆز نانێردرێن.",
+      "دوای پێشبینینی گۆڕاوەکان، تەنها یەک بەرهەمی پشتڕاستکراو بە PUTی JSONی بەشەکی نوێ دەکاتەوە. دروستکردنی هاوکاتکردنی تەواو ناگۆڕێت. هیچ شتێک نانێردرێت تا یەک SKU پشتڕاست بکەیت.",
+    giniChangedSyncUnsupported:
+      "جیاوازی نرخ یان بڕ بە یەک PUTی JSON دەنێردرێت، تەنانەت ئەگەر گۆڕانی وێنە هێشتا چاوەڕوان بێت. ئەو PUTە وێنە یان هیچ خانەیەکی تری هاوکاتنەکراو پشتڕاست ناکاتەوە. هاشی تەواوی پەیڵۆد تەنها کاتێک پاشەکەوت دەکرێت کە نرخ و بڕ هەموو جیاوازییەکە ڕوون بکەنەوە. گۆڕینی یەک وێنە داواکارییەکی جیاوازە. دوو SKUی مێژوویی چارەسەرنەکراو هەرگیز نوێ ناکرێنەوە.",
+    giniImageWriteBlocked:
+      "گۆڕینی یەک وێنە POSTێکی multipartە بە _method=PUT. delete_images[] هەمان URLی ڕاستەوخۆی جینییە، و images[] یەک فایلە. واژۆکە POSTە بە جەستەیەکی بەتاڵ. دەروازەی وێنە ناچالاکە تا GINI_IMAGE_WRITES_ENABLED و GINI_ALLOW_LIVE_IMAGE_WRITES دابنرێن. ئەم پەڕەیە خۆی چالاکیان ناکات.",
+    giniImageVerificationNeeded: "پشتڕاستکردنەوەی وێنە پێویستە",
+    giniImageVerificationDetail:
+      "لیستی وێنەی پاشەکەوتکراو نییە. ژمارەی وێنە جووتێک دروست ناکات. وێنەی ڕاستەوخۆی جینی و وێنەی براونستۆر هەڵبژێرە. هیچ شتێک نانێردرێت تا دەروازەی وێنە چالاک بێت.",
+    giniImageCountLine: "ژمارەی وێنەی پاشەکەوتکراو {old}. ژمارەی وێنەی ئێستای براونستۆر {new}.",
+    giniImageContentUnverified:
+      "ناونیشانی ئەم وێنانە لەگەڵ پەیڵۆدی پشتڕاستکراو دەگونجێت. هیچ پەنجەمۆرێکی مێژوویی بۆ ناوەڕۆکی فایل نییە، بۆیە گۆڕانی فایل لە هەمان ناونیشان ناناسرێتەوە. براونستۆر وێنەیەکی کۆن دروست ناکات و بۆ ئەم حاڵەتە گۆڕین نانێرێت.",
+    giniImageOrderUnsupported: "جینی خانەیەکی بۆ ڕیزبەندی وێنە یان وێنەی سەرەکی بڵاو نەکردووەتەوە. گۆڕینی ڕیزبەندی نانێردرێت.",
+    giniImageCurrentLabel: "وێنەکانی ئێستای براونستۆر",
+    giniImagePreviousLabel: "وێنە پاشەکەوتکراوەکان لە پشتڕاستکردنەوە",
+    giniImageAdded: "زیادکراو",
+    giniImageRemoved: "لابراو",
+    giniImageReplaced: "هەمان ناونیشان، ناوەڕۆکی جیاواز",
+    giniImageNotSent: "ئەم گۆڕانکارییە وێنەیە بۆ پێداچوونەوە پیشان دەدرێت. تەنها یەک وێنە دەنێردرێت دوای هەڵبژاردن و پشتڕاستکردنەوە.",
+    giniImageRemoteLabel: "وێنەکانی ئێستای جینی",
+    giniImageReplaceOne: "گۆڕینی یەک وێنە",
+    giniImageReplaceSelect: "یەک وێنەی جینی و یەک وێنەی براونستۆر هەڵبژێرە. وێنەکانی تر ناسڕدرێنەوە.",
+    giniImageReplaceConfirm:
+      "SKU {sku}: وێنەی جینی {old} دەسڕدرێتەوە و بە فایلی {new} دەگۆڕدرێت. ئەمە یەک POSTە، دروستکردن نییە، و وێنەکانی تر ناسڕدرێنەوە. نرخ و بڕ نانێردرێن.",
+    giniImageMixedBlocked:
+      "نرخ یان بڕیش لە پەیڵۆدی پشتڕاستکراوی جینی جیاوازە. گۆڕینی وێنە بلۆک دەمێنێت. ئەم داواکارییە ئەو خانانە وەک نوێکراو تۆمار ناکات.",
+    giniImageResolve: "تۆمارکردنی وێنە وەک جێبەجێنەبوو",
+    giniImageResolveConfirm:
+      "ئەمە فایلێک نانێرێت. لیستی وێنەی جینی هەر وەک خۆیەتی و ئەمە بەڵگە نییە کە بارکردنەکە شکستی هێناوە. تەنها دوای چاوەڕوانی بڵاوبوونەوە، قفڵی دووبارەکردنەوە لادەبات.",
+    giniImageReconcile: "پشتڕاستکردنەوەی وێنە بە خوێندنەوە",
+    giniImageWritesOff:
+      "نووسینی وێنە ناچالاکە. GINI_IMAGE_WRITES_ENABLED و GINI_ALLOW_LIVE_IMAGE_WRITES لەسەر سێرڤەر دابنێ. ئەم پەڕەیە خۆی چالاکیان ناکات.",
+    giniChangedPreviewImageChecks: "پشتڕاستکردنەوەی وێنە پێویستە",
     giniStartChangedSync: "دەستپێکردنی هاوکاتکردنی گۆڕاوەکان",
+    giniRunChangedPreview: "پێشبینینی گۆڕاوەکان",
+    giniChangedSyncContractRequired:
+      "دەستپێکردن ناچالاک دەمێنێت تا پێشبینین ئامادە بێت، یەک بەرهەمی شایستە هەڵبژێردرێت، ناسنامە و SKUی جینی بگونجێن، و دەروازەی نووسینی نوێکردنەوە لەسەر سێرڤەر چالاک بێت.",
+    giniChangedSyncWritesOff:
+      "نووسینی نوێکردنەوە ناچالاکە. پێش تاقیکردنەوەی یەک بەرهەم، GINI_UPDATE_WRITES_ENABLED و GINI_ALLOW_LIVE_UPDATE_WRITES لەسەر سێرڤەر دابنێ. ئەم پەڕەیە خۆی چالاکیان ناکات.",
+    giniChangedSyncSelect: "یەک SKU هەڵبژێرە. هاوکاتکردنی گۆڕاوەکان هەموو گۆڕانکارییەکان پێکەوە نانێرێت.",
+    giniChangedSyncNotSendable:
+      "لەم ڕیزەدا جیاوازی نرخ یان بڕ نانێردرێت. گۆڕانی وێنە داواکارییەکی جیاواز دەمێنێتەوە و بە نوێکردنەوەی نرخ پشتڕاست ناکرێتەوە.",
+    giniStartChangedConfirm: "SKU {sku} لە جینی نوێ بکرێتەوە؟ {changes} ئەمە یەک PUT دەنێرێت و بەرهەم دروست ناکات و نایسڕێتەوە.",
+    giniChangedUpdateEndpoint: "شوێنی نوێکردنەوە",
+    giniChangedPreviewTitle: "پێشبینینی گۆڕاوەکان",
+    giniChangedPreviewLocalNote:
+      "گۆڕاو واتە هاشی پاشەکەوتکراو لەگەڵ پەیڵۆدی ئێستای براونستۆر جیاوازە و ناسنامە و SKUی جینی هێشتا دەگونجێن. جیاوازی هاش بەڵگە نییە کە بەرهەمی جینی خۆی گۆڕاوە.",
+    giniChangedPreviewReadOnly: "تەنها خوێندنەوە. هیچ بەرهەمێک نەنێردرا و نوێ نەکرایەوە.",
+    giniChangedPreviewChecked: "پشتڕاستکراوە پشکنراوەکان",
+    giniChangedPreviewChanged: "گۆڕاو",
+    giniChangedPreviewUnchanged: "نەگۆڕاو",
+    giniChangedPreviewReconcile: "پێویستی ڕێکخستنەوە",
+    giniChangedPreviewBlocked: "ڕێگریکراو",
+    giniChangedPreviewList: "بەرهەمە گۆڕاوەکان",
+    giniChangedPreviewNone: "هیچ بەرهەمێکی گۆڕاو نەدۆزرایەوە.",
+    giniChangedPreviewOld: "پاشەکەوتکراو لە پشتڕاستکردنەوە",
+    giniChangedPreviewNew: "براونستۆری ئێستا",
+    giniChangedPreviewHashOnly:
+      "نرخ و بڕ و خانە هاوتا پاشەکەوتکراوەکان جیاواز نین، یان بەهای کۆن تۆمار نەکراوە. تەنها هاشی پەیڵۆدی براونستۆر جیاوازە.",
+    giniChangedPreviewReconcileList: "بەرهەمەکانی ڕێکخستنەوە",
+    giniChangedPreviewBlockedList: "بەرهەمە ڕێگریکراوەکان",
+    giniChangedFieldPrice: "نرخ",
+    giniChangedFieldQuantity: "بڕ",
+    giniChangedFieldImages: "ژمارەی وێنە",
+    giniChangedReasonHash:
+      "هاشی پەیڵۆدی براونستۆر لە هاشی پاشەکەوتکراو جیاوازە و ناسنامە و SKUی جینی هێشتا دەگونجێن. ئەمە بەڵگە نییە کە بەرهەمی جینی گۆڕاوە.",
+    giniChangedReasonSame: "هاشی پەیڵۆدی براونستۆر لەگەڵ هاشی پاشەکەوتکراو دەگونجێت و ناسنامە و SKUی جینی هێشتا دەگونجێن.",
+    giniChangedReasonHistorical: "ئەم SKU مێژووییە هێشتا یەکلایی نەبووەتەوە، بۆیە بەربژێری نوێکردنەوە نییە.",
+    giniChangedReasonLiveSku: "SKUی ڕاستەوخۆی جینی لەگەڵ SKU پاشەکەوتکراو ناگونجێت.",
+    giniChangedReasonLocalSku: "SKUی براونستۆر لەگەڵ SKU پاشەکەوتکراوی ناسنامەی جینی ناگونجێت.",
+    giniChangedReasonHashMissing: "هاشی پەیڵۆدی پشتڕاستکراو نییە، بۆیە گۆڕانی ناوخۆیی دیاری ناکرێت.",
     giniStartFullConfirm: "دروستکردنی {count} بەرهەمی ئامادە لە جینی؟ SKU ی هەبوو دەپەڕێنرێت. ئەمە خۆی دەستپێناکات.",
     giniStartLimitedConfirm: "دروستکردنی تا {count} بەرهەمی ئامادە لە جینی بۆ تاقیکردنەوە؟",
     giniSyncConnected: "پەیوەندی هەیە",
@@ -1777,9 +1844,77 @@ export const translations = {
     giniLimitedSyncHint: "Sends only the number you enter, up to 25 ready products, after a finished Full Preview.",
     giniChangedSyncTitle: "Changed sync",
     giniChangedSyncHint:
-      "Not operational. No verified GINI product update contract is implemented. Existing products are skipped, not overwritten.",
-    giniChangedSyncUnsupported: "Updates and complex variants are not sent.",
+      "After Changed Preview, this sends one confirmed product with a partial JSON PUT. Full Sync create is unchanged. Nothing is sent until you confirm one SKU.",
+    giniChangedSyncUnsupported:
+      "A price or quantity difference is sent with one JSON PUT, including while an image change is still pending. That PUT does not confirm images or any other unsynced field. The full payload hash is stored only when price and quantity explain the whole difference. One image replacement is a separate request. The two unresolved historical SKUs are never updated.",
+    giniImageWriteBlocked:
+      "One image replacement is a multipart POST with _method=PUT. delete_images[] is the exact live GINI URL, and images[] is one file. The signature is POST with an empty body. The image gate stays off until GINI_IMAGE_WRITES_ENABLED and GINI_ALLOW_LIVE_IMAGE_WRITES are set. This page will not turn them on.",
+    giniImageVerificationNeeded: "Image verification needed",
+    giniImageVerificationDetail:
+      "No saved image list exists for this confirmed send. Image count does not create a pair. Choose the live GINI image and the BrownStore replacement. Nothing is sent while the image write gate is off.",
+    giniImageCountLine: "Saved image count {old}. Current BrownStore image count {new}.",
+    giniImageContentUnverified:
+      "These image addresses match the confirmed payload. No historical file fingerprint was stored, so a new file at the same address cannot be detected. BrownStore does not invent an old image and does not send a replacement for this case.",
+    giniImageOrderUnsupported: "GINI does not publish an image order or primary-image field. An order-only change is not sent.",
+    giniImageCurrentLabel: "Current BrownStore images",
+    giniImagePreviousLabel: "Images stored at confirmation",
+    giniImageAdded: "Added",
+    giniImageRemoved: "Removed",
+    giniImageReplaced: "Same address, different file content",
+    giniImageNotSent: "This image change is shown for review. One replacement is sent only after you choose both images and confirm.",
+    giniImageRemoteLabel: "Current GINI images",
+    giniImageReplaceOne: "Replace one image",
+    giniImageReplaceSelect: "Choose one live GINI image and one BrownStore image. Other images are not deleted.",
+    giniImageReplaceConfirm:
+      "SKU {sku}: delete the live GINI image {old} and replace it with the file from {new}. This is one POST, not a create, and other images stay. Price and quantity are not sent.",
+    giniImageMixedBlocked:
+      "Price or quantity also differs from the confirmed GINI payload. Image replacement stays blocked. This request will not mark those fields as updated.",
+    giniImageResolve: "Record image as not applied",
+    giniImageResolveConfirm:
+      "This does not upload a file. The GINI image list is still unchanged, and that does not prove the upload failed. It only unlocks one later explicit attempt after you accept the delay.",
+    giniImageReconcile: "Reconcile image by read",
+    giniImageWritesOff:
+      "Image writes are disabled. Set GINI_IMAGE_WRITES_ENABLED and GINI_ALLOW_LIVE_IMAGE_WRITES on the server. This page will not turn them on.",
+    giniChangedPreviewImageChecks: "Image verification needed",
     giniStartChangedSync: "Start Changed Sync",
+    giniRunChangedPreview: "Changed Preview",
+    giniChangedSyncContractRequired:
+      "Start Changed Sync stays off until Changed Preview is current, one eligible product is selected, the live GINI id and SKU match, and the server update write gates are on.",
+    giniChangedSyncWritesOff:
+      "Update writes are off. Set GINI_UPDATE_WRITES_ENABLED and GINI_ALLOW_LIVE_UPDATE_WRITES on the server before a controlled one-product test. This page will not turn them on.",
+    giniChangedSyncSelect: "Select one SKU. Changed Sync will not send every change.",
+    giniChangedSyncNotSendable:
+      "No price or quantity difference is sent from this row. An image change stays a separate replacement and is not marked confirmed by a price update.",
+    giniStartChangedConfirm: "Update {sku} on GINI? {changes} This sends one PUT and does not create or delete the product.",
+    giniChangedUpdateEndpoint: "Update endpoint",
+    giniChangedPreviewTitle: "Changed Preview",
+    giniChangedPreviewLocalNote:
+      "Changed means the saved confirmation hash and the current BrownStore payload differ, while the live GINI id and SKU still match. A hash difference is not proof that the GINI product changed.",
+    giniChangedPreviewReadOnly: "Read only. No products were sent or updated.",
+    giniChangedPreviewChecked: "Confirmed products checked",
+    giniChangedPreviewChanged: "Changed",
+    giniChangedPreviewUnchanged: "Unchanged",
+    giniChangedPreviewReconcile: "Reconciliation needed",
+    giniChangedPreviewBlocked: "Blocked",
+    giniChangedPreviewList: "Changed products",
+    giniChangedPreviewNone: "No changed products.",
+    giniChangedPreviewOld: "Saved at confirmation",
+    giniChangedPreviewNew: "Current BrownStore",
+    giniChangedPreviewHashOnly:
+      "Saved price, quantity, and other comparable fields do not differ, or the confirmed values were not stored. Only the BrownStore payload hash differs.",
+    giniChangedPreviewReconcileList: "Reconciliation needed",
+    giniChangedPreviewBlockedList: "Blocked products",
+    giniChangedFieldPrice: "Price",
+    giniChangedFieldQuantity: "Quantity",
+    giniChangedFieldImages: "Image count",
+    giniChangedReasonHash:
+      "The BrownStore payload hash differs from the hash saved at confirmation, and the live GINI id and SKU still match. This is not proof that the GINI product changed.",
+    giniChangedReasonSame:
+      "The BrownStore payload hash matches the hash saved at confirmation, and the live GINI id and SKU still match.",
+    giniChangedReasonHistorical: "This historical SKU is still unresolved, so it is not an update candidate.",
+    giniChangedReasonLiveSku: "The live GINI SKU does not match the SKU saved with the confirmed id.",
+    giniChangedReasonLocalSku: "The BrownStore SKU no longer matches the SKU saved with the confirmed GINI id.",
+    giniChangedReasonHashMissing: "The confirmed send has no saved payload hash, so a local change cannot be determined.",
     giniStartFullConfirm:
       "Create {count} ready products on GINI? Existing SKUs are skipped. This does not start by itself.",
     giniStartLimitedConfirm: "Create up to {count} ready products on GINI for verification?",
@@ -3021,9 +3156,77 @@ export const translations = {
     giniLimitedSyncTitle: "تجربة تحقق محدودة",
     giniLimitedSyncHint: "ترسل فقط العدد الذي تدخله، وبحد أقصى ٢٥ منتجًا جاهزًا، بعد معاينة كاملة.",
     giniChangedSyncTitle: "مزامنة التغييرات",
-    giniChangedSyncHint: "غير جاهزة. لا يوجد عقد تحديث موثّق لجيني. المنتجات الموجودة تُتخطى ولا تُستبدل.",
-    giniChangedSyncUnsupported: "لا يُرسل التحديث ولا المتغيرات المعقدة.",
+    giniChangedSyncHint:
+      "بعد معاينة التغييرات، يُرسل منتجًا مؤكدًا واحدًا بطلب PUT جزئي بصيغة JSON. إنشاء المزامنة الكاملة لا يتغير. لا يُرسل شيء حتى تؤكد رمز SKU واحدًا.",
+    giniChangedSyncUnsupported:
+      "يُرسل فرق السعر أو الكمية بطلب PUT واحد بصيغة JSON، حتى لو كان تغيير الصورة ما زال معلقًا. هذا الطلب لا يؤكد الصور ولا أي حقل آخر غير متزامن. يُحفظ هاش الحمولة الكامل فقط عندما يفسّر السعر والكمية الفرق كله. استبدال صورة واحدة طلب منفصل. لا يُحدَّث رمزا SKU التاريخيان غير المحسومين أبدًا.",
+    giniImageWriteBlocked:
+      "استبدال صورة واحدة هو POST متعدد الأجزاء مع _method=PUT. delete_images[] هو عنوان جيني الحي نفسه، وimages[] ملف واحد. التوقيع POST بجسم فارغ. بوابة الصور تبقى متوقفة حتى يُضبط GINI_IMAGE_WRITES_ENABLED وGINI_ALLOW_LIVE_IMAGE_WRITES. هذه الصفحة لا تشغلهما.",
+    giniImageVerificationNeeded: "التحقق من الصور مطلوب",
+    giniImageVerificationDetail:
+      "لا توجد قائمة صور محفوظة لهذا الإرسال المؤكد. عدد الصور لا ينشئ زوجًا. اختر صورة جيني الحية وبديل براون ستور. لا يُرسل شيء بينما بوابة كتابة الصور متوقفة.",
+    giniImageCountLine: "عدد الصور المحفوظ {old}. عدد صور براون ستور الحالي {new}.",
+    giniImageContentUnverified:
+      "عناوين هذه الصور تطابق الحمولة المؤكدة. لا توجد بصمة تاريخية لمحتوى الملف، لذلك لا يمكن اكتشاف ملف جديد على العنوان نفسه. لا يخترع براون ستور صورة قديمة ولا يرسل استبدالًا في هذه الحالة.",
+    giniImageOrderUnsupported: "لم ينشر جيني حقلًا لترتيب الصور أو للصورة الرئيسية. تغيير الترتيب وحده لا يُرسل.",
+    giniImageCurrentLabel: "صور براون ستور الحالية",
+    giniImagePreviousLabel: "الصور المحفوظة عند التأكيد",
+    giniImageAdded: "مضافة",
+    giniImageRemoved: "محذوفة",
+    giniImageReplaced: "نفس العنوان، محتوى مختلف",
+    giniImageNotSent: "يُعرض تغيير الصورة هذا للمراجعة. يُرسل استبدال واحد فقط بعد اختيار الصورتين والتأكيد.",
+    giniImageRemoteLabel: "صور جيني الحالية",
+    giniImageReplaceOne: "استبدال صورة واحدة",
+    giniImageReplaceSelect: "اختر صورة جيني حية واحدة وصورة براون ستور واحدة. الصور الأخرى لا تُحذف.",
+    giniImageReplaceConfirm:
+      "SKU {sku}: تُحذف صورة جيني الحية {old} وتُستبدل بالملف من {new}. هذا طلب POST واحد، وليس إنشاءً، وتبقى الصور الأخرى. لا يُرسل السعر ولا الكمية.",
+    giniImageMixedBlocked:
+      "السعر أو الكمية يختلفان أيضًا عن حمولة جيني المؤكدة. يبقى استبدال الصورة موقوفًا. هذا الطلب لا يسجّل تلك الحقول على أنها حُدّثت.",
+    giniImageResolve: "تسجيل الصورة كغير مطبّقة",
+    giniImageResolveConfirm:
+      "هذا لا يرفع ملفًا. قائمة صور جيني ما زالت كما هي، وهذا لا يثبت فشل الرفع. يفتح فقط محاولة لاحقة صريحة واحدة بعد قبول التأخير.",
+    giniImageReconcile: "مطابقة الصورة بالقراءة",
+    giniImageWritesOff:
+      "كتابة الصور متوقفة. اضبط GINI_IMAGE_WRITES_ENABLED وGINI_ALLOW_LIVE_IMAGE_WRITES على الخادم. هذه الصفحة لا تشغلهما.",
+    giniChangedPreviewImageChecks: "التحقق من الصور مطلوب",
     giniStartChangedSync: "بدء مزامنة التغييرات",
+    giniRunChangedPreview: "معاينة التغييرات",
+    giniChangedSyncContractRequired:
+      "يبقى البدء متوقفًا حتى تكتمل المعاينة، ويُختار منتج مؤهل واحد، ويتطابق معرف جيني ورمز SKU الحيّان، وتكون بوابات كتابة التحديث على الخادم مفعّلة.",
+    giniChangedSyncWritesOff:
+      "كتابة التحديث متوقفة. قبل اختبار منتج واحد، عيّن GINI_UPDATE_WRITES_ENABLED و GINI_ALLOW_LIVE_UPDATE_WRITES على الخادم. هذه الصفحة لا تشغّلهما.",
+    giniChangedSyncSelect: "اختر رمز SKU واحدًا. مزامنة التغييرات لا ترسل كل التغييرات معًا.",
+    giniChangedSyncNotSendable:
+      "لا يُرسل فرق سعر أو كمية من هذا الصف. يبقى تغيير الصورة طلبًا منفصلًا ولا يُعلَّم مؤكدًا بسبب تحديث السعر.",
+    giniStartChangedConfirm: "هل يُحدَّث {sku} في جيني؟ {changes} هذا يرسل طلب PUT واحدًا ولا ينشئ المنتج ولا يحذفه.",
+    giniChangedUpdateEndpoint: "مسار التحديث",
+    giniChangedPreviewTitle: "معاينة التغييرات",
+    giniChangedPreviewLocalNote:
+      "التغيير يعني أن هاش التأكيد المحفوظ يختلف عن حمولة براون ستور الحالية، بينما ما زال معرف جيني ورمز SKU الحيّان متطابقين. اختلاف الهاش ليس دليلًا على أن منتج جيني نفسه تغيّر.",
+    giniChangedPreviewReadOnly: "للقراءة فقط. لم يُرسل أي منتج ولم يُحدَّث.",
+    giniChangedPreviewChecked: "المنتجات المؤكدة التي فُحصت",
+    giniChangedPreviewChanged: "متغير",
+    giniChangedPreviewUnchanged: "غير متغير",
+    giniChangedPreviewReconcile: "تحتاج مطابقة",
+    giniChangedPreviewBlocked: "ممنوع",
+    giniChangedPreviewList: "المنتجات المتغيرة",
+    giniChangedPreviewNone: "لا توجد منتجات متغيرة.",
+    giniChangedPreviewOld: "المحفوظ عند التأكيد",
+    giniChangedPreviewNew: "براون ستور الحالي",
+    giniChangedPreviewHashOnly:
+      "السعر والكمية والحقول المقارنة المحفوظة غير مختلفة، أو لم تُحفظ القيم المؤكدة. يختلف هاش حمولة براون ستور فقط.",
+    giniChangedPreviewReconcileList: "منتجات تحتاج مطابقة",
+    giniChangedPreviewBlockedList: "منتجات ممنوعة",
+    giniChangedFieldPrice: "السعر",
+    giniChangedFieldQuantity: "الكمية",
+    giniChangedFieldImages: "عدد الصور",
+    giniChangedReasonHash:
+      "هاش حمولة براون ستور يختلف عن الهاش المحفوظ عند التأكيد، وما زال معرف جيني ورمز SKU متطابقين. هذا ليس دليلًا على أن منتج جيني تغيّر.",
+    giniChangedReasonSame: "هاش حمولة براون ستور يطابق الهاش المحفوظ عند التأكيد، وما زال معرف جيني ورمز SKU متطابقين.",
+    giniChangedReasonHistorical: "رمز SKU التاريخي هذا ما زال غير محسوم، لذلك ليس مرشحًا للتحديث.",
+    giniChangedReasonLiveSku: "رمز SKU الحي في جيني لا يطابق الرمز المحفوظ مع المعرف المؤكد.",
+    giniChangedReasonLocalSku: "رمز SKU في براون ستور لم يعد يطابق الرمز المحفوظ مع معرف جيني المؤكد.",
+    giniChangedReasonHashMissing: "لا يوجد هاش حمولة محفوظ للإرسال المؤكد، لذلك لا يمكن تحديد تغيير محلي.",
     giniStartFullConfirm: "إنشاء {count} منتجًا جاهزًا في جيني؟ رموز SKU الموجودة تُتخطى. هذا لا يبدأ وحده.",
     giniStartLimitedConfirm: "إنشاء ما يصل إلى {count} منتجًا جاهزًا في جيني للتحقق؟",
     giniSyncConnected: "متصل",

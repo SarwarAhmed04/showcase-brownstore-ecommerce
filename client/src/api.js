@@ -270,6 +270,46 @@ export const api = {
       method: "POST",
       body: JSON.stringify({}),
     }),
+  giniChangedPreview: () =>
+    request("/api/admin/platforms/gini/sync-all/changed-preview", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  giniChangedSyncStart: (body) =>
+    request("/api/admin/platforms/gini/sync-all/changed-sync/start", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  giniChangedSyncPause: () =>
+    request("/api/admin/platforms/gini/sync-all/changed-sync/pause", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  giniChangedSyncResume: () =>
+    request("/api/admin/platforms/gini/sync-all/changed-sync/resume", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  giniChangedSyncStop: () =>
+    request("/api/admin/platforms/gini/sync-all/changed-sync/stop", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  giniImageReplacementStart: (body) =>
+    request("/api/admin/platforms/gini/sync-all/image-replacement/start", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  giniImageReplacementReconcile: (body) =>
+    request("/api/admin/platforms/gini/sync-all/image-replacement/reconcile", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  giniImageReplacementResolve: (body) =>
+    request("/api/admin/platforms/gini/sync-all/image-replacement/resolve", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   giniSyncAllStart: (body) =>
     request("/api/admin/platforms/gini/sync-all/start", {
       method: "POST",

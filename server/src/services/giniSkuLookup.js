@@ -12,6 +12,19 @@ function failureOf(response) {
   return "error";
 }
 
+function giniResponseImages(data) {
+  const urls = [];
+  const push = (value) => {
+    const url = String(value || "").trim();
+    if (url) urls.push(url);
+  };
+  if (Array.isArray(data?.images)) {
+    for (const image of data.images) push(typeof image === "string" ? image : image?.url || image?.image);
+  }
+  if (!urls.length) push(data?.image);
+  return urls;
+}
+
 function errorResult(response) {
   const retryAfter = Number(response?.retryAfter);
   return {
@@ -35,6 +48,7 @@ export async function findExistingGiniProduct(sku) {
       exists: true,
       giniProductId: String(shown.json.data.id ?? ""),
       sku: String(shown.json.data.sku || sku),
+      images: giniResponseImages(shown.json.data),
     };
   }
   if (shown.status !== 200 && shown.status !== 404) return errorResult(shown);
@@ -49,7 +63,7 @@ export async function findExistingGiniProduct(sku) {
     if (listed.status !== 200 || !Array.isArray(listed.json?.data)) return errorResult(listed);
     const match = listed.json.data.find((item) => sameSku(item, skuKey));
     if (match) {
-      return { exists: true, giniProductId: String(match.id ?? ""), sku: String(match.sku || sku) };
+      return { exists: true, giniProductId: String(match.id ?? ""), sku: String(match.sku || sku), images: giniResponseImages(match) };
     }
     lastPage = Number(listed.json?.meta?.last_page) || 1;
     page += 1;
