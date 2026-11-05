@@ -338,19 +338,41 @@ function matchesReportedPreview(job) {
   return Object.entries(REPORTED_PREVIEW).every(([key, value]) => Number(job[key]) === value);
 }
 
-async function collectionMap(db) {
-  const listed = await db.listCollections({}, { nameOnly: true }).toArray();
-  const actual = new Map(listed.map((item) => [String(item.name).toLowerCase(), item.name]));
-  const collections = {};
-  for (const expected of GINI_COLLECTIONS) {
-    const name = actual.get(expected) || null;
-    collections[expected] = { present: Boolean(name), name };
+async function closeCursor(cursor) {
+  if (typeof cursor?.close !== "function") return;
+  try {
+    await cursor.close();
+  } catch {
+    // The documents were already read, or the read already failed.
   }
-  return {
-    collections,
-    products: { present: actual.has("products"), name: actual.get("products") || null },
-    taxonomy: { present: actual.has("platformtaxonomyconfigs"), name: actual.get("platformtaxonomyconfigs") || null },
-  };
+}
+
+async function nextDocument(cursor) {
+  try {
+    return await cursor.next();
+  } finally {
+    await closeCursor(cursor);
+  }
+}
+
+async function collectionMap(db) {
+  const cursor = db.listCollections({}, { nameOnly: true });
+  try {
+    const listed = await cursor.toArray();
+    const actual = new Map(listed.map((item) => [String(item.name).toLowerCase(), item.name]));
+    const collections = {};
+    for (const expected of GINI_COLLECTIONS) {
+      const name = actual.get(expected) || null;
+      collections[expected] = { present: Boolean(name), name };
+    }
+    return {
+      collections,
+      products: { present: actual.has("products"), name: actual.get("products") || null },
+      taxonomy: { present: actual.has("platformtaxonomyconfigs"), name: actual.get("platformtaxonomyconfigs") || null },
+    };
+  } finally {
+    await closeCursor(cursor);
+  }
 }
 
 function collection(db, entry) {
@@ -365,11 +387,15 @@ async function countOrNull(col, filter = {}) {
 
 async function loadSends(col) {
   if (!col) return { available: false, rows: [] };
-  const rows = await col
+  const cursor = col
     .find({}, { projection: { sku: 1, skuKey: 1, productId: 1, giniProductId: 1, jobId: 1, confirmedAt: 1, partner: 1 } })
-    .maxTimeMS(QUERY_MS)
-    .toArray();
-  return { available: true, rows };
+    .maxTimeMS(QUERY_MS);
+  try {
+    const rows = await cursor.toArray();
+    return { available: true, rows };
+  } finally {
+    await closeCursor(cursor);
+  }
 }
 
 async function loadReady(col, jobId) {
@@ -384,11 +410,15 @@ async function loadReady(col, jobId) {
   const cursor = col
     .find({ jobId, classification: "READY_CREATE" }, { projection: { sku: 1, skuKey: 1, productId: 1 } })
     .maxTimeMS(QUERY_MS);
-  for await (const row of cursor) {
-    count += 1;
-    const key = row.skuKey || giniSkuKey(row.sku);
-    if (key) bySku.add(key);
-    if (row.productId) byProduct.add(String(row.productId));
+  try {
+    for await (const row of cursor) {
+      count += 1;
+      const key = row.skuKey || giniSkuKey(row.sku);
+      if (key) bySku.add(key);
+      if (row.productId) byProduct.add(String(row.productId));
+    }
+  } finally {
+    await closeCursor(cursor);
   }
   return { available: true, reason: "", storedRows: stored, count, bySku, byProduct };
 }
@@ -401,11 +431,15 @@ async function createdKeys(col) {
   const cursor = col
     .find({ classification: "CREATED" }, { projection: { sku: 1, skuKey: 1, productId: 1, giniProductId: 1 } })
     .maxTimeMS(QUERY_MS);
-  for await (const row of cursor) {
-    count += 1;
-    const key = row.skuKey || giniSkuKey(row.sku);
-    if (key) keys.add(key);
-    if (row.productId) productIds.add(String(row.productId));
+  try {
+    for await (const row of cursor) {
+      count += 1;
+      const key = row.skuKey || giniSkuKey(row.sku);
+      if (key) keys.add(key);
+      if (row.productId) productIds.add(String(row.productId));
+    }
+  } finally {
+    await closeCursor(cursor);
   }
   return { available: true, count, distinctSku: keys.size, keys, productIds };
 }
@@ -465,13 +499,36 @@ function publicConnection(doc) {
 
 async function classificationCounts(col, jobId) {
   if (!col || !jobId) return null;
-  const rows = await col
-    .aggregate([{ $match: { jobId } }, { $group: { _id: "$classification", n: { $sum: 1 } } }], { maxTimeMS: QUERY_MS })
-    .toArray();
-  return Object.fromEntries(rows.map((row) => [String(row._id || ""), row.n]));
+  const cursor = col.aggregate(
+    [{ $match: { jobId } }, { $group: { _id: "$classification", n: { $sum: 1 } } }],
+    { maxTimeMS: QUERY_MS }
+  );
+  try {
+    const rows = await cursor.toArray();
+    return Object.fromEntries(rows.map((row) => [String(row._id || ""), row.n]));
+  } finally {
+    await closeCursor(cursor);
+  }
 }
 
-async function auditDatabase(db) {
+async function finishAuditConnection(connection) {
+  if (!connection || !connection.readyState) return;
+  try {
+    await connection.disconnect();
+  } catch {
+    // Closing is cleanup. It must not hide the audit result or reject without a handler.
+  }
+}
+
+export async function closeAfterAudit(connection, operation) {
+  try {
+    return await operation();
+  } finally {
+    await finishAuditConnection(connection);
+  }
+}
+
+export async function auditDatabase(db) {
   const found = await collectionMap(db);
   const sendsCol = collection(db, found.collections.ginisyncsendstates);
   const resultsCol = collection(db, found.collections.ginisyncproductresults);
@@ -486,12 +543,14 @@ async function auditDatabase(db) {
   let reportedPreview = null;
   let reportedPreviewCount = null;
   if (jobsCol) {
-    latestPreview = await jobsCol.find({ mode: "preview" }).sort({ createdAt: -1 }).limit(1).maxTimeMS(QUERY_MS).next();
+    latestPreview = await nextDocument(jobsCol.find({ mode: "preview" }).sort({ createdAt: -1 }).limit(1).maxTimeMS(QUERY_MS));
     reportedPreviewCount = await jobsCol.countDocuments(
       { mode: "preview", ...REPORTED_PREVIEW },
       { maxTimeMS: QUERY_MS }
     );
-    reportedPreview = await jobsCol.find({ mode: "preview", ...REPORTED_PREVIEW }).sort({ createdAt: -1 }).limit(1).maxTimeMS(QUERY_MS).next();
+    reportedPreview = await nextDocument(
+      jobsCol.find({ mode: "preview", ...REPORTED_PREVIEW }).sort({ createdAt: -1 }).limit(1).maxTimeMS(QUERY_MS)
+    );
   }
 
   async function previewSection(job, label) {
@@ -537,8 +596,11 @@ async function auditDatabase(db) {
     null
   );
 
+  // findOne() returns a promise. maxTimeMS belongs in the options; the promise has no maxTimeMS method.
   const connection = connectionCol
-    ? publicConnection(await connectionCol.findOne({}, { projection: { clientSecretEnc: 0 } }).maxTimeMS(QUERY_MS))
+    ? publicConnection(
+        await connectionCol.findOne({}, { projection: { clientSecretEnc: 0 }, maxTimeMS: QUERY_MS })
+      )
     : { found: false, reason: "giniconnections collection is absent" };
 
   return {
@@ -604,30 +666,32 @@ async function main() {
       readPreference: "primary",
       maxPoolSize: 1,
     });
-    const report = await auditDatabase(mongoose.connection.db);
-    const output = {
-      readOnly: true,
-      operations: ["listCollections", "find", "countDocuments", "aggregate"],
-      connectionSource: source,
-      database: {
-        protocol: target.protocol,
-        host: target.host,
-        name: target.database,
-        loopback: target.loopback,
-      },
-      deployment: inspectDeployment(scriptDirectory()),
-      writeGates: writeGateSnapshot(process.env),
-      ...report,
-    };
-    if (target.loopback) {
-      console.error("Database host is loopback. Keep this result only when this shell is the production server.");
-    }
-    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+    await closeAfterAudit(mongoose.connection, async () => {
+      const report = await auditDatabase(mongoose.connection.db);
+      const output = {
+        readOnly: true,
+        operations: ["listCollections", "find", "countDocuments", "aggregate"],
+        connectionSource: source,
+        database: {
+          protocol: target.protocol,
+          host: target.host,
+          name: target.database,
+          loopback: target.loopback,
+        },
+        deployment: inspectDeployment(scriptDirectory()),
+        writeGates: writeGateSnapshot(process.env),
+        ...report,
+      };
+      if (target.loopback) {
+        console.error("Database host is loopback. Keep this result only when this shell is the production server.");
+      }
+      process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+    });
   } catch (err) {
     console.error(`Database read failed: ${sanitizeText(err?.message || err)}`);
     process.exitCode = 3;
   } finally {
-    if (mongoose.connection.readyState) await mongoose.disconnect().catch(() => {});
+    await finishAuditConnection(mongoose.connection);
   }
 }
 
@@ -636,5 +700,8 @@ function scriptDirectory() {
 }
 
 if (scriptIsMain()) {
-  main();
+  main().catch((err) => {
+    console.error(`Database read failed: ${sanitizeText(err?.message || err)}`);
+    if (!process.exitCode) process.exitCode = 3;
+  });
 }
