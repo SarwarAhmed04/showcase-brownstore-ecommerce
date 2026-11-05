@@ -23,6 +23,7 @@ import {
   stopGiniChangedSync,
 } from "../services/giniProductUpdate.js";
 import { reconcileGiniImageReplacement, resolveGiniImageReplacement, startGiniImageReplacement } from "../services/giniImageReplacement.js";
+import { previewGiniSkuCreate, sendGiniSkuCreate } from "../services/giniSkuCreate.js";
 
 export const giniConnectionRouter = Router();
 
@@ -299,6 +300,35 @@ giniConnectionRouter.post("/platforms/gini/sync-all/stop", async (_req, res) => 
     res.json(assertNoSecretLeak(await stopGiniSyncAll(), ""));
   } catch (err) {
     fail(res, err, "Failed to stop GINI sync");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sku-create/preview", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(assertNoSecretLeak(await previewGiniSkuCreate({ sku: body.sku, productId: body.productId }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to preview the GINI product");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sku-create/send", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(
+      assertNoSecretLeak(
+        await sendGiniSkuCreate({
+          sku: body.sku,
+          productId: body.productId,
+          confirm: body.confirm === true,
+          previewToken: body.previewToken,
+          expectedCount: body.expectedCount,
+        }),
+        ""
+      )
+    );
+  } catch (err) {
+    fail(res, err, "Failed to create the GINI product");
   }
 });
 

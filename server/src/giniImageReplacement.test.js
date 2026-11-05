@@ -103,6 +103,9 @@ function installFetch() {
     calls.push({ method, url: target, body: options.body, headers: options.headers });
     if (target.endsWith(GINI_PING_PATH)) return mockResponse(200, { data: { ok: true } });
     if (target.split("?")[0].endsWith(GINI_CATEGORIES_PATH)) return mockResponse(200, LIVE_TREE);
+    if (method === "GET" && target.includes("/products?")) {
+      return mockResponse(200, { data: [], meta: { last_page: 1, total: 0 } });
+    }
     if (!target.includes("/products/")) throw new Error(`unexpected ${method} ${target}`);
     const key = giniSkuKey(skuFromProductUrl(target));
     const found = remote.get(key);

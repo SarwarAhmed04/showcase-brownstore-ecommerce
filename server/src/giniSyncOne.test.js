@@ -13,6 +13,7 @@ import { Product } from "./models/Product.js";
 import { Commission } from "./models/Commission.js";
 import { PlatformTaxonomyConfig } from "./models/PlatformTaxonomyConfig.js";
 import { GiniConnection } from "./models/GiniConnection.js";
+import { GiniSkuCreateAttempt } from "./models/GiniSkuCreateAttempt.js";
 import { GiniSyncOneAudit } from "./models/GiniSyncOneAudit.js";
 import { GiniSyncOnePreview } from "./models/GiniSyncOnePreview.js";
 import { applyCommissionRate } from "./utils/commission.js";
@@ -33,6 +34,11 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || "gini-sync-one-test-secret";
 const CLIENT_ID = "gini-sync-client";
 const SECRET = "gini-sync-secret-not-for-the-browser";
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x00]);
+
+function enableLegacySyncOneWrites() {
+  process.env.GINI_SYNC_ONE_WRITES_ENABLED = "true";
+  process.env.GINI_ALLOW_LIVE_SYNC_ONE_WRITES = "true";
+}
 const LIVE_TREE = {
   data: [
     {
@@ -151,7 +157,7 @@ function installFetch() {
           detail: `${SECRET} ${signature} ${"Q".repeat(2000)}`,
         });
       }
-      return mockResponse(201, { data: { id: createdId, sku: "LP-ID141232" } });
+      return mockResponse(201, { data: { id: createdId, sku: "BS-ONE-1" } });
     }
     if (method === "GET" && target.includes("/products/")) {
       if (existingSku) {
@@ -222,7 +228,7 @@ async function makeProduct(overrides = {}) {
   const variants = overrides.variants || simpleVariant(overrides.stock ?? 5);
   return Product.create({
     ibsherId: overrides.ibsherId || `ibs-${crypto.randomBytes(4).toString("hex")}`,
-    itemCode: overrides.itemCode ?? "LP-ID141232",
+    itemCode: overrides.itemCode ?? "BS-ONE-1",
     name: overrides.name || { en: "Adhesive Patches", ar: "Adhesive Patches", ku: "Adhesive Patches" },
     description: overrides.description || {
       en: "Covers a blemish.",
@@ -373,6 +379,7 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
     });
     token = jwt.sign({ sub: user._id.toString(), role: "admin" }, process.env.JWT_SECRET);
     await Partner.create({ slug: "gini", name: "Gini" });
+    await GiniSkuCreateAttempt.init();
     server = await listen(app());
   });
 
@@ -394,6 +401,10 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
     postMode = "";
     calls = [];
     mediaCalls = [];
+    delete process.env.GINI_SKU_CREATE_WRITES_ENABLED;
+    delete process.env.GINI_ALLOW_LIVE_SKU_CREATE;
+    delete process.env.GINI_SYNC_ONE_WRITES_ENABLED;
+    delete process.env.GINI_ALLOW_LIVE_SYNC_ONE_WRITES;
     installFetch();
     installMedia();
     await Product.deleteMany({});
@@ -427,7 +438,7 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
     assert.equal(preview.json.action, "CREATE");
     assert.equal(preview.json.giniMode, "SIMPLE_PRODUCT");
     assert.equal(preview.json.brownStoreVariantsCollapsed, 1);
-    assert.equal(preview.json.sku, "LP-ID141232");
+    assert.equal(preview.json.sku, "BS-ONE-1");
     assert.equal(preview.json.brownStorePrice, 6500);
     assert.equal(preview.json.commissionRate, 0);
     assert.equal(preview.json.giniPrice, 6500);
@@ -479,7 +490,7 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
 
   it("does not create a SKU that already exists on GINI", async () => {
     await connectGini();
-    existingSku = "LP-ID141232";
+    existingSku = "BS-ONE-1";
     const product = await makeProduct();
     await mapCollection();
     const preview = await call("POST", "/api/admin/platforms/gini/sync-one/preview", {
@@ -495,6 +506,7 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
       expiresAt: new Date(Date.now() + 60000),
     });
     calls = [];
+    enableLegacySyncOneWrites();
     const sent = await call("POST", "/api/admin/platforms/gini/sync-one/send", {
       body: { productId: String(product._id), confirm: true, previewToken: "existing-token-123456", price: 1 },
     });
@@ -556,6 +568,7 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
       { $set: { price: 9000, "variants.0.sizes.0.stockQuantity": 8 } }
     );
     allowPost = true;
+    enableLegacySyncOneWrites();
     calls = [];
     const sent = await call("POST", "/api/admin/platforms/gini/sync-one/send", {
       body: {
@@ -576,7 +589,7 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
     assert.equal("requestId" in sent.json, false);
     assert.equal("edgeBlocked" in sent.json, false);
     assert.equal(sent.json.giniProductId, "501");
-    assert.equal(sent.json.sku, "LP-ID141232");
+    assert.equal(sent.json.sku, "BS-ONE-1");
     assert.equal(sent.raw.includes(SECRET), false);
     assert.equal(sent.raw.includes("clientSecret"), false);
     assert.equal(sent.raw.includes("X-SIGNATURE"), false);
@@ -602,7 +615,7 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
     const fields = Object.fromEntries(formEntries(post.options).map(([key, value]) => [key, value]));
     assert.equal(fields.price, "9000");
     assert.equal(fields.quantity, "8");
-    assert.equal(fields.sku, "LP-ID141232");
+    assert.equal(fields.sku, "BS-ONE-1");
     assert.equal(fields.category_id, "1");
     assert.equal(fields.subcategory_id, "10");
     assert.equal(fields["images[]"].file, true);
@@ -636,7 +649,8 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
     assert.equal(calls.every((item) => item.method === "GET"), true);
     allowPost = true;
     loseCreateResponse = true;
-    recoverSkuAfterLostCreate = "LP-ID141232";
+    recoverSkuAfterLostCreate = "BS-ONE-1";
+    enableLegacySyncOneWrites();
     calls = [];
     const recovered = await call("POST", "/api/admin/platforms/gini/sync-one/send", {
       body: { productId: String(product._id), confirm: true, previewToken: preview.json.previewToken },
@@ -683,6 +697,7 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
     });
     await mapCollection({ categoryId: "1", categoryName: "Home", subcategoryId: "999", subcategoryName: "Missing" });
     allowPost = true;
+    enableLegacySyncOneWrites();
     calls = [];
     const stale = await call("POST", "/api/admin/platforms/gini/sync-one/send", {
       body: { productId: String(product._id), confirm: true, previewToken: preview.json.previewToken },
@@ -745,6 +760,7 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
     assert.equal(preview.json.action, "CREATE");
     assert.equal(calls.every((item) => item.method === "GET"), true);
     allowPost = true;
+    enableLegacySyncOneWrites();
     postMode = mode;
     calls = [];
     const sent = await call("POST", "/api/admin/platforms/gini/sync-one/send", {
@@ -839,5 +855,79 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
     assertNoSecrets(JSON.stringify(other.audit), other.signature);
     assert.equal(other.postCount, 1);
     assert.equal(other.postsAfter, 0);
+  });
+
+  it("keeps Sync One preview read-only when the SKU create gates are on", async () => {
+    await connectGini();
+    const product = await makeProduct();
+    await mapCollection();
+    process.env.GINI_SKU_CREATE_WRITES_ENABLED = "true";
+    process.env.GINI_ALLOW_LIVE_SKU_CREATE = "true";
+    const preview = await call("POST", "/api/admin/platforms/gini/sync-one/preview", {
+      body: { productId: String(product._id) },
+    });
+    assert.equal(preview.status, 200);
+    assert.equal(preview.json.action, "CREATE");
+    assert.equal(calls.every((item) => item.method === "GET"), true);
+    allowPost = true;
+    calls = [];
+    const sent = await call("POST", "/api/admin/platforms/gini/sync-one/send", {
+      body: { productId: String(product._id), confirm: true, previewToken: preview.json.previewToken },
+    });
+    assert.equal(sent.status, 400);
+    assert.equal(sent.json.code, "sync_one_writes_disabled");
+    assert.equal(calls.some((item) => item.method === "POST"), false);
+  });
+
+  it("does not let Sync One send recreate a historical SKU when its own gates are on", async () => {
+    await connectGini();
+    const product = await makeProduct({ itemCode: "HB-632" });
+    await mapCollection();
+    const preview = await call("POST", "/api/admin/platforms/gini/sync-one/preview", {
+      body: { productId: String(product._id) },
+    });
+    assert.equal(preview.status, 200);
+    assert.equal(preview.json.action, "CREATE");
+    assert.equal(calls.every((item) => item.method === "GET"), true);
+    enableLegacySyncOneWrites();
+    allowPost = true;
+    calls = [];
+    const sent = await call("POST", "/api/admin/platforms/gini/sync-one/send", {
+      body: { productId: String(product._id), confirm: true, previewToken: preview.json.previewToken },
+    });
+    assert.equal(sent.status, 400);
+    assert.equal(sent.json.code, "historical_sku_hold");
+    assert.equal(calls.some((item) => item.method === "POST"), false);
+  });
+
+  it("does not post a legacy Sync One send when the unique attempt indexes are missing", async () => {
+    await connectGini();
+    const product = await makeProduct();
+    await mapCollection();
+    const preview = await call("POST", "/api/admin/platforms/gini/sync-one/preview", {
+      body: { productId: String(product._id) },
+    });
+    assert.equal(preview.status, 200);
+    enableLegacySyncOneWrites();
+    process.env.GINI_SKU_CREATE_WRITES_ENABLED = "true";
+    process.env.GINI_ALLOW_LIVE_SKU_CREATE = "true";
+    const indexes = await GiniSkuCreateAttempt.collection.indexes();
+    const names = indexes
+      .filter((index) => index.unique === true && ["skuKey", "productId"].includes(Object.keys(index.key || {})[0]))
+      .map((index) => index.name);
+    assert.equal(names.length >= 2, true);
+    for (const name of names) await GiniSkuCreateAttempt.collection.dropIndex(name);
+    allowPost = true;
+    calls = [];
+    try {
+      const sent = await call("POST", "/api/admin/platforms/gini/sync-one/send", {
+        body: { productId: String(product._id), confirm: true, previewToken: preview.json.previewToken },
+      });
+      assert.equal(sent.status, 400);
+      assert.equal(sent.json.code, "sku_create_indexes_unavailable");
+      assert.equal(calls.some((item) => item.method === "POST"), false);
+    } finally {
+      await GiniSkuCreateAttempt.syncIndexes();
+    }
   });
 });

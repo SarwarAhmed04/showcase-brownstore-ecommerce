@@ -264,6 +264,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  giniSkuCreatePreview: (body) =>
+    request("/api/admin/platforms/gini/sku-create/preview", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  giniSkuCreateSend: (body) =>
+    request("/api/admin/platforms/gini/sku-create/send", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   giniSyncAllStatus: () => request("/api/admin/platforms/gini/sync-all"),
   giniSyncAllPreview: () =>
     request("/api/admin/platforms/gini/sync-all/preview", {

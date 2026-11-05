@@ -7,6 +7,7 @@ const giniSyncSendStateSchema = new mongoose.Schema(
     sku: { type: String, default: "" },
     skuKey: { type: String, required: true, unique: true },
     giniProductId: { type: String, required: true },
+    originalGiniProductId: { type: String, default: "" },
     payloadHash: { type: String, default: "" },
     createPayloadHash: { type: String, default: "" },
     jobId: { type: String, default: "" },

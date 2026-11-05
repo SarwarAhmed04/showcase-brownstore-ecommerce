@@ -40,6 +40,7 @@ import {
   sanitizeGiniText,
 } from "./giniConnection.js";
 import { findExistingGiniProduct } from "./giniSkuLookup.js";
+import { isGiniHistoricalHoldSku } from "../utils/giniHistoricalHold.js";
 import { giniUpdateWritesEnabled } from "./giniProductUpdate.js";
 import { confirmedFieldSnapshotKey, loadConfirmedFieldSnapshots } from "../utils/giniConfirmedFields.js";
 
@@ -559,6 +560,16 @@ function reconcileResult(doc, evaluation, code, giniProductId, httpStatus = 0) {
 }
 
 async function postCreate(doc, evaluation, shared) {
+  if (isGiniHistoricalHoldSku(evaluation?.sku)) {
+    return withIdentity(doc, evaluation, {
+      classification: "BLOCKED",
+      blockers: ["historical_sku_hold"],
+      reason: blockerMessage("historical_sku_hold"),
+      errorCode: "historical_sku_hold",
+      giniProductId: "",
+      attemptedSend: false,
+    });
+  }
   const prior = await savedSend(evaluation);
   const freshLookup = await lookupSku(evaluation.sku, shared, { fresh: true });
   if (freshLookup.exists) {

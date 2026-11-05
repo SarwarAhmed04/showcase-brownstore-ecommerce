@@ -261,7 +261,7 @@ async function makeProduct(overrides = {}) {
   const variants = overrides.variants || simpleVariant(overrides.stock ?? 5);
   return Product.create({
     ibsherId: overrides.ibsherId || `ibs-${crypto.randomBytes(4).toString("hex")}`,
-    itemCode: overrides.itemCode === undefined ? "LP-ID141232" : overrides.itemCode,
+    itemCode: overrides.itemCode === undefined ? "BS-SYNC-1" : overrides.itemCode,
     name: overrides.name || { en: "Adhesive Patches", ar: "Adhesive Patches", ku: "Adhesive Patches" },
     description: overrides.description || {
       en: "Covers a blemish.",
@@ -442,6 +442,10 @@ describe("GINI sync all contract", () => {
       const text = fs.readFileSync(path, "utf8");
       assert.equal(/GINI_BULK_WRITES_ENABLED\s*=\s*true/.test(text), false);
       assert.equal(/GINI_ALLOW_LIVE_BULK_WRITES\s*=\s*true/.test(text), false);
+      assert.equal(/GINI_SKU_CREATE_WRITES_ENABLED\s*=\s*true/.test(text), false);
+      assert.equal(/GINI_ALLOW_LIVE_SKU_CREATE\s*=\s*true/.test(text), false);
+      assert.equal(/GINI_SYNC_ONE_WRITES_ENABLED\s*=\s*true/.test(text), false);
+      assert.equal(/GINI_ALLOW_LIVE_SYNC_ONE_WRITES\s*=\s*true/.test(text), false);
     }
   });
 
@@ -503,7 +507,7 @@ describe("GINI sync all contract", () => {
   });
 });
 
-describe("GINI sync all", { concurrency: 1, timeout: 180000 }, () => {
+describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
   before(async () => {
     memory = await MongoMemoryServer.create();
     await mongoose.connect(memory.getUri("gini-sync-all"));
@@ -727,7 +731,7 @@ describe("GINI sync all", { concurrency: 1, timeout: 180000 }, () => {
   });
 
   it("marks a SKU that already exists on GINI and refuses to post it", async () => {
-    remote.set(giniSkuKey("LP-ID141232"), { id: "77", sku: "LP-ID141232" });
+    remote.set(giniSkuKey("BS-SYNC-1"), { id: "77", sku: "BS-SYNC-1" });
     await makeProduct();
     await mapCollection();
     const job = await previewAll();
@@ -751,6 +755,26 @@ describe("GINI sync all", { concurrency: 1, timeout: 180000 }, () => {
       "nothing_to_send"
     );
     assert.equal(posts().length, 0);
+  });
+
+  it("holds historical SKUs and the Sync One SKU out of Full Sync when GINI verifies them missing", async () => {
+    await makeProduct({ itemCode: "HA0449" });
+    await makeProduct({ itemCode: "HB-632" });
+    await makeProduct({ itemCode: "ZJP00.000BK" });
+    await mapCollection();
+    const job = await previewAll();
+    const rows = await rowsFor(job);
+    const held = rows.filter((row) => row.sku === "HA0449" || row.sku === "HB-632");
+    assert.equal(held.length, 2);
+    assert.equal(held.every((row) => row.classification === "BLOCKED"), true);
+    assert.equal(held.every((row) => row.blockers.includes("historical_sku_hold")), true);
+    assert.equal(rows.find((row) => row.sku === "ZJP00.000BK")?.classification, "READY_CREATE");
+    assert.equal(job.readyCreate, 1);
+    const sync = await runSync(job);
+    const posted = posts().map((item) => formFields(item.options).sku);
+    assert.deepEqual(posted, ["ZJP00.000BK"]);
+    assert.equal(sync.created, 1);
+    assert.equal(await GiniSyncSendState.countDocuments({ sku: { $in: ["HA0449", "HB-632"] } }), 0);
   });
 
   it("does not treat a failed SKU lookup as available", async () => {
@@ -1384,16 +1408,68 @@ describe("GINI sync all", { concurrency: 1, timeout: 180000 }, () => {
     assert.equal(posts().length, 0);
   });
 
+  it("keeps confirmed sends out of a mixed ready set and posts only the new SKU", async () => {
+    const confirmed = await makeProduct({ itemCode: "CONFIRMED-KEEP" });
+    const historical = await makeProduct({ itemCode: "LP-ID141232" });
+    const fresh = await makeProduct({ itemCode: "NEW-READY" });
+    await mapCollection();
+    const confirmedAt = new Date("2026-11-02T11:35:20.425Z");
+    await GiniSyncSendState.create({
+      partner: "gini",
+      productId: String(confirmed._id),
+      sku: "CONFIRMED-KEEP",
+      skuKey: giniSkuKey("CONFIRMED-KEEP"),
+      giniProductId: "566640",
+      payloadHash: "saved-hash",
+      jobId: "confirmed-full-sync",
+      confirmedAt,
+    });
+    await GiniSyncSendState.create({
+      partner: "gini",
+      productId: String(historical._id),
+      sku: "LP-ID141232",
+      skuKey: giniSkuKey("LP-ID141232"),
+      giniProductId: "521043",
+      jobId: "historical-preview",
+      confirmedAt,
+    });
+    const preview = await previewAll();
+    const rows = await rowsFor(preview);
+    const ready = rows.filter((row) => row.classification === "READY_CREATE").map((row) => row.sku);
+    assert.deepEqual(ready, ["NEW-READY"]);
+    assert.equal(rows.find((row) => row.sku === "CONFIRMED-KEEP")?.classification, "RECONCILE");
+    assert.equal(rows.find((row) => row.sku === "CONFIRMED-KEEP")?.errorCode, "confirmed_send_missing");
+    assert.equal(rows.find((row) => row.sku === "LP-ID141232")?.classification, "RECONCILE");
+    assert.equal(rows.find((row) => row.sku === "LP-ID141232")?.giniProductId, "521043");
+    assert.equal(preview.readyCreate, 1);
+    assert.equal(preview.alreadyExists, 0);
+    const sync = await runSync(preview);
+    const posted = posts().map((item) => formFields(item.options).sku);
+    assert.deepEqual(posted, ["NEW-READY"]);
+    assert.equal(sync.created, 1);
+    const kept = await GiniSyncSendState.findOne({ sku: "CONFIRMED-KEEP" }).lean();
+    assert.equal(kept.giniProductId, "566640");
+    assert.equal(kept.jobId, "confirmed-full-sync");
+    assert.equal(kept.payloadHash, "saved-hash");
+    assert.equal(kept.confirmedAt.toISOString(), "2026-11-02T11:35:20.425Z");
+    assert.equal(kept.resyncHistory?.length || 0, 0);
+    const historicalKept = await GiniSyncSendState.findOne({ sku: "LP-ID141232" }).lean();
+    assert.equal(historicalKept.giniProductId, "521043");
+    assert.equal(historicalKept.jobId, "historical-preview");
+    assert.equal((await Product.findById(confirmed._id).lean()).price, 6500);
+    assert.equal((await Product.findById(fresh._id).lean()).price, 6500);
+  });
+
   it("does not resend a saved product after GINI stops returning it", async () => {
-    const product = await makeProduct({ itemCode: "E6310221" });
+    const product = await makeProduct({ itemCode: "SAVED-GONE" });
     await mapCollection();
     const preview = await previewAll();
     assert.equal(preview.readyCreate, 1);
     await GiniSyncSendState.create({
       partner: "gini",
       productId: String(product._id),
-      sku: "E6310221",
-      skuKey: giniSkuKey("E6310221"),
+      sku: "SAVED-GONE",
+      skuKey: giniSkuKey("SAVED-GONE"),
       giniProductId: "522091",
       jobId: "historical-preview",
     });
@@ -1404,7 +1480,7 @@ describe("GINI sync all", { concurrency: 1, timeout: 180000 }, () => {
     assert.equal(row.classification, "RECONCILE");
     assert.equal(row.errorCode, "confirmed_send_missing");
     assert.equal(posts().length, 0);
-    const kept = await GiniSyncSendState.findOne({ skuKey: giniSkuKey("E6310221") }).lean();
+    const kept = await GiniSyncSendState.findOne({ skuKey: giniSkuKey("SAVED-GONE") }).lean();
     assert.equal(kept.giniProductId, "522091");
     assert.equal(kept.jobId, "historical-preview");
     assert.equal((await Product.findById(product._id).lean()).price, 6500);

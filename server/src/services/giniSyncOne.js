@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
 import { Commission } from "../models/Commission.js";
+import { GiniSkuCreateAttempt } from "../models/GiniSkuCreateAttempt.js";
 import { GiniSyncOneAudit } from "../models/GiniSyncOneAudit.js";
 import { GiniSyncOnePreview } from "../models/GiniSyncOnePreview.js";
 import { Product } from "../models/Product.js";
@@ -18,6 +19,9 @@ import {
 } from "../utils/giniSyncOnePlan.js";
 import { fetchGiniCategoryTree, performGiniRequest, sanitizeGiniText } from "./giniConnection.js";
 import { findExistingGiniProduct } from "./giniSkuLookup.js";
+import { isGiniHistoricalHoldSku } from "../utils/giniHistoricalHold.js";
+import { giniSyncOneWritesEnabled } from "../utils/giniSkuCreateGates.js";
+import { attemptIndexesEnforced } from "../utils/giniSkuCreateIndexes.js";
 
 const PREVIEW_TTL_MS = 20 * 60 * 1000;
 
@@ -233,6 +237,7 @@ function blockedResult(plan, code) {
 
 export async function sendGiniSyncOne({ productId, confirm = false, previewToken = "" } = {}) {
   if (confirm !== true) return blockedResult(null, "confirm_required");
+  if (!giniSyncOneWritesEnabled()) return blockedResult(null, "sync_one_writes_disabled");
   const token = String(previewToken || "").trim();
   const id = String(productId || "").trim();
   if (!token || !id) return blockedResult(null, "preview_required");
@@ -243,11 +248,15 @@ export async function sendGiniSyncOne({ productId, confirm = false, previewToken
   if (new Date(preview.expiresAt).getTime() <= Date.now()) return blockedResult(null, "preview_expired");
 
   const plan = await buildGiniSyncPlan(id);
+  if (isGiniHistoricalHoldSku(plan.sku)) return blockedResult(plan, "historical_sku_hold");
   if (plan.action !== "CREATE") {
     const code = plan.blockers.includes("existing_gini_product")
       ? "existing_gini_product_requires_update_flow"
       : plan.blockers[0] || "blocked";
     return blockedResult(plan, code);
+  }
+  if (!(await attemptIndexesEnforced(GiniSkuCreateAttempt.collection))) {
+    return blockedResult(plan, "sku_create_indexes_unavailable");
   }
 
   let files = [];

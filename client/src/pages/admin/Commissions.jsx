@@ -15,6 +15,7 @@ import CategorySetupPanel from "../../components/admin/platform/CategorySetupPan
 import GiniApiConnection from "../../components/admin/platform/GiniApiConnection";
 import GiniSyncAll from "../../components/admin/platform/GiniSyncAll";
 import GiniSyncOneProduct from "../../components/admin/platform/GiniSyncOneProduct";
+import GiniSkuCreatePanel from "../../components/admin/platform/GiniSkuCreatePanel";
 import MiswagApiConnection from "../../components/admin/platform/MiswagApiConnection";
 
 /** Optional local Elryan WIP panels (file absent on GINI-only deploys). */
@@ -2107,7 +2108,12 @@ function PartnerCommission({ partnerSlug, t, lang }) {
 
       {tab === "connection" && partnerSlug === "gini" ? <GiniApiConnection t={t} /> : null}
 
-      {tab === "syncOne" && partnerSlug === "gini" ? <GiniSyncOneProduct t={t} lang={lang} /> : null}
+      {tab === "syncOne" && partnerSlug === "gini" ? (
+        <>
+          <GiniSyncOneProduct t={t} lang={lang} />
+          <GiniSkuCreatePanel t={t} />
+        </>
+      ) : null}
 
       {tab === "syncAll" && partnerSlug === "gini" ? <GiniSyncAll t={t} /> : null}
 

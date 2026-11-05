@@ -16,6 +16,7 @@ import {
   normalizeGiniItemCode,
   wordCount,
 } from "./giniSyncOnePlan.js";
+import { isGiniHistoricalHoldSku } from "./giniHistoricalHold.js";
 
 const BLOCKER_TEXT = {
   duplicate_brownstore_sku: "More than one BrownStore product uses this SKU.",
@@ -73,9 +74,26 @@ const BLOCKER_TEXT = {
   local_payload_hash_matches:
     "The current BrownStore payload hash matches the hash saved when this GINI product was confirmed, and the live GINI id and SKU match.",
   not_in_approved_preview: "This product was not ready to create in the approved Full Preview.",
+  historical_sku_hold:
+    "This SKU is on the historical hold list. A verified absence does not authorize creating it again.",
+  sku_identity_conflict: "The SKU and BrownStore product id do not identify the same product.",
+  merchant_not_confirmed: "The stored GINI merchant does not match the verified production connection.",
+  stale_preview: "The product changed after the preview. Preview this exact product again.",
+  search_pagination_incomplete: "The GINI search did not finish, so the SKU is not confirmed missing.",
+  duplicate_remote_sku: "GINI returned more than one product for this SKU.",
+  sku_create_writes_disabled: "The SKU-scoped GINI create gates are off.",
+  sync_one_writes_disabled: "The legacy Sync One send gates are off. The SKU create gates do not authorize this route.",
+  sku_create_indexes_unavailable: "The SKU create lock indexes are missing. No create was sent.",
+  existing_write_gates_must_stay_off: "The existing GINI write gates must stay off for this one-product create.",
+  sku_create_uncertain: "The create response was lost or could not be confirmed. No second create was sent.",
+  sku_create_in_progress: "A create for this SKU is already in progress.",
+  confirmed_send_exists: "This product already has a confirmed GINI send.",
+  expected_count_required: "This create accepts exactly one product.",
   product_not_found: "Product not found.",
   create_uncertain: "The create response was lost. No second create was sent.",
   gini_edge_blocked: "GINI edge blocked the request.",
+  rate_limited: "GINI rate limited the request. No create was sent.",
+  secret_unreadable: "The stored GINI secret cannot be read.",
   gini_access_forbidden: "GINI refused access.",
   gini_create_failed: "GINI did not create the product.",
 };
@@ -286,6 +304,10 @@ export function classifyGiniBulk({ plan, isActive = true, eligibility = null, lo
   }
   if (planCodes.includes("existing_gini_product")) {
     return pack("ALREADY_EXISTS", planCodes, planCodes.map(blockerMessage), plan, null);
+  }
+  if (isGiniHistoricalHoldSku(plan?.sku)) {
+    const codes = unique(["historical_sku_hold", ...planCodes]);
+    return pack("BLOCKED", codes, codes.map(blockerMessage), plan, null);
   }
   if (planCodes.includes("gini_lookup_failed") || plan?.lookupState === "error") {
     const codes = planCodes.includes("gini_lookup_failed") ? planCodes : ["gini_lookup_failed", ...planCodes];

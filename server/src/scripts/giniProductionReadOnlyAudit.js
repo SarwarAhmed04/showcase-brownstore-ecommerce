@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
+import { GINI_REFERENCE_SKUS } from "../utils/giniHistoricalHold.js";
 
 const CONFIRM_FLAG = "--confirm-production";
 const QUERY_MS = 120000;
@@ -31,67 +32,7 @@ const REPORTED_PREVIEW = Object.freeze({
 });
 
 /** SKUs recorded by the local audit. This list is a lookup key, not production data. */
-export const LOCAL_REFERENCE_SKUS = Object.freeze([
-  "5301ATVN",
-  "6939093014035",
-  "6939093014066",
-  "8809416470054",
-  "E6310221",
-  "HA0449",
-  "HA0608",
-  "HA0609",
-  "HA0650",
-  "HA0651",
-  "HA0682",
-  "HA0726",
-  "HONOR-MAGICPAD4-12GB-RAM-+-256GB-TABLET---GRAY",
-  "HONOR-PAD-10-8GB-RAM-+-256GB-TABLET---GRAY",
-  "HONOR-PAD-10-PAPERMATTE-8GB-RAM-+-256GB-TABLET---GRAY",
-  "HONOR-PAD-20-6GB-RAM-+-256GB-TABLET---GRAY",
-  "HONOR-PAD-20-PAPERLIKE-EDITION-8GB-RAM-+-256GB-TABLET---GRAY",
-  "HONOR-PAD-X7-4GB-RAM-+-128GB-TABLET---GRAY",
-  "HONOR-PAD-X8B-4GB-RAM-+-128GB-TABLET---GRAY",
-  "HONOR-PAD-X8B-4GB-RAM-+-64GB-TABLET---GRAY",
-  "HONOR-PAD-X9A-8GB-RAM-+-128GB-TABLET---GRAY",
-  "HONOR-PAD-X9A-PAPERMATTE-8GB-RAM-+-128GB-TABLET---GRAY",
-  "HONOR-PAD-X9B-MAX-4GB-RAM-+-128GB-TABLET---GRAY",
-  "HONOR-PAD-X9B-MAX-6GB-RAM-+-128GB-TABLET---GRAY",
-  "HONOR-PAD-X9B-MAX-PAPERLIKE-EDITION-6GB-RAM-+-256GB-TABLET---GRAY",
-  "HUAWEI-MATEPAD-11.5-PAPERMATTE-8GB-RAM-+-256GB-TABLET---GRAY",
-  "HUAWEI-MATEPAD-11.5-PAPERMATTE-8GB-RAM-+-256GB-TABLET---PURPLE",
-  "HUAWEI-MATEPAD-12-X-12GB-RAM-+-256GB-TABLET---GREEN",
-  "HUAWEI-MATEPAD-12-X-12GB-RAM-+-256GB-TABLET---WHITE",
-  "HUAWEI-MATEPAD-MINI-PAPERMATTE-12GB-RAM-+-256GB-TABLET---GREEN",
-  "HUAWEI-MATEPAD-PRO-12.2-12GB-RAM-+-512GB-TABLET---BLACK",
-  "HUAWEI-MATEPAD-PRO-12.2-12GB-RAM-+-512GB-TABLET---GREEN",
-  "HUAWEI-MATEPAD-SE-11-4GB-RAM-+-128GB-TABLET---GRAY",
-  "HUAWEI-MATEPAD-SE-11-8GB-RAM-+-128GB-TABLET---GRAY",
-  "LP-ID141231",
-  "LP-ID141232",
-  "POCO055",
-  "POCO056",
-  "T1102-256+8-I-BLU",
-  "T1102W-128+4-I-BLU",
-  "T1102W-128+4-M-GRY",
-  "X0430",
-  "X0431",
-  "X0432",
-  "X0434",
-  "X0438",
-  "X0439",
-  "X0496",
-  "X0497",
-  "X0498",
-  "X0570",
-  "X0571",
-  "X0572",
-  "X0573",
-  "X0574",
-  "X0575",
-  "X0576",
-  "X1301-256+8-STELLAR-GREY",
-  "X1302-256+8-CELESTIAL-INK",
-]);
+export const LOCAL_REFERENCE_SKUS = GINI_REFERENCE_SKUS;
 
 export const LOCAL_HISTORICAL_SKUS = Object.freeze(["LP-ID141232", "E6310221"]);
 
@@ -305,7 +246,11 @@ export function inspectDeployment(startDir) {
         path.join("src", "utils", "giniResyncContract.js"),
         "search_pagination_incomplete"
       ),
-      fullSyncSearchPageCap: sourceProbe(found.dir, path.join("src", "services", "giniSkuLookup.js"), "page <= 5"),
+      fullSyncSearchPageCap: sourceProbe(
+        found.dir,
+        path.join("src", "services", "giniSkuLookup.js"),
+        "search_pagination_incomplete"
+      ),
     },
   };
 }
