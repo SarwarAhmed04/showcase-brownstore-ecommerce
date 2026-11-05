@@ -9,8 +9,11 @@ import { MongoMemoryServer } from "mongodb-memory-server";
 import {
   assessAttemptCollection,
   attemptSummaryPipeline,
+  giniSkuCreatePreviewIndexesMatch,
   indexCreationProcedure,
   matchingUniqueAttemptIndex,
+  previewIndexCreationProcedure,
+  previewIndexesEnforced,
   readAttemptSummary,
   refuseIndexWriteFlags,
 } from "./utils/giniSkuCreateIndexes.js";
@@ -85,6 +88,37 @@ describe("GINI SKU create index preflight", { concurrency: 1 }, () => {
     assert.deepEqual(withheld.commands, []);
     assert.equal(withheld.automatic, false);
     assert.match(withheld.operatorSteps[0], /Do not create/);
+  });
+
+  it("describes the preview indexes without creating them", async () => {
+    const ready = [
+      { key: { token: 1 }, unique: true, name: "token_1" },
+      { key: { productId: 1 }, name: "productId_1" },
+      { key: { expiresAt: 1 }, name: "expiresAt_1" },
+    ];
+    assert.equal(giniSkuCreatePreviewIndexesMatch(ready), true);
+    assert.equal(giniSkuCreatePreviewIndexesMatch(ready.map((index) => (index.key.token ? { ...index, sparse: true } : index))), false);
+    assert.equal(
+      giniSkuCreatePreviewIndexesMatch([
+        { key: { token: 1 }, unique: true },
+        { key: { productId: 1 }, unique: true },
+        { key: { expiresAt: 1 } },
+      ]),
+      false
+    );
+    assert.equal(
+      giniSkuCreatePreviewIndexesMatch([
+        { key: { token: 1 }, unique: true },
+        { key: { productId: 1 } },
+        { key: { expiresAt: 1 }, expireAfterSeconds: 600 },
+      ]),
+      false
+    );
+    const procedure = previewIndexCreationProcedure();
+    assert.equal(procedure.automatic, false);
+    assert.equal(procedure.runFromThisScript, false);
+    assert.equal(procedure.commands.length, 4);
+    assert.equal(await previewIndexesEnforced({ indexes: async () => { throw new Error("ns not found"); } }), false);
   });
 
   it("counts duplicate keys and schema mismatches without a write stage", async () => {

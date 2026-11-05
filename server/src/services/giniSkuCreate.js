@@ -11,7 +11,7 @@ import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platf
 import { toResolvedProduct } from "../utils/productView.js";
 import { isGiniHistoricalHoldSku } from "../utils/giniHistoricalHold.js";
 import { existingGiniWriteGatesEnabled, giniSkuCreateWritesEnabled } from "../utils/giniSkuCreateGates.js";
-import { attemptIndexesEnforced } from "../utils/giniSkuCreateIndexes.js";
+import { attemptIndexesEnforced, previewIndexesEnforced } from "../utils/giniSkuCreateIndexes.js";
 import {
   blockerMessage,
   buildGiniPlanFromParts,
@@ -49,6 +49,10 @@ export { existingGiniWriteGatesEnabled, giniSkuCreateWritesEnabled };
 
 export async function giniSkuCreateAttemptIndexesEnforced(collection = GiniSkuCreateAttempt.collection) {
   return attemptIndexesEnforced(collection);
+}
+
+export async function giniSkuCreatePreviewIndexesEnforced(collection = GiniSkuCreatePreview.collection) {
+  return previewIndexesEnforced(collection);
 }
 
 export function assessGiniMerchantIdentity(config) {
@@ -229,6 +233,7 @@ export async function previewGiniSkuCreate({ sku, productId } = {}) {
       payloadPreview: inspection.plan?.payloadPreview || null,
     });
   }
+  if (!(await giniSkuCreatePreviewIndexesEnforced())) fail("sku_create_preview_indexes_unavailable", 409);
   const token = crypto.randomBytes(24).toString("base64url");
   const expiresAt = new Date(Date.now() + PREVIEW_TTL_MS);
   await GiniSkuCreatePreview.create({
@@ -279,6 +284,7 @@ export async function sendGiniSkuCreate({ sku, productId, confirm = false, previ
   if (!giniSkuCreateWritesEnabled()) fail("sku_create_writes_disabled", 409);
   if (existingGiniWriteGatesEnabled()) fail("existing_write_gates_must_stay_off", 409);
   if (!(await giniSkuCreateAttemptIndexesEnforced())) fail("sku_create_indexes_unavailable", 409);
+  if (!(await giniSkuCreatePreviewIndexesEnforced())) fail("sku_create_preview_indexes_unavailable", 409);
 
   const inspection = await inspectCandidate(productId, sku);
   if (inspection.held) fail("historical_sku_hold", 409);
@@ -326,6 +332,7 @@ export async function sendGiniSkuCreate({ sku, productId, confirm = false, previ
   const immediate = remoteDecision(await findExistingGiniProduct(inspection.sku));
   if (!immediate.ok) fail(immediate.code, 409);
 
+  if (!(await giniSkuCreatePreviewIndexesEnforced())) fail("sku_create_preview_indexes_unavailable", 409);
   const claimed = await GiniSkuCreatePreview.findOneAndUpdate(
     {
       token,

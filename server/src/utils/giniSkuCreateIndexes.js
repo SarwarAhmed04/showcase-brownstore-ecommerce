@@ -1,4 +1,5 @@
 export const ATTEMPT_COLLECTION = "giniskucreateattempts";
+export const PREVIEW_COLLECTION = "giniskucreatepreviews";
 export const REQUIRED_ATTEMPT_STATUSES = Object.freeze(["in_progress", "uncertain", "confirmed"]);
 
 function indexKeys(index) {
@@ -31,6 +32,53 @@ export async function attemptIndexesEnforced(collection) {
   } catch {
     return false;
   }
+}
+
+export function matchingSingleFieldIndex(indexes, field, { unique }) {
+  return (
+    (indexes || []).find((index) => {
+      const keys = indexKeys(index);
+      return (
+        keys.length === 1 &&
+        index.key[field] === 1 &&
+        (index?.unique === true) === unique &&
+        index.sparse !== true &&
+        !index.partialFilterExpression &&
+        index.expireAfterSeconds == null
+      );
+    }) || null
+  );
+}
+
+export function giniSkuCreatePreviewIndexesMatch(indexes) {
+  return Boolean(
+    matchingSingleFieldIndex(indexes, "token", { unique: true }) &&
+      matchingSingleFieldIndex(indexes, "productId", { unique: false }) &&
+      matchingSingleFieldIndex(indexes, "expiresAt", { unique: false })
+  );
+}
+
+export async function previewIndexesEnforced(collection) {
+  try {
+    if (typeof collection?.indexes !== "function") return false;
+    return giniSkuCreatePreviewIndexesMatch(await collection.indexes());
+  } catch {
+    return false;
+  }
+}
+
+export function previewIndexCreationProcedure() {
+  return {
+    automatic: false,
+    runFromThisScript: false,
+    collection: PREVIEW_COLLECTION,
+    commands: [
+      `db.createCollection("${PREVIEW_COLLECTION}")`,
+      `db.${PREVIEW_COLLECTION}.createIndex({ token: 1 }, { unique: true, name: "token_1" })`,
+      `db.${PREVIEW_COLLECTION}.createIndex({ productId: 1 }, { unique: false, name: "productId_1" })`,
+      `db.${PREVIEW_COLLECTION}.createIndex({ expiresAt: 1 }, { unique: false, name: "expiresAt_1" })`,
+    ],
+  };
 }
 
 function observedIndexes(indexes, field) {

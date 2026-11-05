@@ -379,7 +379,7 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
     });
     token = jwt.sign({ sub: user._id.toString(), role: "admin" }, process.env.JWT_SECRET);
     await Partner.create({ slug: "gini", name: "Gini" });
-    await GiniSkuCreateAttempt.init();
+    await GiniSkuCreateAttempt.createIndexes();
     server = await listen(app());
   });
 
@@ -927,7 +927,7 @@ describe("GINI Sync 1 preview and send", { concurrency: 1 }, () => {
       assert.equal(sent.json.code, "sku_create_indexes_unavailable");
       assert.equal(calls.some((item) => item.method === "POST"), false);
     } finally {
-      await GiniSkuCreateAttempt.syncIndexes();
+      await GiniSkuCreateAttempt.createIndexes();
     }
   });
 });

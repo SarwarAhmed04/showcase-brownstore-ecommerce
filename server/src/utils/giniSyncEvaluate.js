@@ -84,6 +84,8 @@ const BLOCKER_TEXT = {
   sku_create_writes_disabled: "The SKU-scoped GINI create gates are off.",
   sync_one_writes_disabled: "The legacy Sync One send gates are off. The SKU create gates do not authorize this route.",
   sku_create_indexes_unavailable: "The SKU create lock indexes are missing. No create was sent.",
+  sku_create_preview_indexes_unavailable:
+    "The SKU create preview indexes are missing. No preview was stored and no create was sent.",
   existing_write_gates_must_stay_off: "The existing GINI write gates must stay off for this one-product create.",
   sku_create_uncertain: "The create response was lost or could not be confirmed. No second create was sent.",
   sku_create_in_progress: "A create for this SKU is already in progress.",

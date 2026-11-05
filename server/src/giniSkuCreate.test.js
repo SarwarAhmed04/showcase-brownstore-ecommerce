@@ -22,11 +22,12 @@ import {
   assessGiniMerchantIdentity,
   existingGiniWriteGatesEnabled,
   giniSkuCreateAttemptIndexesEnforced,
+  giniSkuCreatePreviewIndexesEnforced,
   giniSkuCreateWritesEnabled,
 } from "./services/giniSkuCreate.js";
 import { classifyGiniBulk } from "./utils/giniSyncEvaluate.js";
 import { GINI_HISTORICAL_HOLD_SKUS, GINI_REFERENCE_SKUS, isGiniHistoricalHoldSku } from "./utils/giniHistoricalHold.js";
-import { giniSkuCreateAttemptIndexesMatch } from "./utils/giniSkuCreateIndexes.js";
+import { attemptIndexesEnforced, giniSkuCreateAttemptIndexesMatch, previewIndexCreationProcedure, previewIndexesEnforced } from "./utils/giniSkuCreateIndexes.js";
 import { giniSyncOneWritesEnabled } from "./utils/giniSkuCreateGates.js";
 import { canConfirmGiniSkuCreate } from "../../client/src/components/admin/platform/giniSkuCreateDisplay.js";
 import { GINI_PRODUCTS_PATH } from "./utils/giniSyncOnePlan.js";
@@ -303,12 +304,71 @@ describe("GINI historical hold and SKU-scoped gates", () => {
     assert.equal(panel.includes('useState("ZJP'), false);
     assert.equal(/GINI_SKU_CREATE_WRITES_ENABLED\s*=\s*["']true["']/.test(panel), false);
   });
+
+  it("disables automatic collection and index creation only on the two GINI SKU models", () => {
+    assert.equal(GiniSkuCreatePreview.schema.options.autoIndex, false);
+    assert.equal(GiniSkuCreatePreview.schema.options.autoCreate, false);
+    assert.equal(GiniSkuCreateAttempt.schema.options.autoIndex, false);
+    assert.equal(GiniSkuCreateAttempt.schema.options.autoCreate, false);
+    assert.equal(User.schema.options.autoIndex === false, false);
+    assert.equal(User.schema.options.autoCreate === false, false);
+    assert.equal(GiniSkuCreatePreview.collection.collectionName, "giniskucreatepreviews");
+    assert.equal(GiniSkuCreateAttempt.collection.collectionName, "giniskucreateattempts");
+    const indexSource = fs.readFileSync(new URL("./index.js", import.meta.url), "utf8");
+    assert.equal(indexSource.includes("autoIndex"), false);
+    assert.equal(indexSource.includes("autoCreate"), false);
+    const service = fs.readFileSync(new URL("./services/giniSkuCreate.js", import.meta.url), "utf8");
+    assert.equal(service.includes("createIndex("), false);
+    assert.equal(service.includes("syncIndexes("), false);
+    assert.equal(service.includes("createCollection("), false);
+    const procedure = previewIndexCreationProcedure();
+    assert.equal(procedure.automatic, false);
+    assert.equal(procedure.runFromThisScript, false);
+    assert.deepEqual(procedure.commands, [
+      'db.createCollection("giniskucreatepreviews")',
+      'db.giniskucreatepreviews.createIndex({ token: 1 }, { unique: true, name: "token_1" })',
+      'db.giniskucreatepreviews.createIndex({ productId: 1 }, { unique: false, name: "productId_1" })',
+      'db.giniskucreatepreviews.createIndex({ expiresAt: 1 }, { unique: false, name: "expiresAt_1" })',
+    ]);
+  });
+
+  it("still indexes an unrelated model when these two schemas do not create collections", async () => {
+    const memory = await MongoMemoryServer.create();
+    const conn = mongoose.createConnection();
+    const Probe = conn.model(
+      "GiniIndexProbe",
+      new mongoose.Schema({ marker: { type: String, index: true } }, { autoIndex: true, autoCreate: true })
+    );
+    const Preview = conn.model("GiniSkuCreatePreview", GiniSkuCreatePreview.schema.clone());
+    const Attempt = conn.model("GiniSkuCreateAttempt", GiniSkuCreateAttempt.schema.clone());
+    try {
+      await conn.openUri(memory.getUri("gini-schema-auto-index"), { autoIndex: true, autoCreate: true });
+      await Promise.all([Probe.init(), Preview.init(), Attempt.init()]);
+      const names = (await conn.db.listCollections().toArray()).map((item) => item.name);
+      assert.equal(names.includes(Probe.collection.collectionName), true);
+      assert.equal(names.includes(Preview.collection.collectionName), false);
+      assert.equal(names.includes(Attempt.collection.collectionName), false);
+      const probeIndexes = await Probe.collection.indexes();
+      assert.equal(probeIndexes.some((index) => index.key?.marker === 1), true);
+    } finally {
+      await conn.close();
+      await memory.stop();
+    }
+  });
 });
 
 describe("GINI SKU-scoped create", { concurrency: 1 }, () => {
   before(async () => {
     memory = await MongoMemoryServer.create();
     await mongoose.connect(memory.getUri("gini-sku-create"));
+    const names = (await mongoose.connection.db.listCollections().toArray()).map((item) => item.name);
+    assert.equal(names.includes("giniskucreatepreviews"), false);
+    assert.equal(names.includes("giniskucreateattempts"), false);
+    assert.equal(await previewIndexesEnforced(GiniSkuCreatePreview.collection), false);
+    assert.equal(await attemptIndexesEnforced(GiniSkuCreateAttempt.collection), false);
+    const namesAfterCheck = (await mongoose.connection.db.listCollections().toArray()).map((item) => item.name);
+    assert.equal(namesAfterCheck.includes("giniskucreatepreviews"), false);
+    assert.equal(namesAfterCheck.includes("giniskucreateattempts"), false);
     const user = await User.create({ email: "sku-create@brownstore.test", passwordHash: "hash", role: "admin" });
     token = jwt.sign({ sub: user._id.toString(), role: "admin" }, process.env.JWT_SECRET);
     await Partner.create({ slug: "gini", name: "Gini", isActive: true });
@@ -317,8 +377,10 @@ describe("GINI SKU-scoped create", { concurrency: 1 }, () => {
       brownCollectionId: "col-acne",
       values: { categoryId: "1", categoryName: "Home", subcategoryId: "10", subcategoryName: "Blenders" },
     });
-    await GiniSkuCreateAttempt.init();
+    await GiniSkuCreateAttempt.createIndexes();
+    await GiniSkuCreatePreview.createIndexes();
     assert.equal(await giniSkuCreateAttemptIndexesEnforced(), true);
+    assert.equal(await giniSkuCreatePreviewIndexesEnforced(), true);
     server = await listen(app());
     installFetch();
     installMedia();
@@ -588,8 +650,36 @@ describe("GINI SKU-scoped create", { concurrency: 1 }, () => {
       assert.equal(missing.json.code, "sku_create_indexes_unavailable");
       assert.equal(posts().length, 0);
     } finally {
-      await GiniSkuCreateAttempt.syncIndexes();
+      await GiniSkuCreateAttempt.createIndexes();
       assert.equal(await giniSkuCreateAttemptIndexesEnforced(), true);
+    }
+  });
+
+  it("does not store a preview or send a create when the preview indexes are missing", async () => {
+    const product = await makeProduct();
+    const indexes = await GiniSkuCreatePreview.collection.indexes();
+    const names = indexes
+      .filter((index) => ["token", "productId", "expiresAt"].includes(Object.keys(index.key || {})[0]))
+      .map((index) => index.name);
+    assert.equal(names.length >= 3, true);
+    for (const name of names) await GiniSkuCreatePreview.collection.dropIndex(name);
+    assert.equal(await giniSkuCreatePreviewIndexesEnforced(), false);
+    calls = [];
+    try {
+      const preview = await previewOf(product);
+      assert.equal(preview.status, 409);
+      assert.equal(preview.json.code, "sku_create_preview_indexes_unavailable");
+      assert.equal(posts().length, 0);
+      assert.equal(await GiniSkuCreatePreview.countDocuments({ productId: String(product._id) }), 0);
+      enableSkuGates();
+      const sent = await sendOf(product, "missing-preview-indexes");
+      assert.equal(sent.status, 409);
+      assert.equal(sent.json.code, "sku_create_preview_indexes_unavailable");
+      assert.equal(posts().length, 0);
+      assert.equal(await GiniSkuCreateAttempt.countDocuments({ productId: String(product._id) }), 0);
+    } finally {
+      await GiniSkuCreatePreview.createIndexes();
+      assert.equal(await giniSkuCreatePreviewIndexesEnforced(), true);
     }
   });
 

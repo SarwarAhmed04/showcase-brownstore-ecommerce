@@ -13,7 +13,7 @@ const giniSkuCreatePreviewSchema = new mongoose.Schema(
     expiresAt: { type: Date, required: true, index: true },
     consumedAt: { type: Date, default: null },
   },
-  { timestamps: true }
+  { timestamps: true, autoIndex: false, autoCreate: false }
 );
 
 export const GiniSkuCreatePreview = mongoose.model("GiniSkuCreatePreview", giniSkuCreatePreviewSchema);

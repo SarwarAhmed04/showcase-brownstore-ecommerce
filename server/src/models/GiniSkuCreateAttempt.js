@@ -12,7 +12,7 @@ const giniSkuCreateAttemptSchema = new mongoose.Schema(
     httpStatus: { type: Number, default: 0 },
     errorCode: { type: String, default: "" },
   },
-  { timestamps: true }
+  { timestamps: true, autoIndex: false, autoCreate: false }
 );
 
 export const GiniSkuCreateAttempt = mongoose.model("GiniSkuCreateAttempt", giniSkuCreateAttemptSchema);
