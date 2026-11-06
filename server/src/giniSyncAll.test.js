@@ -23,6 +23,7 @@ import { GiniConnection } from "./models/GiniConnection.js";
 import { GiniSyncJob } from "./models/GiniSyncJob.js";
 import { GiniSyncProductResult } from "./models/GiniSyncProductResult.js";
 import { GiniSyncSendState } from "./models/GiniSyncSendState.js";
+import { GiniProductUpdateAudit } from "./models/GiniProductUpdateAudit.js";
 import { GINI_CATEGORIES_PATH, GINI_PING_PATH } from "./utils/giniSigner.js";
 import {
   GINI_CATEGORY_GET_ATTEMPTS,
@@ -36,7 +37,9 @@ import { GINI_CATEGORY_PAGE_LIMIT } from "./utils/giniCategoryTree.js";
 import { encryptApiKey } from "./utils/partnerAuth.js";
 import { previewGiniSyncOne, setGiniMediaFetch } from "./services/giniSyncOne.js";
 import { GINI_PRODUCTS_PATH, giniSkuKey, isAllowedMediaUrl } from "./utils/giniSyncOnePlan.js";
-import { classifyConfirmedSend } from "./utils/giniSyncEvaluate.js";
+import { classifyConfirmedSend, giniPayloadHash } from "./utils/giniSyncEvaluate.js";
+import { classifyOfficialFieldChange, localConfirmedCatalogDecision } from "./utils/giniCatalogSync.js";
+import { summarizeGiniMappingCoverage } from "./utils/giniCategoryTree.js";
 import {
   ensureGiniSyncRunner,
   getLatestGiniSyncJob,
@@ -97,6 +100,7 @@ let recoverOnLose;
 let invalidImage;
 let hugeImage;
 let createdSeq;
+let allowPut = false;
 let categoryMode = "";
 let categoryFailuresLeft = 0;
 let categoryReads = 0;
@@ -216,6 +220,10 @@ function installFetch() {
     const method = String(options.method || "GET").toUpperCase();
     const target = String(url);
     calls.push({ method, url: target, options });
+    if (method === "PUT") {
+      if (!allowPut) throw new Error(`GINI write attempted: PUT ${target}`);
+      return handlePut(target, options);
+    }
     if (method !== "GET" && method !== "POST") throw new Error(`unexpected ${method} ${target}`);
     if (method === "POST" && !allowPost) throw new Error(`GINI write attempted: ${method} ${target}`);
     if (target.endsWith(GINI_PING_PATH)) return mockResponse(200, { data: { ok: true } });
@@ -223,6 +231,7 @@ function installFetch() {
     if (method === "POST" && target.split("?")[0].endsWith(GINI_PRODUCTS_PATH)) return handlePost(options);
     if (method === "GET" && target.includes("/products/")) return handleLookup(skuFromProductUrl(target));
     if (method === "GET" && target.includes("/products?")) {
+      if (lookupMode === "incomplete") return mockResponse(200, { data: [], meta: {} });
       return mockResponse(200, { data: [], meta: { last_page: 1, total: 0 } });
     }
     throw new Error(`unexpected ${target}`);
@@ -246,6 +255,27 @@ function handleLookup(sku) {
   const found = remote.get(giniSkuKey(sku));
   if (found) return mockResponse(200, { data: { id: found.id, sku: found.sku, name: "Already there" } });
   return mockResponse(404, { message: "Product not found." });
+}
+
+function puts() {
+  return calls.filter((item) => item.method === "PUT" && item.url.includes("/products/"));
+}
+
+function handlePut(target, options) {
+  const sku = skuFromProductUrl(target);
+  const body = JSON.parse(String(options.body || "{}"));
+  const keys = Object.keys(body);
+  if (keys.some((key) => key !== "price" && key !== "quantity")) return mockResponse(422, { message: "unexpected field" });
+  const found = remote.get(giniSkuKey(sku));
+  if (!found) return mockResponse(404, { message: "missing" });
+  return mockResponse(200, {
+    data: {
+      id: found.id,
+      sku: found.sku,
+      price: body.price == null ? found.price : body.price,
+      quantity: body.quantity == null ? found.quantity : body.quantity,
+    },
+  });
 }
 
 function handlePost(options) {
@@ -331,6 +361,7 @@ function simpleVariant(stock = 5, extra = {}) {
 async function makeProduct(overrides = {}) {
   const variants = overrides.variants || simpleVariant(overrides.stock ?? 5);
   return Product.create({
+    ...(overrides._id ? { _id: overrides._id } : {}),
     ibsherId: overrides.ibsherId || `ibs-${crypto.randomBytes(4).toString("hex")}`,
     itemCode: overrides.itemCode === undefined ? "BS-SYNC-1" : overrides.itemCode,
     name: overrides.name || { en: "Adhesive Patches", ar: "Adhesive Patches", ku: "Adhesive Patches" },
@@ -604,6 +635,61 @@ describe("GINI sync all contract", () => {
     assert.equal(mismatch.errorCode, "confirmed_send_id_mismatch");
     assert.equal(mismatch.giniProductId, "522091");
   });
+
+  it("counts every collection mapping and does not treat a mapped collection as sendable", () => {
+    const coverage = summarizeGiniMappingCoverage([
+      { id: "a", name: "Mapped A", status: "configured", productCount: 10, activeProductCount: 8 },
+      { id: "b", name: "Mapped B", status: "configured", productCount: 4, activeProductCount: 4 },
+      { id: "c", name: "Open C", status: "missing", productCount: 3, activeProductCount: 3 },
+      { id: "d", name: "Open D", status: "missing", productCount: 2, activeProductCount: 1 },
+      { id: "e", name: "Open E", status: "missing", productCount: 1, activeProductCount: 1 },
+      { id: "f", name: "Bad F", status: "invalid", productCount: 5, activeProductCount: 5 },
+      { id: "g", name: "Quiet G", status: "inactive", productCount: 6, activeProductCount: 0 },
+    ]);
+    assert.equal(coverage.total, 7);
+    assert.equal(coverage.configured, 2);
+    assert.equal(coverage.unmapped, 3);
+    assert.equal(coverage.invalid, 1);
+    assert.equal(coverage.inactive, 1);
+    assert.equal(coverage.unmappedProductCount, 6);
+    assert.equal(coverage.configuredActiveProductCount, 12);
+    assert.equal(coverage.mappedIsNotSendEligibility, true);
+    assert.deepEqual(
+      coverage.unmappedCollections.map((row) => row.id),
+      ["c", "d", "e"]
+    );
+    const plan = {
+      sku: "KEEP-1",
+      payloadPreview: { sku: "KEEP-1", price: 10, quantity: 1, name: "Keep", description: "Keep", security_stock: 1, category_id: 1, subcategory_id: 10, is_visible: 1, images: [] },
+      giniPrice: 10,
+      quantity: 1,
+      imageCount: 1,
+    };
+    const hash = giniPayloadHash(plan.payloadPreview);
+    const skip = localConfirmedCatalogDecision({
+      plan,
+      localSend: { sku: "KEEP-1", giniProductId: "55", payloadHash: hash },
+    });
+    assert.equal(skip.action, "store");
+    assert.equal(skip.result.classification, "UNCHANGED");
+    assert.equal(skip.result.giniProductId, "55");
+    const verify = localConfirmedCatalogDecision({
+      plan,
+      localSend: { sku: "KEEP-1", giniProductId: "55", payloadHash: "other" },
+    });
+    assert.equal(verify.action, "verify_remote");
+    const held = classifyOfficialFieldChange({
+      plan: { ...plan, sku: "HA0449" },
+      localSend: { sku: "HA0449", giniProductId: "1", payloadHash: "other" },
+      snapshot: { giniPrice: 9, quantity: 1 },
+    });
+    assert.equal(held.classification, "RECONCILE");
+    assert.equal(held.errorCode, "historical_sku_hold");
+    const syncAll = fs.readFileSync(new URL("./services/giniSyncAll.js", import.meta.url), "utf8");
+    assert.equal(syncAll.includes("giniResync"), false);
+    assert.equal(syncAll.includes("summarizeGiniMappingCoverage"), true);
+    assert.equal(syncAll.includes('from "./giniResync.js"'), false);
+  });
 });
 
 describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
@@ -643,6 +729,9 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     delete process.env.GINI_BULK_WRITES_ENABLED;
     delete process.env.GINI_ALLOW_LIVE_BULK_WRITES;
     allowPost = false;
+    allowPut = false;
+    delete process.env.GINI_UPDATE_WRITES_ENABLED;
+    delete process.env.GINI_ALLOW_LIVE_UPDATE_WRITES;
     remote = new Map();
     lookupMode = "";
     rateBudget = 0;
@@ -665,6 +754,7 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
       GiniSyncJob.deleteMany({}),
       GiniSyncProductResult.deleteMany({}),
       GiniSyncSendState.deleteMany({}),
+      GiniProductUpdateAudit.deleteMany({}),
       Partner.updateOne({ slug: "gini" }, { $set: { isActive: true } }),
     ]);
     await ensureConnected();
@@ -740,11 +830,12 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     calls = [];
     const again = await previewAll();
     const againRow = (await rowsFor(again))[0];
-    assert.equal(againRow.classification, "ALREADY_EXISTS");
-    assert.equal(againRow.errorCode, "confirmed_local_send");
+    assert.equal(againRow.classification, "UNCHANGED");
+    assert.equal(againRow.errorCode, "");
     assert.equal(againRow.giniProductId, "501");
     assert.equal(posts().length, 0);
-    assert.equal(productGets().some((item) => decodeURIComponent(item.url).includes("PRICE-1000")), true);
+    assert.equal(puts().length, 0);
+    assert.equal(productGets().some((item) => decodeURIComponent(item.url).includes("PRICE-1000")), false);
     assert.equal((await GiniSyncSendState.findOne({ skuKey: giniSkuKey("PRICE-1000") }).lean()).giniProductId, "501");
   });
 
@@ -1100,7 +1191,7 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     const existing = fullRows.find((row) => row.sku === "LIM-1");
     assert.equal(full.status, "completed");
     assert.deepEqual(createdSkus, ["LIM-2", "LIM-3"]);
-    assert.equal(existing.classification, "ALREADY_EXISTS");
+    assert.equal(existing.classification, "UNCHANGED");
     assert.equal(existing.giniProductId, "501");
     assert.equal(posts().length, 3);
     assert.equal(await GiniSyncSendState.countDocuments(), 3);
@@ -2160,5 +2251,213 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     delete process.env.GINI_BULK_WRITES_ENABLED;
     delete process.env.GINI_ALLOW_LIVE_BULK_WRITES;
     allowPost = false;
+  });
+
+  it("blocks the three unmapped collections and does not send a mapped product that fails eligibility", async () => {
+    await makeProduct({ itemCode: "MAPPED-OK", collectionId: "col-ok" });
+    await makeProduct({ itemCode: "MAPPED-NOIMG", collectionId: "col-photo", variants: [{ color: { en: "white" }, images: [], sizes: [{ size: "medium", stockQuantity: 2 }] }] });
+    await makeProduct({ itemCode: "UNMAP-1", collectionId: "col-u1" });
+    await makeProduct({ itemCode: "UNMAP-2", collectionId: "col-u2" });
+    await makeProduct({ itemCode: "UNMAP-3", collectionId: "col-u3" });
+    await makeProduct({ itemCode: "MAP-BAD", collectionId: "col-bad" });
+    await makeProduct({ itemCode: "MAP-OLD", collectionId: "col-old" });
+    await mapCollection(undefined, "col-ok");
+    await mapCollection(undefined, "col-photo");
+    await mapCollection({ categoryId: "999", categoryName: "Missing", subcategoryId: "10", subcategoryName: "Blenders" }, "col-bad");
+    await mapCollection({ categoryId: "1", categoryName: "Home", subcategoryId: "11", subcategoryName: "Retired blades" }, "col-old");
+    const job = await previewAll();
+    const rows = await rowsFor(job);
+    const bySku = Object.fromEntries(rows.map((row) => [row.sku, row]));
+    assert.equal(bySku["MAPPED-OK"].classification, "READY_CREATE");
+    assert.equal(bySku["MAPPED-NOIMG"].classification, "BLOCKED");
+    assert.equal(bySku["MAPPED-NOIMG"].blockers.includes("missing_image"), true);
+    for (const sku of ["UNMAP-1", "UNMAP-2", "UNMAP-3"]) {
+      assert.equal(bySku[sku].classification, "BLOCKED");
+      assert.equal(bySku[sku].blockers.includes("missing_mapping"), true);
+    }
+    assert.equal(bySku["MAP-BAD"].blockers.includes("invalid_mapping"), true);
+    assert.equal(bySku["MAP-OLD"].blockers.includes("inactive_mapping"), true);
+    assert.equal(job.readyCreate, 1);
+    assert.equal(job.mappingCoverage.unmapped, 3);
+    assert.equal(job.mappingCoverage.configured, 2);
+    assert.equal(job.mappingCoverage.invalid, 1);
+    assert.equal(job.mappingCoverage.inactive, 1);
+    assert.equal(job.mappingCoverage.mappedIsNotSendEligibility, true);
+    assert.deepEqual(
+      job.mappingCoverage.unmappedCollections.map((row) => row.id).sort(),
+      ["col-u1", "col-u2", "col-u3"]
+    );
+    assert.equal(productGets().length, 1);
+    assert.equal(posts().length, 0);
+    assert.equal(puts().length, 0);
+  });
+
+  it("pauses an edge-blocked product lookup without retrying, then resumes without creating", async () => {
+    lookupMode = "edge";
+    await makeProduct({ itemCode: "EDGE-SKU" });
+    await mapCollection();
+    await runGiniSyncPreview();
+    await waitForGiniBulkIdle();
+    const blocked = (await getLatestGiniSyncJob()).job;
+    assert.equal(blocked.status, "edge_blocked");
+    assert.equal(blocked.readyCreate, 0);
+    assert.equal(productGets().length, 1);
+    assert.equal(posts().length, 0);
+    lookupMode = "";
+    calls = [];
+    await resumeGiniSyncAll();
+    await waitForGiniBulkIdle();
+    const done = (await getLatestGiniSyncJob()).job;
+    assert.equal(done.status, "preview");
+    assert.equal(done.readyCreate, 1);
+    assert.equal(posts().length, 0);
+    assert.equal(puts().length, 0);
+  });
+
+  it("does not create a product when the SKU search page is incomplete", async () => {
+    lookupMode = "incomplete";
+    await makeProduct({ itemCode: "PAGE-GAP" });
+    await mapCollection();
+    const job = await previewAll();
+    const row = (await rowsFor(job))[0];
+    assert.equal(job.status, "preview");
+    assert.equal(job.readyCreate, 0);
+    assert.equal(job.lookupUncertain, 1);
+    assert.equal(row.classification, "LOOKUP_UNCERTAIN");
+    assert.equal(calls.filter((item) => item.method === "GET" && item.url.includes("/products?")).length, 1);
+    assert.equal(posts().length, 0);
+  });
+
+  it("keeps product 570278 and a historical hold out of create, then updates only a real price change", async () => {
+    const protectedProduct = await makeProduct({
+      _id: "6aae476f023c0be610d48024",
+      itemCode: "ZJP00.000BK",
+    });
+    const held = await makeProduct({ itemCode: "HA0449" });
+    await mapCollection();
+    const first = await previewAll();
+    assert.equal(first.readyCreate, 1);
+    assert.equal((await rowsFor(first)).find((row) => row.sku === "HA0449").classification, "BLOCKED");
+    const created = await runSync(first);
+    assert.equal(created.created, 1);
+    assert.deepEqual(posts().map((item) => formFields(item.options).sku), ["ZJP00.000BK"]);
+    const state = await GiniSyncSendState.findOne({ sku: "ZJP00.000BK" }).lean();
+    assert.equal(state.giniProductId, "501");
+    assert.equal(String(state.productId), "6aae476f023c0be610d48024");
+    await GiniSyncSendState.updateOne({ sku: "ZJP00.000BK" }, { $set: { giniProductId: "570278" } });
+    await GiniSyncProductResult.updateMany(
+      { sku: "ZJP00.000BK", classification: "CREATED" },
+      { $set: { giniProductId: "570278" } }
+    );
+    remote.set(giniSkuKey("ZJP00.000BK"), { id: "570278", sku: "ZJP00.000BK" });
+    await GiniSyncSendState.create({
+      partner: "gini",
+      productId: String(held._id),
+      sku: "HA0449",
+      skuKey: giniSkuKey("HA0449"),
+      giniProductId: "900",
+      payloadHash: "not-the-live-hash",
+      jobId: "historical-preview",
+    });
+    remote.set(giniSkuKey("HA0449"), { id: "900", sku: "HA0449" });
+    calls = [];
+    await Product.updateOne({ _id: protectedProduct._id }, { $set: { price: 7000 } });
+    const changedPreview = await previewAll();
+    const changedRows = await rowsFor(changedPreview);
+    assert.equal(changedRows.find((row) => row.sku === "ZJP00.000BK").classification, "CHANGED");
+    assert.equal(changedRows.find((row) => row.sku === "HA0449").classification, "RECONCILE");
+    assert.equal(changedRows.find((row) => row.sku === "HA0449").errorCode, "historical_sku_hold");
+    assert.equal(changedPreview.changed, 1);
+    assert.equal(changedPreview.readyCreate, 0);
+    assert.equal(posts().length, 0);
+    process.env.GINI_UPDATE_WRITES_ENABLED = "true";
+    process.env.GINI_ALLOW_LIVE_UPDATE_WRITES = "true";
+    allowPut = true;
+    enableWrites();
+    calls = [];
+    await startGiniSyncAll({
+      confirm: true,
+      previewJobId: changedPreview.id,
+      catalogSignature: changedPreview.catalogSignature,
+      expectedReady: 0,
+      expectedChanged: 1,
+      scope: "full",
+      approveFullRun: true,
+    });
+    await waitForGiniBulkIdle();
+    const synced = (await getLatestGiniSyncJob()).job;
+    assert.equal(synced.status, "completed");
+    assert.equal(synced.updated, 1);
+    assert.equal(synced.created, 0);
+    assert.equal(posts().length, 0);
+    assert.equal(puts().length, 1);
+    const body = JSON.parse(puts()[0].options.body);
+    assert.deepEqual(Object.keys(body), ["price"]);
+    assert.equal(body.price, 7000);
+    const kept = await GiniSyncSendState.findOne({ sku: "ZJP00.000BK" }).lean();
+    assert.equal(kept.giniProductId, "570278");
+    assert.equal(String(kept.productId), "6aae476f023c0be610d48024");
+    const heldState = await GiniSyncSendState.findOne({ sku: "HA0449" }).lean();
+    assert.equal(heldState.giniProductId, "900");
+    assert.equal(String(protectedProduct._id), "6aae476f023c0be610d48024");
+  });
+
+  it("creates only new products and updates only price changes on the next sync", async () => {
+    const keep = await makeProduct({ itemCode: "DAY-KEEP" });
+    const priced = await makeProduct({ itemCode: "DAY-PRICE" });
+    await makeProduct({ itemCode: "DAY-STOCK" });
+    await mapCollection();
+    const first = await previewAll();
+    assert.equal(first.readyCreate, 3);
+    await runSync(first);
+    assert.equal(posts().length, 3);
+    calls = [];
+    await Product.updateOne({ _id: priced._id }, { $set: { price: 9000 } });
+    await makeProduct({ itemCode: "DAY-NEW" });
+    const later = await previewAll();
+    const laterRows = await rowsFor(later);
+    const laterBySku = Object.fromEntries(laterRows.map((row) => [row.sku, row.classification]));
+    assert.equal(laterBySku["DAY-KEEP"], "UNCHANGED");
+    assert.equal(laterBySku["DAY-STOCK"], "UNCHANGED");
+    assert.equal(laterBySku["DAY-PRICE"], "CHANGED");
+    assert.equal(laterBySku["DAY-NEW"], "READY_CREATE");
+    assert.equal(later.unchanged, 2);
+    assert.equal(later.changed, 1);
+    assert.equal(later.readyCreate, 1);
+    assert.equal(productGets().filter((item) => decodeURIComponent(item.url).includes("DAY-KEEP")).length, 0);
+    assert.equal(productGets().filter((item) => decodeURIComponent(item.url).includes("DAY-STOCK")).length, 0);
+    assert.equal(posts().length, 0);
+    assert.equal(puts().length, 0);
+    process.env.GINI_UPDATE_WRITES_ENABLED = "true";
+    process.env.GINI_ALLOW_LIVE_UPDATE_WRITES = "true";
+    allowPut = true;
+    enableWrites();
+    calls = [];
+    await startGiniSyncAll({
+      confirm: true,
+      previewJobId: later.id,
+      catalogSignature: later.catalogSignature,
+      expectedReady: later.readyCreate,
+      expectedChanged: later.changed,
+      scope: "full",
+      approveFullRun: true,
+    });
+    await waitForGiniBulkIdle();
+    const sentSkus = posts().map((item) => formFields(item.options).sku);
+    assert.deepEqual(sentSkus, ["DAY-NEW"]);
+    assert.equal(puts().length, 1);
+    assert.equal(JSON.parse(puts()[0].options.body).price, 9000);
+    const priceState = await GiniSyncSendState.findOne({ sku: "DAY-PRICE" }).lean();
+    assert.notEqual(priceState.giniProductId, "");
+    calls = [];
+    const quiet = await previewAll();
+    const quietRows = await rowsFor(quiet);
+    assert.equal(quietRows.every((row) => row.classification === "UNCHANGED"), true);
+    assert.equal(quiet.readyCreate, 0);
+    assert.equal(quiet.changed, 0);
+    assert.equal(productGets().length, 0);
+    assert.equal(posts().length, 0);
+    assert.equal(puts().length, 0);
+    assert.equal((await Product.findById(keep._id).lean()).price, 6500);
   });
 });

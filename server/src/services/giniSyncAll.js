@@ -2,9 +2,12 @@ import crypto from "crypto";
 import mongoose from "mongoose";
 import { Commission } from "../models/Commission.js";
 import { GiniChangedPreviewSnapshot } from "../models/GiniChangedPreviewSnapshot.js";
+import { GiniProductUpdateAudit } from "../models/GiniProductUpdateAudit.js";
+import { GiniProductUpdateLock } from "../models/GiniProductUpdateLock.js";
 import { GiniSyncJob } from "../models/GiniSyncJob.js";
 import { GiniSyncProductResult } from "../models/GiniSyncProductResult.js";
 import { GiniSyncSendState } from "../models/GiniSyncSendState.js";
+import { PlatformTaxonomyConfig } from "../models/PlatformTaxonomyConfig.js";
 import { Product } from "../models/Product.js";
 import { partnerPricePreview } from "../utils/partnerCatalog.js";
 import { evaluatePlatformEligibility, productScopeIds } from "../utils/platformEligibility.js";
@@ -27,6 +30,8 @@ import {
   giniChangedPreviewSignature,
   giniImageReplacementIsolation,
   giniImageWritesEnabled,
+  giniPartialUpdateBody,
+  giniProductUpdatePath,
   GINI_CHANGED_PREVIEW_TTL_MS,
   GINI_PRODUCT_UPDATE_CONTENT_TYPE,
   GINI_PRODUCT_UPDATE_METHOD,
@@ -36,13 +41,16 @@ import {
   fetchGiniCategoryTree,
   getGiniConnectionPublic,
   GINI_SECRET_UNREADABLE_MESSAGE,
+  performGiniJsonRequest,
   performGiniRequest,
   sanitizeGiniText,
 } from "./giniConnection.js";
 import { findExistingGiniProduct } from "./giniSkuLookup.js";
 import { isGiniHistoricalHoldSku } from "../utils/giniHistoricalHold.js";
-import { giniUpdateWritesEnabled } from "./giniProductUpdate.js";
+import { classifyOfficialFieldChange, localConfirmedCatalogDecision } from "../utils/giniCatalogSync.js";
+import { giniMappingStatus, summarizeGiniMappingCoverage } from "../utils/giniCategoryTree.js";
 import { confirmedFieldSnapshotKey, loadConfirmedFieldSnapshots } from "../utils/giniConfirmedFields.js";
+import { giniUpdateWritesEnabled } from "./giniProductUpdate.js";
 
 export const GINI_SYNC_BATCH_SIZE = 100;
 export const GINI_BULK_LIMIT_MAX = 25;
@@ -61,6 +69,10 @@ const CLASS_FIELDS = {
   FAILED: "failed",
   CREATE_UNCERTAIN: "createUncertain",
   RECONCILE: "reconcile",
+  UNCHANGED: "unchanged",
+  CHANGED: "changed",
+  UPDATED: "updated",
+  UPDATE_UNCERTAIN: "updateUncertain",
 };
 
 let activeRunner = null;
@@ -193,6 +205,10 @@ function emptyCounters() {
     failed: 0,
     createUncertain: 0,
     reconcile: 0,
+    unchanged: 0,
+    changed: 0,
+    updated: 0,
+    updateUncertain: 0,
     remoteLookups: 0,
   };
 }
@@ -217,6 +233,10 @@ function counterPatch(counters, extras = {}) {
     failed: counters.failed,
     createUncertain: counters.createUncertain,
     reconcile: counters.reconcile,
+    unchanged: counters.unchanged,
+    changed: counters.changed,
+    updated: counters.updated,
+    updateUncertain: counters.updateUncertain,
     remoteLookups: counters.remoteLookups,
     ...extras,
   };
@@ -361,29 +381,87 @@ async function buildSkuOwnerIndex() {
 async function loadSendState() {
   const bySku = new Map();
   const byProduct = new Map();
+  const rows = [];
   const cursor = GiniSyncSendState.find({ partner: "gini" })
-    .select("productId skuKey giniProductId")
+    .select("productId sku skuKey giniProductId payloadHash")
     .lean()
     .cursor();
   for await (const row of cursor) {
+    rows.push(row);
     if (row.skuKey) bySku.set(row.skuKey, row);
     if (row.productId) byProduct.set(String(row.productId), row);
   }
-  return { bySku, byProduct };
+  return { bySku, byProduct, rows };
 }
 
-async function loadApprovedIds(previewJobId) {
+async function loadApprovedIds(previewJobId, classification = "READY_CREATE") {
   const ids = new Set();
   if (!mongoose.isValidObjectId(previewJobId)) return ids;
   const cursor = GiniSyncProductResult.find({
     jobId: previewJobId,
-    classification: "READY_CREATE",
+    classification,
   })
     .select("productId")
     .lean()
     .cursor();
   for await (const row of cursor) ids.add(String(row.productId));
   return ids;
+}
+
+async function pacedGiniRead(request) {
+  await pace();
+  return performGiniRequest(request);
+}
+
+function collectionLabel(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value.trim();
+  return String(value.en || value.ar || value.ku || "").trim();
+}
+
+async function collectMappingCoverage(categories) {
+  const [configs, grouped] = await Promise.all([
+    PlatformTaxonomyConfig.find({ partner: "gini" }).select("brownCollectionId values").lean(),
+    Product.aggregate([
+      {
+        $group: {
+          _id: { $toString: { $ifNull: ["$collectionName._id", ""] } },
+          name: { $first: "$collectionName.name" },
+          productCount: { $sum: 1 },
+          activeProductCount: { $sum: { $cond: [{ $ne: ["$isActive", false] }, 1, 0] } },
+        },
+      },
+    ]),
+  ]);
+  const byId = new Map();
+  for (const row of grouped) {
+    const id = String(row?._id || "");
+    byId.set(id, {
+      id,
+      name: collectionLabel(row?.name),
+      productCount: Number(row?.productCount) || 0,
+      activeProductCount: Number(row?.activeProductCount) || 0,
+    });
+  }
+  for (const config of configs) {
+    const id = String(config?.brownCollectionId || "").trim();
+    if (!id || byId.has(id)) continue;
+    byId.set(id, { id, name: "", productCount: 0, activeProductCount: 0 });
+  }
+  const valuesById = new Map(
+    configs
+      .map((config) => [String(config?.brownCollectionId || "").trim(), config?.values || null])
+      .filter(([id]) => id)
+  );
+  const rows = [...byId.values()].map((row) => ({
+    ...row,
+    status: giniMappingStatus(valuesById.get(row.id) || {}, categories || []),
+  }));
+  const coverage = summarizeGiniMappingCoverage(rows);
+  coverage.unmappedCollections = coverage.unmappedCollections.slice(0, 50);
+  coverage.invalidCollections = coverage.invalidCollections.slice(0, 50);
+  coverage.inactiveCollections = coverage.inactiveCollections.slice(0, 50);
+  return coverage;
 }
 
 function cursorFilter(cursorProductId) {
@@ -397,11 +475,10 @@ async function lookupSku(sku, shared, { fresh = false } = {}) {
   let attempt = 0;
   let found = { error: true, failure: "error", status: 0 };
   while (attempt < 4) {
-    await pace();
     shared.counters.remoteLookups += 1;
     remoteLookupCount += 1;
     try {
-      found = await findExistingGiniProduct(sku);
+      found = await findExistingGiniProduct(sku, pacedGiniRead);
     } catch (err) {
       found = {
         error: true,
@@ -494,8 +571,15 @@ async function evaluateCatalogProduct(doc, shared) {
   const localSend =
     shared.sendByProduct.get(productId) || (skuKey ? shared.sendBySku.get(skuKey) : null) || null;
   if (localSend?.giniProductId) {
+    const decision = localConfirmedCatalogDecision({ plan: localPlan, localSend });
+    if (decision.action === "store") return withIdentity(doc, decision.result);
     const found = await lookupSku(sku, shared, { fresh: true });
-    return withIdentity(doc, classifyConfirmedSend({ plan: localPlan, localSend, found }));
+    const confirmed = classifyConfirmedSend({ plan: localPlan, localSend, found });
+    if (confirmed.classification !== "ALREADY_EXISTS") return withIdentity(doc, confirmed);
+    const snapshot =
+      shared.snapshots?.get(confirmedFieldSnapshotKey(localSend.skuKey || skuKey, localSend.giniProductId, localSend.payloadHash)) ||
+      null;
+    return withIdentity(doc, classifyOfficialFieldChange({ plan: localPlan, localSend, snapshot }));
   }
   const approved = !shared.approvedIds || shared.approvedIds.has(productId);
   if (!approved) {
@@ -723,6 +807,234 @@ async function postCreate(doc, evaluation, shared) {
     httpStatus: response.status,
     attemptedSend: true,
     pauseAfter: recovered?.pause?.pauseStatus || "",
+  });
+}
+
+function updateBodyIsOfficial(parsed) {
+  const keys = Object.keys(parsed || {});
+  return keys.length > 0 && keys.every((key) => key === "price" || key === "quantity");
+}
+
+function updateResponseAccepted(response, { skuKey, giniProductId, changes }) {
+  if (!response || response.edgeBlocked || response.status !== 200) return false;
+  const data = response.json?.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const id = data.id == null ? "" : String(data.id).trim();
+  if (!id || id !== String(giniProductId) || giniSkuKey(data.sku) !== skuKey) return false;
+  for (const change of changes || []) {
+    const actual = Number(data[change.field]);
+    if (!Number.isFinite(actual) || actual !== Number(change.new)) return false;
+  }
+  return true;
+}
+
+async function storeCatalogUpdate(state, audit) {
+  const patch = {
+    lastUpdateConfirmedAt: new Date(),
+    lastUpdateAuditId: String(audit._id),
+  };
+  if (audit.confirmsPayloadHash !== false && audit.nextPayloadHash) {
+    patch.payloadHash = audit.nextPayloadHash;
+    if (!state.createPayloadHash) patch.createPayloadHash = audit.previousPayloadHash;
+  }
+  const updated = await GiniSyncSendState.updateOne(
+    {
+      _id: state._id,
+      payloadHash: state.payloadHash,
+      giniProductId: state.giniProductId,
+      skuKey: state.skuKey,
+    },
+    { $set: patch }
+  );
+  return updated.matchedCount > 0;
+}
+
+async function postCatalogUpdate(doc, evaluation, shared, { identityVerified = false } = {}) {
+  if (isGiniHistoricalHoldSku(evaluation?.sku)) {
+    return reconcileResult(doc, evaluation, "historical_sku_hold", evaluation.giniProductId);
+  }
+  if (!giniUpdateWritesEnabled()) {
+    return withIdentity(doc, evaluation, {
+      classification: "BLOCKED",
+      blockers: ["update_writes_disabled"],
+      reason: blockerMessage("update_writes_disabled"),
+      errorCode: "update_writes_disabled",
+      giniProductId: evaluation.giniProductId,
+      attemptedSend: false,
+    });
+  }
+  const state = await GiniSyncSendState.findOne({
+    partner: "gini",
+    skuKey: evaluation.skuKey,
+    productId: evaluation.productId,
+  });
+  if (!state?.giniProductId || !state.payloadHash) {
+    return reconcileResult(doc, evaluation, "confirmed_send_unverified", evaluation.giniProductId);
+  }
+  const openAudit = await GiniProductUpdateAudit.findOne({
+    partner: "gini",
+    skuKey: evaluation.skuKey,
+    requestSent: true,
+    status: { $in: ["pending", "uncertain", "rate_limited"] },
+  }).lean();
+  if (openAudit) {
+    return withIdentity(doc, evaluation, {
+      classification: "UPDATE_UNCERTAIN",
+      blockers: ["update_uncertain"],
+      reason: blockerMessage("update_uncertain"),
+      errorCode: "update_uncertain",
+      giniProductId: String(state.giniProductId),
+      attemptedSend: false,
+      pauseAfter: "paused",
+    });
+  }
+  const lock = await GiniProductUpdateLock.findOne({ skuKey: evaluation.skuKey }).lean();
+  if (lock) {
+    return withIdentity(doc, evaluation, {
+      classification: "BLOCKED",
+      blockers: ["update_in_progress"],
+      reason: blockerMessage("update_in_progress"),
+      errorCode: "update_in_progress",
+      giniProductId: String(state.giniProductId),
+      attemptedSend: false,
+    });
+  }
+  if (!identityVerified) {
+    const found = await lookupSku(evaluation.sku, shared, { fresh: true });
+    const confirmed = classifyConfirmedSend({ plan: evaluation, localSend: state, found });
+    if (confirmed.classification !== "ALREADY_EXISTS") return withIdentity(doc, evaluation, confirmed);
+  }
+  const snapshot =
+    shared.snapshots?.get(confirmedFieldSnapshotKey(state.skuKey, state.giniProductId, state.payloadHash)) || null;
+  const official = classifyOfficialFieldChange({
+    plan: { ...evaluation, payloadPreview: evaluation.payloadPreview, sku: evaluation.sku },
+    localSend: state,
+    snapshot,
+  });
+  if (official.classification !== "CHANGED" || !updateBodyIsOfficial(JSON.parse(giniPartialUpdateBody(official.updateChanges || [])))) {
+    return withIdentity(doc, evaluation, official);
+  }
+  const rawBody = giniPartialUpdateBody(official.updateChanges);
+  const parsed = JSON.parse(rawBody);
+  if (!updateBodyIsOfficial(parsed)) return withIdentity(doc, evaluation, official);
+  const path = giniProductUpdatePath(evaluation.sku);
+  const audit = await GiniProductUpdateAudit.create({
+    partner: "gini",
+    jobId: String(shared.jobId || ""),
+    productId: evaluation.productId,
+    sku: evaluation.sku,
+    skuKey: evaluation.skuKey,
+    giniProductId: String(state.giniProductId),
+    createJobId: state.jobId || "",
+    kind: "json_put",
+    method: "PUT",
+    path,
+    contentType: GINI_PRODUCT_UPDATE_CONTENT_TYPE,
+    body: parsed,
+    changes: official.updateChanges,
+    previousPayloadHash: String(state.payloadHash),
+    nextPayloadHash: "",
+    confirmsPayloadHash: false,
+    status: "pending",
+    requestSent: true,
+  });
+  let response;
+  try {
+    await pace();
+    response = await performGiniJsonRequest({ method: "PUT", path, rawBody });
+  } catch (err) {
+    await GiniProductUpdateAudit.updateOne(
+      { _id: audit._id },
+      { $set: { status: "uncertain", errorCode: "update_uncertain", errorMessage: safeText(err?.message) } }
+    );
+    return withIdentity(doc, evaluation, {
+      classification: "UPDATE_UNCERTAIN",
+      blockers: ["update_uncertain"],
+      reason: safeText(err?.message || blockerMessage("update_uncertain")),
+      errorCode: "update_uncertain",
+      giniProductId: String(state.giniProductId),
+      attemptedSend: true,
+      pauseAfter: "paused",
+    });
+  }
+  if (updateResponseAccepted(response, { skuKey: evaluation.skuKey, giniProductId: state.giniProductId, changes: official.updateChanges })) {
+    const confirmsPayloadHash = official.confirmFullHash === true && Boolean(official.nextPayloadHash);
+    const fullHash = confirmsPayloadHash ? official.nextPayloadHash : "";
+    audit.confirmsPayloadHash = confirmsPayloadHash;
+    audit.nextPayloadHash = fullHash;
+    const stored = await storeCatalogUpdate(state, audit);
+    await GiniProductUpdateAudit.updateOne(
+      { _id: audit._id },
+      {
+        $set: {
+          status: stored ? "updated" : "uncertain",
+          httpStatus: response.status,
+          confirmsPayloadHash,
+          nextPayloadHash: confirmsPayloadHash ? fullHash : "",
+          responseGiniProductId: String(response.json?.data?.id || ""),
+          responseSku: String(response.json?.data?.sku || ""),
+          errorCode: stored ? "" : "hash_not_stored",
+        },
+      }
+    );
+    if (!stored) {
+      return withIdentity(doc, evaluation, {
+        classification: "UPDATE_UNCERTAIN",
+        blockers: ["update_uncertain"],
+        reason: blockerMessage("update_uncertain"),
+        errorCode: "update_uncertain",
+        giniProductId: String(state.giniProductId),
+        httpStatus: response.status,
+        attemptedSend: true,
+        pauseAfter: "paused",
+      });
+    }
+    if (confirmsPayloadHash) state.payloadHash = fullHash;
+    return withIdentity(doc, evaluation, {
+      classification: "UPDATED",
+      blockers: [],
+      reason: "",
+      errorCode: "",
+      giniProductId: String(state.giniProductId),
+      httpStatus: response.status,
+      payloadHash: confirmsPayloadHash ? fullHash : evaluation.payloadHash,
+      attemptedSend: true,
+    });
+  }
+  const pauseAfter = response.edgeBlocked
+    ? "edge_blocked"
+    : response.status === 429
+      ? "rate_limited"
+      : response.status === 401 || response.status === 403
+        ? "auth_failed"
+        : "paused";
+  const errorCode = response.edgeBlocked
+    ? "gini_edge_blocked"
+    : response.status === 429
+      ? "rate_limited"
+      : response.status === 401 || response.status === 403
+        ? "gini_access_forbidden"
+        : "update_uncertain";
+  await GiniProductUpdateAudit.updateOne(
+    { _id: audit._id },
+    {
+      $set: {
+        status: pauseAfter === "paused" ? "uncertain" : pauseAfter,
+        httpStatus: response.status || 0,
+        errorCode,
+        errorMessage: safeText(response.safeErrorMessage),
+      },
+    }
+  );
+  return withIdentity(doc, evaluation, {
+    classification: "UPDATE_UNCERTAIN",
+    blockers: [errorCode],
+    reason: safeText(response.safeErrorMessage || blockerMessage("update_uncertain")),
+    errorCode,
+    giniProductId: String(state.giniProductId),
+    httpStatus: response.status || 0,
+    attemptedSend: true,
+    pauseAfter,
   });
 }
 
@@ -956,8 +1268,15 @@ async function markPreviewTreeStale(jobId, token) {
 async function execute(jobId, token) {
   const job = await GiniSyncJob.findById(jobId);
   if (!job || !RUNNING.includes(job.status)) return;
-  if (job.mode === "sync" && !giniBulkWritesEnabled()) {
-    throw new GiniBulkPause("paused", "GINI bulk writes are disabled.");
+  if (job.mode === "sync") {
+    const creates = Number(job.expectedReady) > 0;
+    const updates = job.applyUpdates === true;
+    if ((creates || (!creates && !updates)) && !giniBulkWritesEnabled()) {
+      throw new GiniBulkPause("paused", "GINI bulk writes are disabled.");
+    }
+    if (updates && !giniUpdateWritesEnabled()) {
+      throw new GiniBulkPause("paused", "GINI update writes are disabled.");
+    }
   }
   const live = await loadCategoryTree(jobId);
   const signature = await catalogSignature(live.categories);
@@ -1002,6 +1321,12 @@ async function execute(jobId, token) {
     buildSkuOwnerIndex(),
     loadSendState(),
   ]);
+  const snapshots = await loadConfirmedFieldSnapshots(sendState.rows);
+  if (!job.mappingCoverage) {
+    const coverage = await collectMappingCoverage(live.categories);
+    await GiniSyncJob.updateOne({ _id: jobId, runnerToken: token }, { $set: { mappingCoverage: coverage } });
+    job.mappingCoverage = coverage;
+  }
   const counters = await countersFromDb(jobId);
   const stored = await GiniSyncJob.findById(jobId).select("remoteLookups blockerExamples").lean();
   counters.remoteLookups = stored?.remoteLookups || 0;
@@ -1018,7 +1343,12 @@ async function execute(jobId, token) {
     skuOwners,
     sendBySku: sendState.bySku,
     sendByProduct: sendState.byProduct,
+    snapshots,
+    jobId,
+    runScope: job.runScope,
+    applyUpdates: job.applyUpdates === true,
     approvedIds: job.mode === "sync" ? await loadApprovedIds(job.previewJobId) : null,
+    approvedChanged: job.mode === "sync" && job.applyUpdates === true ? await loadApprovedIds(job.previewJobId, "CHANGED") : null,
     mappingCache: new Map(),
     lookupCache: new Map(),
     counters,
@@ -1053,6 +1383,35 @@ async function execute(jobId, token) {
         continue;
       }
       let evaluation = await evaluateCatalogProduct(doc, shared);
+      if (shared.mode === "sync" && evaluation.classification === "CHANGED") {
+        if (!shared.applyUpdates || !shared.approvedChanged?.has(productId)) {
+          const code = shared.applyUpdates ? "change_not_in_preview" : "update_writes_disabled";
+          evaluation = withIdentity(doc, evaluation, {
+            classification: "BLOCKED",
+            blockers: [code],
+            reason: blockerMessage(code),
+            errorCode: code,
+            giniProductId: evaluation.giniProductId,
+            attemptedSend: false,
+          });
+        } else {
+          const fresh = await Product.findById(doc._id).lean();
+          if (!fresh) {
+            evaluation = withIdentity(doc, evaluation, {
+              classification: "BLOCKED",
+              blockers: ["product_not_found"],
+              reason: blockerMessage("product_not_found"),
+              errorCode: "product_not_found",
+            });
+          } else {
+            const again = await evaluateCatalogProduct(fresh, shared);
+            evaluation =
+              again.classification === "CHANGED"
+                ? await postCatalogUpdate(fresh, again, shared, { identityVerified: true })
+                : again;
+          }
+        }
+      }
       if (shared.mode === "sync" && evaluation.classification === "READY_CREATE") {
         if (!giniBulkWritesEnabled()) throw new GiniBulkPause("paused", "GINI bulk writes are disabled.");
         const fresh = await Product.findById(doc._id).lean();
@@ -1076,7 +1435,7 @@ async function execute(jobId, token) {
         pushExample(state.examples, evaluation);
         await rememberSend(evaluation, jobId);
         if (evaluation.classification === "CREATED") failureStreak = 0;
-        if (["FAILED", "CREATE_UNCERTAIN", "LOOKUP_UNCERTAIN"].includes(evaluation.classification)) {
+        if (["FAILED", "CREATE_UNCERTAIN", "LOOKUP_UNCERTAIN", "UPDATE_UNCERTAIN"].includes(evaluation.classification)) {
           failureStreak += 1;
         }
       }
@@ -1191,6 +1550,8 @@ function publicJob(job, extras = {}) {
     previewJobId: raw.previewJobId || "",
     catalogSignature: raw.catalogSignature || "",
     expectedReady: raw.expectedReady || 0,
+    expectedChanged: raw.expectedChanged || 0,
+    applyUpdates: raw.applyUpdates === true,
     sendLimit: raw.sendLimit ?? null,
     limitReached: Boolean(raw.limitReached),
     total,
@@ -1206,7 +1567,12 @@ function publicJob(job, extras = {}) {
     failed: raw.failed || 0,
     createUncertain: raw.createUncertain || 0,
     reconcile: raw.reconcile || 0,
+    unchanged: raw.unchanged || 0,
+    changed: raw.changed || 0,
+    updated: raw.updated || 0,
+    updateUncertain: raw.updateUncertain || 0,
     remoteLookups: raw.remoteLookups || 0,
+    mappingCoverage: raw.mappingCoverage || null,
     skipped: raw.blocked || 0,
     percent: total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0,
     blockerCounts: raw.blockerCounts || {},
@@ -1271,62 +1637,30 @@ async function decorate(job) {
 }
 
 async function historicalSendWarnings() {
-  const sends = await GiniSyncSendState.find({ partner: "gini" })
-    .select("productId sku skuKey giniProductId")
-    .lean();
-  const ids = [...new Set(sends.map((row) => String(row.giniProductId || "")).filter(Boolean))];
-  if (!ids.length) return [];
-  const created = await GiniSyncProductResult.find({
-    classification: "CREATED",
-    giniProductId: { $in: ids },
-  })
-    .select("giniProductId")
-    .lean();
-  const createdIds = new Set(created.map((row) => String(row.giniProductId)));
-  const pending = sends.filter((row) => row.giniProductId && !createdIds.has(String(row.giniProductId)));
-  const key = pending
-    .map((row) => `${row.skuKey || row.sku || ""}:${row.giniProductId}`)
-    .sort()
-    .join("|");
-  if (reconcileCache.key === key && Date.now() - reconcileCache.at < RECONCILE_CACHE_MS) return reconcileCache.warnings;
-  const warnings = [];
-  for (const row of pending) {
-    if (!row.sku) {
-      warnings.push(warningFromRow(row, "confirmed_send_unverified"));
-      continue;
-    }
-    try {
-      const found = await findExistingGiniProduct(row.sku);
-      const liveId = found?.giniProductId == null ? "" : String(found.giniProductId);
-      if (found?.exists && liveId && liveId === String(row.giniProductId)) continue;
-      if (found?.exists && liveId) {
-        warnings.push({ ...warningFromRow(row, "confirmed_send_id_mismatch"), liveGiniProductId: liveId, httpStatus: 200 });
-        continue;
-      }
-      if (found?.error || found?.exists !== false) {
-        warnings.push(warningFromRow({ ...row, httpStatus: found?.status }, "confirmed_send_unverified"));
-        continue;
-      }
-      warnings.push(warningFromRow({ ...row, httpStatus: 404 }, "confirmed_send_missing"));
-    } catch {
-      warnings.push(warningFromRow(row, "confirmed_send_unverified"));
-    }
-  }
-  reconcileCache = { key, at: Date.now(), warnings };
-  return warnings;
+  // Status polling used to look up every saved SKU. That extra GET traffic ran
+  // beside Full Preview and could draw a CloudFront 403. Reconciliation now
+  // comes from the stored preview rows, not from a live read on every refresh.
+  return [];
 }
 
 export async function ensureGiniSyncRunner() {
   const job = await GiniSyncJob.findOne({ partner: "gini", status: { $in: RUNNING } }).sort({ createdAt: -1 });
   if (!job) return null;
-  if (job.mode === "sync" && job.status === "running" && !giniBulkWritesEnabled()) {
+  if (
+    job.mode === "sync" &&
+    job.status === "running" &&
+    ((Number(job.expectedReady) > 0 && !giniBulkWritesEnabled()) || (job.applyUpdates === true && !giniUpdateWritesEnabled()))
+  ) {
     await GiniSyncJob.updateOne(
       { _id: job._id, status: "running" },
       {
         $set: {
           status: "paused",
           pausedAt: new Date(),
-          lastError: "GINI bulk writes are disabled.",
+          lastError:
+            Number(job.expectedReady) > 0 && !giniBulkWritesEnabled()
+              ? "GINI bulk writes are disabled."
+              : "GINI update writes are disabled.",
           runnerToken: "",
         },
       }
@@ -1758,7 +2092,7 @@ export async function runGiniSyncPreview() {
     dryRun: true,
     sentToGini: 0,
     writesEnabled: giniBulkWritesEnabled(),
-    message: "Full Preview started. It does not create GINI products.",
+    message: "Preview started for new and changed products. It does not create or update GINI products.",
   };
 }
 
@@ -1767,15 +2101,13 @@ export async function startGiniSyncAll({
   previewJobId,
   catalogSignature: suppliedSignature,
   expectedReady,
+  expectedChanged = 0,
   scope,
   limit,
   approveFullRun = false,
 } = {}) {
   if (confirm !== true) {
     throw new GiniBulkError("Confirm the create run after Full Preview.", { status: 400, code: "confirm_required" });
-  }
-  if (!giniBulkWritesEnabled()) {
-    throw new GiniBulkError("GINI bulk writes are disabled.", { status: 409, code: "bulk_writes_disabled" });
   }
   const runScope = scope === "full" ? "full" : scope === "limited" ? "limited" : "";
   if (!runScope) throw new GiniBulkError("Choose a limited run or a full run.", { status: 400, code: "invalid_scope" });
@@ -1814,8 +2146,28 @@ export async function startGiniSyncAll({
       code: "preview_stale",
     });
   }
-  if (preview.readyCreate < 1) {
-    throw new GiniBulkError("Full Preview found no products ready to create.", { status: 409, code: "nothing_to_send" });
+  const previewChanged = Number(preview.changed) || 0;
+  if (runScope === "full" && previewChanged > 0) {
+    if (!Number.isInteger(expectedChanged) || expectedChanged !== previewChanged) {
+      throw new GiniBulkError("The confirmed changed count does not match this preview.", {
+        status: 409,
+        code: "preview_mismatch",
+      });
+    }
+  }
+  const sendUpdates = runScope === "full" && previewChanged > 0 && giniUpdateWritesEnabled();
+  const sendCreates = preview.readyCreate > 0;
+  if (sendCreates && !giniBulkWritesEnabled()) {
+    throw new GiniBulkError("GINI bulk writes are disabled.", { status: 409, code: "bulk_writes_disabled" });
+  }
+  if (!sendCreates && previewChanged > 0 && !giniUpdateWritesEnabled()) {
+    throw new GiniBulkError("GINI update writes are disabled.", { status: 409, code: "update_writes_disabled" });
+  }
+  if (!sendCreates && !sendUpdates) {
+    throw new GiniBulkError("Full Preview found no products ready to create or update.", {
+      status: 409,
+      code: "nothing_to_send",
+    });
   }
   const connection = await getGiniConnectionPublic();
   if (connection.secretUnreadable) {
@@ -1851,6 +2203,8 @@ export async function startGiniSyncAll({
     previewJobId: String(preview._id),
     catalogSignature: preview.catalogSignature,
     expectedReady: preview.readyCreate,
+    expectedChanged: sendUpdates ? previewChanged : 0,
+    applyUpdates: sendUpdates,
     sendLimit,
     approveFullRun: runScope === "full",
     total: preview.total,
@@ -1861,9 +2215,19 @@ export async function startGiniSyncAll({
   launchGiniJob(job._id);
   return {
     job: await decorate(job),
-    writesEnabled: true,
+    writesEnabled: giniBulkWritesEnabled(),
+    updateWritesEnabled: giniUpdateWritesEnabled(),
     sentToGini: 0,
-    message: runScope === "limited" ? "Limited GINI create run started." : "Full GINI create run started.",
+    message:
+      runScope === "limited"
+        ? "Limited GINI create run started."
+        : sendUpdates && sendCreates
+          ? "Sync started for new products and supported price or stock changes."
+          : sendUpdates
+            ? "Sync started for supported price or stock changes. No creates were started."
+            : previewChanged > 0
+              ? "Create run started. Price and stock updates were not sent because the update gates are off."
+              : "Full GINI create run started.",
   };
 }
 
@@ -1898,8 +2262,11 @@ export async function resumeGiniSyncAll() {
     }
   }
   if (!job) throw new GiniBulkError("No paused GINI sync job to resume.", { status: 404, code: "not_paused" });
-  if (job.mode === "sync" && !giniBulkWritesEnabled()) {
+  if (job.mode === "sync" && Number(job.expectedReady) > 0 && !giniBulkWritesEnabled()) {
     throw new GiniBulkError("GINI bulk writes are disabled.", { status: 409, code: "bulk_writes_disabled" });
+  }
+  if (job.mode === "sync" && job.applyUpdates === true && !giniUpdateWritesEnabled()) {
+    throw new GiniBulkError("GINI update writes are disabled.", { status: 409, code: "update_writes_disabled" });
   }
   if (job.status === "auth_failed") {
     const connection = await getGiniConnectionPublic();

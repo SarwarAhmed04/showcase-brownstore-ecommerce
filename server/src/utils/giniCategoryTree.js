@@ -73,6 +73,49 @@ export function summarizeGiniStatuses(statuses, total = statuses.length) {
   return counts;
 }
 
+function coverageName(row) {
+  return {
+    id: String(row?.id || ""),
+    name: String(row?.name || ""),
+    status: String(row?.status || ""),
+    productCount: Number(row?.productCount) || 0,
+    activeProductCount: Number(row?.activeProductCount) || 0,
+  };
+}
+
+function sumCount(rows, field) {
+  return rows.reduce((sum, row) => sum + (Number(row?.[field]) || 0), 0);
+}
+
+/**
+ * Coverage for every BrownStore collection against the live GINI tree.
+ * A configured row is not a promise that its products can be sent.
+ */
+export function summarizeGiniMappingCoverage(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const counts = summarizeGiniStatuses(
+    list.map((row) => row?.status),
+    list.length
+  );
+  const configured = list.filter((row) => row?.status === "configured");
+  const missing = list.filter((row) => row?.status === "missing");
+  const invalid = list.filter((row) => row?.status === "invalid");
+  const inactive = list.filter((row) => row?.status === "inactive");
+  return {
+    ...counts,
+    unmapped: missing.length,
+    configuredProductCount: sumCount(configured, "productCount"),
+    configuredActiveProductCount: sumCount(configured, "activeProductCount"),
+    unmappedProductCount: sumCount(missing, "productCount"),
+    invalidProductCount: sumCount(invalid, "productCount"),
+    inactiveMappingProductCount: sumCount(inactive, "productCount"),
+    unmappedCollections: missing.map(coverageName),
+    invalidCollections: invalid.map(coverageName),
+    inactiveCollections: inactive.map(coverageName),
+    mappedIsNotSendEligibility: true,
+  };
+}
+
 /** Stop following category pages after this many responses. */
 export const GINI_CATEGORY_PAGE_LIMIT = 50;
 

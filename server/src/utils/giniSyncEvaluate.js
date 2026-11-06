@@ -73,6 +73,16 @@ const BLOCKER_TEXT = {
     "The current BrownStore payload hash differs from the hash saved when this GINI product was confirmed. This is not proof that the GINI product changed.",
   local_payload_hash_matches:
     "The current BrownStore payload hash matches the hash saved when this GINI product was confirmed, and the live GINI id and SKU match.",
+  unchanged_confirmed_payload:
+    "The saved GINI id, SKU, and payload hash still match this BrownStore product. It was skipped. No create or update was sent.",
+  unsupported_field_change:
+    "The payload differs by a field GINI catalog sync is not allowed to update. No create or update was sent.",
+  confirmed_fields_missing:
+    "The confirmed price or quantity snapshot is missing, so the change cannot be updated. No create was sent.",
+  update_writes_disabled: "GINI update writes are disabled. The price or stock change was not sent.",
+  update_uncertain: "The update response could not be confirmed. No second update was sent.",
+  update_in_progress: "An update for this SKU is already open. No second update was sent.",
+  change_not_in_preview: "This price or stock change was not in the approved preview.",
   not_in_approved_preview: "This product was not ready to create in the approved Full Preview.",
   historical_sku_hold:
     "This SKU is on the historical hold list. A verified absence does not authorize creating it again.",

@@ -262,11 +262,19 @@ export default function GiniSyncAll({ t }) {
   const warnings = reconciliationWarnings(status, current);
   const percent = Number(current?.percent) || 0;
   const ready = Number(approved?.readyCreate) || 0;
+  const changedCount = Number(approved?.changed) || 0;
   const maxLimit = Number(status?.limitedRunMax) || 25;
   const parsedLimit = Number(limit);
   const limitOk = Number.isInteger(parsedLimit) && parsedLimit >= 1 && parsedLimit <= maxLimit;
   const canSend = writesEnabled && approved && !active && !busy;
   const updateWritesEnabled = status?.updateWritesEnabled === true;
+  const canStartCatalog = Boolean(
+    approved &&
+      !active &&
+      !busy &&
+      !(ready > 0 && !writesEnabled) &&
+      ((writesEnabled && ready > 0) || (updateWritesEnabled && changedCount > 0))
+  );
   const eligibleUpdates = (changedPreview?.changedProducts || []).filter(
     (row) => row.updateEligible === true && row.identityMatched === true && row.liveGiniProductId === row.giniProductId
   );
@@ -304,7 +312,7 @@ export default function GiniSyncAll({ t }) {
   const stateLabel = current ? t[STATE_KEYS[current.status]] || current.status : "";
 
   return (
-    <section className="space-y-6" data-gini-sync-all="true">
+    <section className="space-y-6" data-gini-sync-all="true" data-gini-sync-workflow="new-and-changed">
       <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -317,6 +325,9 @@ export default function GiniSyncAll({ t }) {
         </div>
         <p className={`mt-4 rounded-2xl px-4 py-3 text-sm ${writesEnabled ? "bg-amber-50 text-amber-950" : "bg-cream text-brown/70"}`}>
           {writesEnabled ? t.giniSyncAllWritesOn : t.giniSyncAllWritesOff}
+        </p>
+        <p className={`mt-2 rounded-2xl px-4 py-3 text-sm ${updateWritesEnabled ? "bg-amber-50 text-amber-950" : "bg-cream text-brown/70"}`}>
+          {updateWritesEnabled ? t.giniSyncAllUpdateWritesOn : t.giniSyncAllUpdateWritesOff}
         </p>
         <p className="mt-3 text-xs text-brown/45" dir="ltr">
           {t.giniSyncEndpoint}: POST {status?.endpoint || "/api/v2.0/third-party/products"}
@@ -516,10 +527,13 @@ export default function GiniSyncAll({ t }) {
           <button
             type="button"
             className={BUTTON}
-            disabled={!canSend || ready < 1}
+            disabled={!canStartCatalog}
             onClick={() => {
-              if (!canSend || ready < 1) return;
-              if (!window.confirm(fill(t.giniStartFullConfirm, ready))) return;
+              if (!canStartCatalog) return;
+              const message = String(t.giniStartFullConfirm || "")
+                .replace("{count}", count(writesEnabled ? ready : 0))
+                .replace("{changed}", count(updateWritesEnabled ? changedCount : 0));
+              if (!window.confirm(message)) return;
               run(
                 () =>
                   api.giniSyncAllStart({
@@ -529,6 +543,7 @@ export default function GiniSyncAll({ t }) {
                     expectedReady: approved.readyCreate,
                     scope: "full",
                     approveFullRun: true,
+                    expectedChanged: Number(approved.changed) || 0,
                   }),
                 "full"
               );
@@ -731,12 +746,34 @@ export default function GiniSyncAll({ t }) {
                 <div className="h-full bg-brown" style={{ width: `${percent}%` }} />
               </div>
             </div>
+            {current.mappingCoverage ? (
+              <div className="rounded-2xl bg-cream px-4 py-3 text-sm text-brown/70" data-gini-mapping-coverage="true">
+                <p className="font-semibold text-brown">{t.giniMappingCoverage}</p>
+                <p className="mt-1" dir="ltr">
+                  {current.mappingCoverage.configured || 0} mapped · {current.mappingCoverage.unmapped || current.mappingCoverage.missing || 0} unmapped ·{" "}
+                  {current.mappingCoverage.invalid || 0} invalid · {current.mappingCoverage.inactive || 0} inactive
+                </p>
+                <p className="mt-1">{t.giniMappingNotEligible}</p>
+                {(current.mappingCoverage.unmappedCollections || []).length ? (
+                  <ul className="mt-2 space-y-1" dir="ltr">
+                    {(current.mappingCoverage.unmappedCollections || []).map((row) => (
+                      <li key={row.id || row.name}>
+                        {t.giniMappingUnmapped}: {row.name || row.id} · {count(row.productCount)}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
             {current.limitReached ? <p className="text-sm text-brown/70">{t.giniSyncLimitReached}</p> : null}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Stat label={t.giniSyncTotal} value={count(current.total)} />
               <Stat label={t.giniSyncEligible} value={count(current.eligible)} />
               <Stat label={t.giniSyncReady} value={count(current.readyCreate)} />
+              <Stat label={t.giniSyncChanged} value={count(current.changed)} marker="data-gini-changed" markerValue={String(current.changed || 0)} />
+              <Stat label={t.giniSyncUnchanged} value={count(current.unchanged)} marker="data-gini-unchanged" markerValue={String(current.unchanged || 0)} />
               <Stat label={t.giniSyncExists} value={count(current.alreadyExists)} />
+              <Stat label={t.giniSyncPriceStockUpdated} value={count(sendCounter(current, "updated"))} />
               <Stat label={t.giniSyncBlocked} value={count(current.blocked)} />
               <Stat label={t.giniSyncInactive} value={count(current.inactive)} />
               <Stat label={t.giniSyncNeedsReview} value={count(current.needsReview)} />

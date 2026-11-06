@@ -275,6 +275,7 @@ giniConnectionRouter.post("/platforms/gini/sync-all/start", async (req, res) => 
       previewJobId: body.previewJobId,
       catalogSignature: body.catalogSignature,
       expectedReady: body.expectedReady,
+      expectedChanged: body.expectedChanged,
       scope: body.scope,
       limit: body.limit,
       approveFullRun: body.approveFullRun === true,

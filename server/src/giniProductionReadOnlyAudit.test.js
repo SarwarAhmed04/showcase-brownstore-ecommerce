@@ -277,6 +277,8 @@ function buildPopulatedDb(events) {
       aggregate(pipeline, options) {
         assert.equal(options?.maxTimeMS, QUERY_MS);
         seen.aggregateCalls += 1;
+        const groupId = pipeline?.[0]?.$group?._id;
+        if (groupId && typeof groupId === "object") return commandCursor([]);
         const match = pipeline?.[0]?.$match || {};
         const grouped = new Map();
         for (const doc of rows) {
@@ -441,8 +443,8 @@ describe("GINI production read-only audit driver cleanup", () => {
 
     const report = await closeAfterAudit(connection, () => auditDatabase(db));
 
-    assert.equal(seen.findDeadlines, 5);
-    assert.equal(seen.aggregateCalls, 1);
+    assert.equal(seen.findDeadlines, 6);
+    assert.equal(seen.aggregateCalls, 2);
     assert.equal(seen.countFilters.length, 9);
     assert.equal(
       seen.countFilters.some((filter) => filter.partner === "gini"),
@@ -472,6 +474,10 @@ describe("GINI production read-only audit driver cleanup", () => {
     assert.equal(report.syncOneSuccessfulCreates, 0);
     assert.equal(report.context.products, 2);
     assert.equal(report.context.giniTaxonomyMappings, 1);
+    assert.equal(report.mappingCoverage.available, true);
+    assert.equal(report.mappingCoverage.liveTreeChecked, false);
+    assert.equal(report.mappingCoverage.collections, 0);
+    assert.equal(report.mappingCoverage.mappedIsNotSendEligibility, true);
     assert.equal(report.resync.giniresynclocks, 0);
     assert.equal(report.resync.giniresyncpreviews, 0);
     assert.equal(report.previews.reportedCountMatches, 0);

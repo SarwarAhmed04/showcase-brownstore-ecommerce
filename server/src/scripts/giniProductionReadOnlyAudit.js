@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { GINI_REFERENCE_SKUS } from "../utils/giniHistoricalHold.js";
+import { summarizeGiniMappingCoverage } from "../utils/giniCategoryTree.js";
 
 const CONFIRM_FLAG = "--confirm-production";
 const QUERY_MS = 120000;
@@ -456,6 +457,96 @@ async function classificationCounts(col, jobId) {
   }
 }
 
+function savedMappingStatus(values) {
+  const categoryId = String(values?.categoryId || "").trim();
+  const subcategoryId = String(values?.subcategoryId || "").trim();
+  if (!categoryId || !subcategoryId) return "missing";
+  return "saved";
+}
+
+function auditCollectionLabel(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "object") return String(value.en || value.ar || value.ku || "").trim();
+  return "";
+}
+
+/**
+ * Read collection mappings from Mongo only. This does not call GINI, so it
+ * cannot mark a saved category active or inactive. The sync preview does that
+ * with the live tree.
+ */
+async function readMappingCoverage(db, taxonomyEntry, productEntry) {
+  if (!taxonomyEntry?.present || !productEntry?.present) {
+    return { available: false, liveTreeChecked: false, reason: "taxonomy or product collection is absent" };
+  }
+  const configs = [];
+  const configCursor = db
+    .collection(taxonomyEntry.name)
+    .find({ partner: "gini" }, { projection: { brownCollectionId: 1, values: 1 } })
+    .maxTimeMS(QUERY_MS);
+  try {
+    for await (const row of configCursor) configs.push(row);
+  } finally {
+    await closeCursor(configCursor);
+  }
+  const productCursor = db.collection(productEntry.name).aggregate(
+    [
+      {
+        $group: {
+          _id: { $toString: { $ifNull: ["$collectionName._id", ""] } },
+          name: { $first: "$collectionName.name" },
+          productCount: { $sum: 1 },
+          activeProductCount: { $sum: { $cond: [{ $ne: ["$isActive", false] }, 1, 0] } },
+        },
+      },
+    ],
+    { maxTimeMS: QUERY_MS }
+  );
+  let grouped = [];
+  try {
+    grouped = await productCursor.toArray();
+  } finally {
+    await closeCursor(productCursor);
+  }
+  const byId = new Map();
+  for (const row of grouped || []) {
+    const id = String(row?._id || "");
+    byId.set(id, {
+      id,
+      name: auditCollectionLabel(row?.name),
+      productCount: Number(row?.productCount) || 0,
+      activeProductCount: Number(row?.activeProductCount) || 0,
+    });
+  }
+  const valuesById = new Map();
+  for (const config of configs) {
+    const id = String(config?.brownCollectionId || "").trim();
+    if (!id) continue;
+    valuesById.set(id, config.values || {});
+    if (!byId.has(id)) byId.set(id, { id, name: "", productCount: 0, activeProductCount: 0 });
+  }
+  const rows = [...byId.values()].map((row) => ({
+    ...row,
+    status: savedMappingStatus(valuesById.get(row.id)),
+  }));
+  const coverage = summarizeGiniMappingCoverage(rows);
+  const saved = rows.filter((row) => row.status === "saved");
+  return {
+    available: true,
+    liveTreeChecked: false,
+    reason: "Saved mapping ids were counted. Active and inactive GINI categories are checked when Preview loads the live tree.",
+    collections: rows.length,
+    saved: saved.length,
+    savedProductCount: saved.reduce((sum, row) => sum + row.productCount, 0),
+    savedActiveProductCount: saved.reduce((sum, row) => sum + row.activeProductCount, 0),
+    unmapped: coverage.unmapped,
+    unmappedProductCount: coverage.unmappedProductCount,
+    unmappedCollections: coverage.unmappedCollections.slice(0, 50),
+    mappedIsNotSendEligibility: true,
+  };
+}
+
 async function finishAuditConnection(connection) {
   if (!connection || !connection.readyState) return;
   try {
@@ -581,6 +672,7 @@ export async function auditDatabase(db) {
     },
     resync,
     giniConnection: connection,
+    mappingCoverage: await readMappingCoverage(db, found.taxonomy, found.products),
   };
 }
 
