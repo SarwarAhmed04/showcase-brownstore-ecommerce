@@ -56,6 +56,7 @@ export const GINI_SYNC_BATCH_SIZE = 100;
 export const GINI_BULK_LIMIT_MAX = 25;
 const LOCK_STALE_MS = 15000;
 const SYSTEMATIC_FAILURES = 5;
+const PREVIEW_CATALOG_STALE_MESSAGE = "The catalog changed during Full Preview. Run Full Preview again.";
 const FAILURE_STREAK_CLASSIFICATIONS = new Set([
   "FAILED",
   "CREATE_UNCERTAIN",
@@ -329,20 +330,48 @@ async function productBounds() {
   };
 }
 
-async function catalogSignature(categories) {
+function compareCodeUnit(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function canonicalSignatureSubcategories(subcategories) {
+  return (subcategories || [])
+    .map((sub) => ({
+      id: String(sub.id),
+      active: sub.isActive === true,
+    }))
+    .sort((left, right) => compareCodeUnit(left.id, right.id) || Number(left.active) - Number(right.active));
+}
+
+/**
+ * Signature projection only. Category pickers and GINI payloads keep API order.
+ * Duplicate ids stay in the hash so conflicting active flags or children are not hidden.
+ * Ordering is code-unit comparison, independent of locale.
+ */
+export function canonicalGiniSignatureTree(categories) {
+  return (categories || [])
+    .map((category) => ({
+      id: String(category.id),
+      active: category.isActive === true,
+      subcategories: canonicalSignatureSubcategories(category.subcategories),
+    }))
+    .sort(
+      (left, right) =>
+        compareCodeUnit(left.id, right.id) ||
+        Number(left.active) - Number(right.active) ||
+        compareCodeUnit(JSON.stringify(left.subcategories), JSON.stringify(right.subcategories))
+    );
+}
+
+export async function catalogSignature(categories) {
   const [bounds, rules, context] = await Promise.all([
     productBounds(),
     Commission.find({ partner: "gini" }).select("scope targetId percentage isActive filterPath").lean(),
     loadEligibilityContext("gini"),
   ]);
-  const tree = (categories || []).map((category) => ({
-    id: String(category.id),
-    active: category.isActive === true,
-    subcategories: (category.subcategories || []).map((sub) => ({
-      id: String(sub.id),
-      active: sub.isActive === true,
-    })),
-  }));
+  const tree = canonicalGiniSignatureTree(categories);
   const ruleRows = rules
     .map((rule) =>
       [rule.scope, rule.targetId, rule.percentage, rule.isActive !== false, JSON.stringify(rule.filterPath || null)].join(":")
@@ -1264,7 +1293,7 @@ async function markPreviewTreeStale(jobId, token) {
       $set: {
         status: "stale",
         finishedAt: new Date(),
-        lastError: "The GINI category tree changed during Full Preview. Run Full Preview again.",
+        lastError: PREVIEW_CATALOG_STALE_MESSAGE,
         errorCode: "preview_stale",
       },
     }
@@ -1520,7 +1549,7 @@ async function finishPreview(jobId, token, counters, state, startSignature) {
       const end = await catalogSignature(live.categories);
       if (end !== startSignature) {
         status = "stale";
-        staleReason = "The GINI category tree changed during Full Preview. Run Full Preview again.";
+        staleReason = PREVIEW_CATALOG_STALE_MESSAGE;
       }
     }
   } catch (err) {

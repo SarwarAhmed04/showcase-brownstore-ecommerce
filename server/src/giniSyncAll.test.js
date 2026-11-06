@@ -24,6 +24,7 @@ import { GiniSyncJob } from "./models/GiniSyncJob.js";
 import { GiniSyncProductResult } from "./models/GiniSyncProductResult.js";
 import { GiniSyncSendState } from "./models/GiniSyncSendState.js";
 import { GiniProductUpdateAudit } from "./models/GiniProductUpdateAudit.js";
+import { CatalogBlock } from "./models/CatalogBlock.js";
 import { GINI_CATEGORIES_PATH, GINI_PING_PATH } from "./utils/giniSigner.js";
 import {
   GINI_CATEGORY_GET_ATTEMPTS,
@@ -33,13 +34,18 @@ import {
   setGiniCategoryRetryScale,
   setGiniFetch,
 } from "./services/giniConnection.js";
-import { GINI_CATEGORY_PAGE_LIMIT } from "./utils/giniCategoryTree.js";
+import { invalidateCatalogBlockCache } from "./utils/catalogBlocks.js";
 import { encryptApiKey } from "./utils/partnerAuth.js";
 import { previewGiniSyncOne, setGiniMediaFetch } from "./services/giniSyncOne.js";
 import { GINI_PRODUCTS_PATH, giniSkuKey, isAllowedMediaUrl } from "./utils/giniSyncOnePlan.js";
 import { classifyConfirmedSend, giniPayloadHash } from "./utils/giniSyncEvaluate.js";
 import { classifyOfficialFieldChange, localConfirmedCatalogDecision } from "./utils/giniCatalogSync.js";
-import { summarizeGiniMappingCoverage } from "./utils/giniCategoryTree.js";
+import {
+  categoryOptions,
+  GINI_CATEGORY_PAGE_LIMIT,
+  normalizeGiniCategories,
+  summarizeGiniMappingCoverage,
+} from "./utils/giniCategoryTree.js";
 import {
   ensureGiniSyncRunner,
   getLatestGiniSyncJob,
@@ -47,6 +53,8 @@ import {
   giniBulkRemoteLookups,
   giniBulkSkuIndexScans,
   giniBulkWritesEnabled,
+  canonicalGiniSignatureTree,
+  catalogSignature,
   pauseGiniSyncAll,
   resetGiniBulkForTests,
   resumeGiniSyncAll,
@@ -191,6 +199,18 @@ function categoryResponse(target) {
         },
       ],
       meta: { last_page: GINI_CATEGORY_PAGE_LIMIT + 1 },
+    });
+  }
+  if (categoryMode === "reordered") return mockResponse(200, reorderedLiveTree());
+  if (categoryMode === "reordered-subs") return mockResponse(200, reorderedSubcategoriesTree());
+  if (categoryMode === "inactive-home") {
+    return mockResponse(200, {
+      data: LIVE_TREE.data.map((category) => (category.id === 1 ? { ...category, is_active: 0 } : category)),
+    });
+  }
+  if (categoryMode === "replaced-id") {
+    return mockResponse(200, {
+      data: LIVE_TREE.data.map((category) => (category.id === 2 ? { ...category, id: 3 } : category)),
     });
   }
   if (categoryMode === "shifted") {
@@ -353,6 +373,24 @@ function catalogId(index) {
   return index.toString(16).padStart(24, "0");
 }
 
+function reorderedLiveTree() {
+  return {
+    data: [...LIVE_TREE.data].reverse().map((category) => ({
+      ...category,
+      subcategories: [...category.subcategories].reverse(),
+    })),
+  };
+}
+
+function reorderedSubcategoriesTree() {
+  return {
+    data: LIVE_TREE.data.map((category) => ({
+      ...category,
+      subcategories: [...category.subcategories].reverse(),
+    })),
+  };
+}
+
 function simpleVariant(stock = 5, extra = {}) {
   return [
     {
@@ -504,6 +542,37 @@ async function rejectsCode(fn, code) {
 
 async function rowsFor(job) {
   return GiniSyncProductResult.find({ jobId: job.id }).lean();
+}
+
+async function pausePreviewAfterFirst(itemCode) {
+  await makeProduct({ itemCode, ibsherId: `pause-${itemCode}` });
+  await mapCollection();
+  setGiniBulkBatchSize(1);
+  setGiniBulkAfterProduct(async ({ processed }) => {
+    if (processed === 1) await pauseGiniSyncAll();
+  });
+  const paused = await startPreview();
+  setGiniBulkAfterProduct(null);
+  assert.equal(paused.status, "paused");
+  assert.equal(paused.processed, 1);
+  return paused;
+}
+
+async function assertResumeStale(paused) {
+  calls = [];
+  await resumeGiniSyncAll();
+  await waitForGiniBulkIdle();
+  const stale = (await getLatestGiniSyncJob()).job;
+  assert.equal(stale.id, paused.id);
+  assert.equal(stale.status, "stale");
+  assert.equal(stale.errorCode, "preview_stale");
+  assert.equal(stale.lastError, "The catalog changed during Full Preview. Run Full Preview again.");
+  assert.equal(stale.catalogSignature, paused.catalogSignature);
+  assert.equal(stale.processed, paused.processed);
+  assert.equal(stale.created, 0);
+  assert.equal(posts().length, 0);
+  assert.equal(giniBulkWritesEnabled(), false);
+  return stale;
 }
 
 describe("GINI sync all contract", () => {
@@ -2163,6 +2232,223 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     assert.equal(posts().length, 0);
   });
 
+  it("keeps one signature for the same categories and subcategories in any order", async () => {
+    const original = normalizeGiniCategories(LIVE_TREE).categories;
+    const reversedParents = normalizeGiniCategories({ data: [...LIVE_TREE.data].reverse() }).categories;
+    const reversedSubs = normalizeGiniCategories(reorderedSubcategoriesTree()).categories;
+    const reversedBoth = normalizeGiniCategories(reorderedLiveTree()).categories;
+    const baseline = await catalogSignature(original);
+    assert.equal(await catalogSignature(reversedParents), baseline);
+    assert.equal(await catalogSignature(reversedSubs), baseline);
+    assert.equal(await catalogSignature(reversedBoth), baseline);
+    assert.deepEqual(
+      categoryOptions(reversedParents, "").map((row) => String(row.id)),
+      reversedParents.map((row) => String(row.id))
+    );
+
+    const input = [
+      {
+        id: "2",
+        isActive: true,
+        name: "Later parent",
+        subcategories: [
+          { id: "10", isActive: true, name: "Ten" },
+          { id: "2", isActive: false, name: "Two" },
+        ],
+      },
+      { id: "10", isActive: false, name: "Earlier parent", subcategories: [] },
+    ];
+    const snapshot = JSON.stringify(input);
+    assert.deepEqual(
+      canonicalGiniSignatureTree(input).map((row) => ({
+        id: row.id,
+        active: row.active,
+        subs: row.subcategories.map((sub) => sub.id),
+      })),
+      [
+        { id: "10", active: false, subs: [] },
+        { id: "2", active: true, subs: ["10", "2"] },
+      ]
+    );
+    assert.equal(JSON.stringify(input), snapshot);
+
+    const conflict = [
+      {
+        id: "9",
+        isActive: true,
+        subcategories: [
+          { id: "4", isActive: true },
+          { id: "4", isActive: false },
+        ],
+      },
+      { id: "9", isActive: false, subcategories: [{ id: "4", isActive: true }] },
+    ];
+    const conflictAgain = [
+      conflict[1],
+      { ...conflict[0], subcategories: [...conflict[0].subcategories].reverse() },
+    ];
+    const canonicalConflict = [
+      { id: "9", active: false, subcategories: [{ id: "4", active: true }] },
+      {
+        id: "9",
+        active: true,
+        subcategories: [
+          { id: "4", active: false },
+          { id: "4", active: true },
+        ],
+      },
+    ];
+    assert.deepEqual(canonicalGiniSignatureTree(conflict), canonicalConflict);
+    assert.deepEqual(canonicalGiniSignatureTree(conflictAgain), canonicalConflict);
+    assert.equal(await catalogSignature(conflict), await catalogSignature(conflictAgain));
+    assert.notEqual(await catalogSignature(conflict), await catalogSignature([conflict[1]]));
+
+    const activeFlip = original.map((category) =>
+      String(category.id) === "1" ? { ...category, isActive: !category.isActive } : category
+    );
+    const idChange = original.map((category) => (String(category.id) === "2" ? { ...category, id: 3 } : category));
+    assert.notEqual(await catalogSignature(activeFlip), baseline);
+    assert.notEqual(await catalogSignature(idChange), baseline);
+
+    await mapCollection();
+    const mapped = await catalogSignature(original);
+    await mapCollection({
+      categoryId: "2",
+      categoryName: "Hidden",
+      subcategoryId: "20",
+      subcategoryName: "Archived",
+    });
+    assert.notEqual(await catalogSignature(original), mapped);
+    await mapCollection();
+    assert.equal(await catalogSignature(original), mapped);
+
+    await Commission.create({ partner: "gini", scope: "all", targetId: "*", percentage: 12, isActive: true });
+    assert.notEqual(await catalogSignature(original), mapped);
+    await Commission.deleteMany({ partner: "gini" });
+    assert.equal(await catalogSignature(original), mapped);
+
+    await makeProduct({ itemCode: "BOUND-HASH", ibsherId: "bound-hash" });
+    assert.notEqual(await catalogSignature(original), mapped);
+    await Product.deleteMany({ itemCode: "BOUND-HASH" });
+    assert.equal(await catalogSignature(original), mapped);
+
+    await PlatformVisibilityRule.create({
+      partner: "gini",
+      scope: "brand",
+      targetId: "brand-order",
+      isActive: false,
+    });
+    assert.notEqual(await catalogSignature(original), mapped);
+    await PlatformVisibilityRule.deleteMany({ partner: "gini" });
+    assert.equal(await catalogSignature(original), mapped);
+
+    try {
+      invalidateCatalogBlockCache();
+      await CatalogBlock.create({ vendorId: "vendor-order", brandId: "brand-order" });
+      invalidateCatalogBlockCache();
+      assert.notEqual(await catalogSignature(original), mapped);
+    } finally {
+      await CatalogBlock.deleteMany({ vendorId: "vendor-order" });
+      invalidateCatalogBlockCache();
+    }
+    assert.equal(await catalogSignature(original), mapped);
+  });
+
+  it("resumes a paused preview when only category and subcategory order changes", async () => {
+    await makeProduct({ itemCode: "ORDER-1", ibsherId: "order-1" });
+    await makeProduct({ itemCode: "ORDER-2", ibsherId: "order-2" });
+    await mapCollection();
+    setGiniBulkBatchSize(1);
+    setGiniBulkAfterProduct(async ({ processed }) => {
+      if (processed === 1) await pauseGiniSyncAll();
+    });
+    const paused = await startPreview();
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.processed, 1);
+    setGiniBulkAfterProduct(null);
+    categoryMode = "reordered";
+    calls = [];
+    await resumeGiniSyncAll();
+    await waitForGiniBulkIdle();
+    const done = (await getLatestGiniSyncJob()).job;
+    assert.equal(done.id, paused.id);
+    assert.equal(done.status, "preview");
+    assert.equal(done.processed, 2);
+    assert.equal(done.catalogSignature, paused.catalogSignature);
+    assert.equal(await catalogSignature(normalizeGiniCategories(reorderedLiveTree()).categories), paused.catalogSignature);
+    assert.equal(done.created, 0);
+    assert.equal(posts().length, 0);
+    assert.equal(await GiniSyncProductResult.countDocuments({ jobId: done.id }), 2);
+
+    await GiniSyncJob.deleteMany({});
+    await GiniSyncProductResult.deleteMany({});
+    calls = [];
+    categoryMode = "";
+    await makeProduct({ itemCode: "ORDER-3", ibsherId: "order-3" });
+    setGiniBulkBatchSize(1);
+    setGiniBulkAfterProduct(async ({ processed }) => {
+      if (processed === 1) await pauseGiniSyncAll();
+    });
+    const subsPaused = await startPreview();
+    setGiniBulkAfterProduct(null);
+    categoryMode = "reordered-subs";
+    calls = [];
+    await resumeGiniSyncAll();
+    await waitForGiniBulkIdle();
+    const subsDone = (await getLatestGiniSyncJob()).job;
+    assert.equal(subsDone.id, subsPaused.id);
+    assert.equal(subsDone.status, "preview");
+    assert.equal(subsDone.processed, 3);
+    assert.equal(subsDone.catalogSignature, subsPaused.catalogSignature);
+    assert.equal(
+      await catalogSignature(normalizeGiniCategories(reorderedSubcategoriesTree()).categories),
+      subsPaused.catalogSignature
+    );
+    assert.equal(subsDone.created, 0);
+    assert.equal(posts().length, 0);
+  });
+
+  it("marks a preview stale when a category id or active flag changes", async () => {
+    const activePaused = await pausePreviewAfterFirst("ACTIVE-STALE");
+    categoryMode = "inactive-home";
+    await assertResumeStale(activePaused);
+
+    await GiniSyncJob.deleteMany({});
+    await GiniSyncProductResult.deleteMany({});
+    calls = [];
+    categoryMode = "";
+    const idPaused = await pausePreviewAfterFirst("ID-STALE");
+    categoryMode = "replaced-id";
+    await assertResumeStale(idPaused);
+  });
+
+  it("marks a preview stale when mappings, commission, or product bounds change", async () => {
+    const mapped = await pausePreviewAfterFirst("MAP-STALE");
+    await mapCollection({
+      categoryId: "2",
+      categoryName: "Hidden",
+      subcategoryId: "20",
+      subcategoryName: "Archived",
+    });
+    await assertResumeStale(mapped);
+
+    await GiniSyncJob.deleteMany({});
+    await GiniSyncProductResult.deleteMany({});
+    await mapCollection();
+    calls = [];
+    const ruled = await pausePreviewAfterFirst("RULE-STALE");
+    await Commission.create({ partner: "gini", scope: "all", targetId: "*", percentage: 12, isActive: true });
+    await assertResumeStale(ruled);
+
+    await GiniSyncJob.deleteMany({});
+    await GiniSyncProductResult.deleteMany({});
+    await Commission.deleteMany({ partner: "gini" });
+    calls = [];
+    const bounded = await pausePreviewAfterFirst("BOUND-STALE");
+    await makeProduct({ itemCode: "BOUND-STALE-2", ibsherId: "bound-stale-2" });
+    await assertResumeStale(bounded);
+  });
+
   it("keeps the saved category signature when a resumed preview sees a different tree", async () => {
     await makeProduct({ itemCode: "SIG-1" });
     await makeProduct({ itemCode: "SIG-2" });
@@ -2184,6 +2470,7 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     const stale = (await getLatestGiniSyncJob()).job;
     assert.equal(stale.status, "stale");
     assert.equal(stale.errorCode, "preview_stale");
+    assert.equal(stale.lastError, "The catalog changed during Full Preview. Run Full Preview again.");
     assert.equal(stale.catalogSignature, signature);
     assert.equal(stale.processed, 1);
     assert.equal(await GiniSyncProductResult.countDocuments({ jobId: stale.id }), 1);
