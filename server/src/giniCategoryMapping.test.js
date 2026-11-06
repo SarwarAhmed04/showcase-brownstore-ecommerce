@@ -13,7 +13,7 @@ import { PlatformTaxonomyConfig } from "./models/PlatformTaxonomyConfig.js";
 import { GiniConnection } from "./models/GiniConnection.js";
 import { applyCommissionRate } from "./utils/commission.js";
 import { GINI_CATEGORIES_PATH, GINI_PING_PATH } from "./utils/giniSigner.js";
-import { GINI_DEFAULT_BASE_URL, setGiniFetch } from "./services/giniConnection.js";
+import { GINI_DEFAULT_BASE_URL, setGiniCategoryRetryScale, setGiniFetch } from "./services/giniConnection.js";
 import {
   applyCategoryChange,
   applySubcategoryChange,
@@ -324,6 +324,7 @@ describe("GINI live category mapping", { concurrency: 1 }, () => {
   });
 
   after(async () => {
+    setGiniCategoryRetryScale(1);
     setGiniFetch(null);
     await new Promise((resolve) => server.close(resolve));
     await mongoose.disconnect();
@@ -332,6 +333,7 @@ describe("GINI live category mapping", { concurrency: 1 }, () => {
 
   beforeEach(async () => {
     methods.length = 0;
+    setGiniCategoryRetryScale(0);
     setGiniFetch(null);
     await GiniConnection.deleteMany({});
     await PlatformTaxonomyConfig.deleteMany({ partner: "gini" });
@@ -521,6 +523,10 @@ describe("GINI live category mapping", { concurrency: 1 }, () => {
     setGiniFetch(async () => mockResponse(500, { message: "unavailable" }));
     const failed = await call("GET", "/api/admin/platforms/gini/categories?refresh=1");
     assert.equal(failed.status, 400);
+    assert.equal(failed.json.code, "categories_unavailable");
+    assert.equal(failed.json.httpStatus, 500);
+    assert.equal(failed.json.failureClass, "temporary");
+    assert.equal(failed.raw.includes(SECRET), false);
     assert.equal(await PlatformTaxonomyConfig.countDocuments({ partner: "gini" }), 2);
     assert.equal(
       giniMappingStatus(

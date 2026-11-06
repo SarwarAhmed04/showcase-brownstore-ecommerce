@@ -331,6 +331,22 @@ export const api = {
     request("/api/admin/platforms/gini/sync-all/resume", { method: "POST", body: JSON.stringify({}) }),
   giniSyncAllStop: () =>
     request("/api/admin/platforms/gini/sync-all/stop", { method: "POST", body: JSON.stringify({}) }),
+  giniResyncStatus: () => request("/api/admin/platforms/gini/resync"),
+  giniResyncPreview: () =>
+    request("/api/admin/platforms/gini/resync/preview", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  giniResyncStart: (body) =>
+    request("/api/admin/platforms/gini/resync/start", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  giniResyncReconcile: (body) =>
+    request("/api/admin/platforms/gini/resync/reconcile", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   giniConnection: () => request("/api/admin/platforms/gini/connection"),
   saveGiniConnection: (body) =>
     request("/api/admin/platforms/gini/connection", {

@@ -31,10 +31,33 @@ const HOST_ERROR_CODES = new Set([
 ]);
 
 let fetchImpl = globalThis.fetch.bind(globalThis);
+let categoryRetryScale = 1;
+
+/** Bounded attempts for one category GET, including the first request. */
+export const GINI_CATEGORY_GET_ATTEMPTS = 4;
 
 /** @param {typeof fetch | null} fn Test helper. Production uses global fetch. */
 export function setGiniFetch(fn) {
   fetchImpl = typeof fn === "function" ? fn : globalThis.fetch.bind(globalThis);
+}
+
+/** @param {number | null} scale Test helper. 0 skips category retry waits. Production uses 1. */
+export function setGiniCategoryRetryScale(scale) {
+  categoryRetryScale = scale == null ? 1 : Number(scale);
+}
+
+export function giniCategoryRetryDelayMs(attempt, retryAfterSeconds, scale = categoryRetryScale) {
+  let ms;
+  if (retryAfterSeconds != null && Number.isFinite(Number(retryAfterSeconds))) {
+    ms = Math.min(Math.max(0, Number(retryAfterSeconds)) * 1000, 120000);
+  } else {
+    const exponent = Math.max(0, Number(attempt) || 0);
+    ms = Math.min(1000 * 2 ** exponent, 30000);
+  }
+  if (Number(scale) === 0) return 0;
+  const factor = Number(scale);
+  const scaled = Number.isFinite(factor) && factor > 0 ? ms * factor : ms;
+  return Math.min(Math.max(0, scaled), 120000);
 }
 
 export class GiniConnectionError extends Error {
@@ -43,6 +66,11 @@ export class GiniConnectionError extends Error {
     this.name = "GiniConnectionError";
     this.status = Number(details.status) || 400;
     this.code = details.code || "";
+    this.httpStatus = details.httpStatus == null ? 0 : Number(details.httpStatus) || 0;
+    this.failureClass = String(details.failureClass || "")
+      .replace(/[^a-z0-9_]/gi, "")
+      .slice(0, 40);
+    this.retryAfter = details.retryAfter == null || !Number.isFinite(Number(details.retryAfter)) ? null : Number(details.retryAfter);
   }
 }
 
@@ -355,6 +383,7 @@ async function giniGet(baseUrl, path, { clientId, clientSecret, timeoutMs, query
       text: text.slice(0, 20000),
       json: safeJson(text, contentType),
       signedPath: signed.path,
+      signature: signed.signature,
     };
   } finally {
     clearTimeout(timer);
@@ -530,6 +559,86 @@ function categorySummary(json) {
   };
 }
 
+function categoryRetryWait(ms) {
+  const delay = Number(ms) || 0;
+  if (delay <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+function classifyCategoryHttp(response, secrets) {
+  const status = Number(response?.status) || 0;
+  const edge = isEdgeBlock(status, response?.contentType, response?.text);
+  let failureClass = "categories_rejected";
+  if (edge) failureClass = "edge_blocked";
+  else if (status === 401 || status === 403) failureClass = "auth_failed";
+  else if (status === 429) failureClass = "rate_limited";
+  else if (!status || status === 408 || status >= 500) failureClass = "temporary";
+  const snippet = buildSafeErrorMessage(
+    response?.json,
+    buildSafeBodySnippet(response?.text, response?.contentType, secrets),
+    secrets
+  );
+  return {
+    httpStatus: status,
+    failureClass,
+    retryAfter: retryAfterSeconds(response?.response),
+    snippet,
+  };
+}
+
+function throwCategoryUnavailable(details, secrets) {
+  const where = details.httpStatus ? `HTTP ${details.httpStatus}` : "no HTTP response";
+  const extra = details.snippet ? ` ${details.snippet}` : "";
+  const message = sanitizeGiniText(
+    `Could not load GINI categories (${where}, ${details.failureClass}).${extra}`,
+    secrets
+  );
+  throw new GiniConnectionError(message, {
+    status: 400,
+    code: "categories_unavailable",
+    httpStatus: details.httpStatus || 0,
+    failureClass: details.failureClass,
+    retryAfter: details.retryAfter ?? null,
+  });
+}
+
+function categoryTransportFailure(err) {
+  return {
+    httpStatus: 0,
+    failureClass: "temporary",
+    retryAfter: null,
+    snippet: isTimeout(err) ? "The category request timed out." : "The category request failed before a response.",
+  };
+}
+
+async function readCategoryPage(config, query, secrets) {
+  let last = null;
+  for (let attempt = 0; attempt < GINI_CATEGORY_GET_ATTEMPTS; attempt += 1) {
+    let response;
+    try {
+      response = await giniGet(config.baseUrl, GINI_CATEGORIES_PATH, {
+        clientId: config.clientId,
+        clientSecret: config.clientSecret,
+        timeoutMs: DEFAULT_TIMEOUT_MS,
+        query,
+      });
+    } catch (err) {
+      if (err instanceof GiniConnectionError) throw err;
+      last = categoryTransportFailure(err);
+      if (attempt >= GINI_CATEGORY_GET_ATTEMPTS - 1) throwCategoryUnavailable(last, secrets);
+      await categoryRetryWait(giniCategoryRetryDelayMs(attempt, null));
+      continue;
+    }
+    if (response.status === 200) return response;
+    const pageSecrets = [...secrets, response.signature];
+    last = classifyCategoryHttp(response, pageSecrets);
+    const retryable = last.failureClass === "temporary" || last.failureClass === "rate_limited";
+    if (!retryable || attempt >= GINI_CATEGORY_GET_ATTEMPTS - 1) throwCategoryUnavailable(last, pageSecrets);
+    await categoryRetryWait(giniCategoryRetryDelayMs(attempt, last.retryAfter));
+  }
+  throwCategoryUnavailable(last || { httpStatus: 0, failureClass: "temporary", snippet: "" }, secrets);
+}
+
 export async function fetchGiniCategoryTree() {
   const config = await resolveGiniConfig();
   if (config.secretUnreadable) {
@@ -539,38 +648,38 @@ export async function fetchGiniCategoryTree() {
   if (current.status !== "connected" || !config.baseUrl || !config.clientId || !config.clientSecret) {
     return { connectionRequired: true, categories: [] };
   }
+  const secrets = [config.clientSecret, config.clientId];
   const payloads = [];
   let query = "";
   for (let page = 1; page <= GINI_CATEGORY_PAGE_LIMIT; page += 1) {
-    const response = await giniGet(config.baseUrl, GINI_CATEGORIES_PATH, {
-      clientId: config.clientId,
-      clientSecret: config.clientSecret,
-      timeoutMs: DEFAULT_TIMEOUT_MS,
-      query,
-    });
-    if (response.status !== 200) {
-      throw new GiniConnectionError("Could not load GINI categories.", {
-        status: 400,
-        code: "categories_unavailable",
-      });
-    }
+    const response = await readCategoryPage(config, query, secrets);
     payloads.push(response.json);
     const next = giniCategoryNextQuery(response.json, page);
     if (!next) break;
     if (page === GINI_CATEGORY_PAGE_LIMIT) {
-      throw new GiniConnectionError("Could not load GINI categories.", {
-        status: 400,
-        code: "categories_unavailable",
-      });
+      throwCategoryUnavailable(
+        {
+          httpStatus: 200,
+          failureClass: "categories_incomplete",
+          retryAfter: null,
+          snippet: "Category pagination did not finish.",
+        },
+        secrets
+      );
     }
     query = next;
   }
   const normalized = normalizeGiniCategories(mergeGiniCategoryPayloads(payloads));
   if (!normalized.ok) {
-    throw new GiniConnectionError("Could not load GINI categories.", {
-      status: 400,
-      code: "categories_unavailable",
-    });
+    throwCategoryUnavailable(
+      {
+        httpStatus: 200,
+        failureClass: "categories_invalid",
+        retryAfter: null,
+        snippet: normalized.message || "Category response was not a category tree.",
+      },
+      secrets
+    );
   }
   return { connectionRequired: false, categories: normalized.categories };
 }

@@ -14,6 +14,7 @@ import AvailabilityPanel from "../../components/admin/platform/AvailabilityPanel
 import CategorySetupPanel from "../../components/admin/platform/CategorySetupPanel";
 import GiniApiConnection from "../../components/admin/platform/GiniApiConnection";
 import GiniSyncAll from "../../components/admin/platform/GiniSyncAll";
+import GiniResyncDeleted from "../../components/admin/platform/GiniResyncDeleted";
 import GiniSyncOneProduct from "../../components/admin/platform/GiniSyncOneProduct";
 import GiniSkuCreatePanel from "../../components/admin/platform/GiniSkuCreatePanel";
 import MiswagApiConnection from "../../components/admin/platform/MiswagApiConnection";
@@ -2115,7 +2116,12 @@ function PartnerCommission({ partnerSlug, t, lang }) {
         </>
       ) : null}
 
-      {tab === "syncAll" && partnerSlug === "gini" ? <GiniSyncAll t={t} /> : null}
+      {tab === "syncAll" && partnerSlug === "gini" ? (
+        <>
+          <GiniSyncAll t={t} />
+          <GiniResyncDeleted t={t} />
+        </>
+      ) : null}
 
       {ElryanHost ? <ElryanHost tab={tab} partnerSlug={partnerSlug} t={t} lang={lang} /> : null}
 

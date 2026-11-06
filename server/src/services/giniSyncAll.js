@@ -83,9 +83,12 @@ export class GiniBulkError extends Error {
 }
 
 class GiniBulkPause extends Error {
-  constructor(pauseStatus, message) {
+  constructor(pauseStatus, message, diagnostics = {}) {
     super(message);
     this.pauseStatus = pauseStatus;
+    this.code = diagnostics.code || "";
+    this.httpStatus = diagnostics.httpStatus == null ? null : Number(diagnostics.httpStatus) || 0;
+    this.failureClass = diagnostics.failureClass || "";
   }
 }
 
@@ -779,13 +782,24 @@ function launchGiniJob(jobId) {
   return true;
 }
 
-async function pauseJob(jobId, token, status, message) {
+async function pauseJob(jobId, token, status, message, diagnostics = {}) {
   const patch = {
     status,
     pausedAt: new Date(),
     lastError: safeText(message),
     failureSummary: safeText(message),
   };
+  if (diagnostics.code) {
+    patch.errorCode = String(diagnostics.code)
+      .replace(/[^a-z0-9_]/gi, "")
+      .slice(0, 80);
+  }
+  if (diagnostics.httpStatus != null) patch.lastHttpStatus = Number(diagnostics.httpStatus) || 0;
+  if (diagnostics.failureClass) {
+    patch.failureClass = String(diagnostics.failureClass)
+      .replace(/[^a-z0-9_]/gi, "")
+      .slice(0, 40);
+  }
   const filter = { _id: jobId, status: { $in: RUNNING } };
   if (token) filter.runnerToken = token;
   await GiniSyncJob.updateOne(filter, { $set: patch });
@@ -799,14 +813,19 @@ async function failJob(jobId, token, err) {
     .replace(/[^a-z0-9_]/gi, "")
     .slice(0, 80) || "gini_sync_failed";
   console.error(`GINI sync job failed (${errorCode}): ${lastError}`);
-  await GiniSyncJob.updateOne(filter, {
-    $set: {
-      status: "failed",
-      finishedAt: new Date(),
-      lastError,
-      errorCode,
-    },
-  });
+  const patch = {
+    status: "failed",
+    finishedAt: new Date(),
+    lastError,
+    errorCode,
+  };
+  if (err?.httpStatus != null) patch.lastHttpStatus = Number(err.httpStatus) || 0;
+  if (err?.failureClass) {
+    patch.failureClass = String(err.failureClass)
+      .replace(/[^a-z0-9_]/gi, "")
+      .slice(0, 40);
+  }
+  await GiniSyncJob.updateOne(filter, { $set: patch });
 }
 
 async function runBody(id) {
@@ -816,8 +835,13 @@ async function runBody(id) {
     if (!token) return;
     await execute(id, token);
   } catch (err) {
-    if (err instanceof GiniBulkPause) await pauseJob(id, token, err.pauseStatus, err.message);
-    else await failJob(id, token, err);
+    if (err instanceof GiniBulkPause) {
+      await pauseJob(id, token, err.pauseStatus, err.message, {
+        code: err.code,
+        httpStatus: err.httpStatus,
+        failureClass: err.failureClass,
+      });
+    } else await failJob(id, token, err);
   } finally {
     if (token) await GiniSyncJob.updateOne({ _id: id, runnerToken: token }, { $set: { runnerToken: "" } });
     if (activeRunner?.jobId === id) activeRunner = null;
@@ -846,19 +870,119 @@ async function stillRunning(jobId) {
   return Boolean(fresh && RUNNING.includes(fresh.status));
 }
 
+function pauseForCategoryError(err) {
+  if (!err || err.code !== "categories_unavailable") return null;
+  const failureClass = String(err.failureClass || "temporary")
+    .replace(/[^a-z0-9_]/gi, "")
+    .slice(0, 40) || "temporary";
+  const pauseStatus =
+    failureClass === "edge_blocked"
+      ? "edge_blocked"
+      : failureClass === "auth_failed"
+        ? "auth_failed"
+        : failureClass === "rate_limited"
+          ? "rate_limited"
+          : "paused";
+  return new GiniBulkPause(pauseStatus, err.message, {
+    code: "categories_unavailable",
+    httpStatus: Number(err.httpStatus) || 0,
+    failureClass,
+  });
+}
+
+async function cursorPrefixIsComplete(job) {
+  if (!job) return false;
+  const cursor = String(job.cursorProductId || "");
+  if (!cursor) return true;
+  if (!mongoose.isValidObjectId(cursor)) return false;
+  const ids = await Product.find({ _id: { $lte: new mongoose.Types.ObjectId(cursor) } }).select("_id").lean();
+  if (!ids.some((doc) => String(doc._id) === cursor)) return false;
+  const productIds = ids.map((doc) => String(doc._id));
+  const classified = await GiniSyncProductResult.countDocuments({
+    jobId: job._id,
+    productId: { $in: productIds },
+  });
+  return classified === productIds.length;
+}
+
+async function previewStateCanPause(job) {
+  if (!job) return false;
+  if (!(await cursorPrefixIsComplete(job))) return false;
+  if (job.mode === "preview" && (Number(job.processed) || 0) > 0 && !String(job.catalogSignature || "")) return false;
+  return true;
+}
+
+function unsafePreviewError(pause) {
+  const fatal = new GiniBulkError("Full Preview progress cannot be resumed safely. Run Full Preview again.", {
+    status: 409,
+    code: "preview_not_resumable",
+  });
+  fatal.httpStatus = Number(pause?.httpStatus) || 0;
+  fatal.failureClass = pause?.failureClass || "";
+  return fatal;
+}
+
+async function loadCategoryTree(jobId) {
+  const job = await GiniSyncJob.findById(jobId).lean();
+  let live;
+  try {
+    live = await fetchGiniCategoryTree();
+  } catch (err) {
+    const pause = pauseForCategoryError(err);
+    if (!pause) throw err;
+    if (!(await previewStateCanPause(job))) throw unsafePreviewError(pause);
+    throw pause;
+  }
+  if (live.connectionRequired) {
+    throw new GiniBulkError("Connect GINI API first.", { status: 409, code: "connection_required" });
+  }
+  return live;
+}
+
+async function markPreviewTreeStale(jobId, token) {
+  await GiniSyncJob.updateOne(
+    { _id: jobId, runnerToken: token, status: { $in: RUNNING } },
+    {
+      $set: {
+        status: "stale",
+        finishedAt: new Date(),
+        lastError: "The GINI category tree changed during Full Preview. Run Full Preview again.",
+        errorCode: "preview_stale",
+      },
+    }
+  );
+}
+
 async function execute(jobId, token) {
   const job = await GiniSyncJob.findById(jobId);
   if (!job || !RUNNING.includes(job.status)) return;
   if (job.mode === "sync" && !giniBulkWritesEnabled()) {
     throw new GiniBulkPause("paused", "GINI bulk writes are disabled.");
   }
-  const live = await fetchGiniCategoryTree();
-  if (live.connectionRequired) {
-    throw new GiniBulkError("Connect GINI API first.", { status: 409, code: "connection_required" });
-  }
+  const live = await loadCategoryTree(jobId);
   const signature = await catalogSignature(live.categories);
+  let startSignature = signature;
   if (job.mode === "preview") {
-    await GiniSyncJob.updateOne({ _id: jobId, runnerToken: token }, { $set: { catalogSignature: signature } });
+    const saved = String(job.catalogSignature || "");
+    if (saved && saved !== signature) {
+      await markPreviewTreeStale(jobId, token);
+      return;
+    }
+    if (!saved) {
+      const claimed = await GiniSyncJob.updateOne(
+        { _id: jobId, runnerToken: token, status: { $in: RUNNING }, catalogSignature: { $in: ["", null] } },
+        { $set: { catalogSignature: signature } }
+      );
+      if (!claimed.matchedCount) {
+        const fresh = await GiniSyncJob.findById(jobId).select("catalogSignature status").lean();
+        if (!fresh || !RUNNING.includes(fresh.status)) return;
+        if (fresh.catalogSignature && fresh.catalogSignature !== signature) {
+          await markPreviewTreeStale(jobId, token);
+          return;
+        }
+      }
+    }
+    startSignature = saved || signature;
   } else if (signature !== job.catalogSignature) {
     await GiniSyncJob.updateOne(
       { _id: jobId, runnerToken: token, status: { $in: RUNNING } },
@@ -909,7 +1033,7 @@ async function execute(jobId, token) {
     }
     const batch = await Product.find(cursorFilter(state.cursor)).sort({ _id: 1 }).limit(batchSize).lean();
     if (!batch.length) {
-      if (job.mode === "preview") await finishPreview(jobId, token, counters, state, signature);
+      if (job.mode === "preview") await finishPreview(jobId, token, counters, state, startSignature);
       else await finish(jobId, token, counters, state, "completed", {});
       return;
     }
@@ -1020,18 +1144,37 @@ async function finish(jobId, token, counters, state, status, extras) {
 }
 
 async function finishPreview(jobId, token, counters, state, startSignature) {
+  const kept = await flush(jobId, token, counters, state);
+  if (!kept) return;
   let status = "preview";
+  let staleReason = "";
   try {
     const live = await fetchGiniCategoryTree();
     if (live.connectionRequired) status = "stale";
     else {
       const end = await catalogSignature(live.categories);
-      if (end !== startSignature) status = "stale";
+      if (end !== startSignature) {
+        status = "stale";
+        staleReason = "The GINI category tree changed during Full Preview. Run Full Preview again.";
+      }
     }
-  } catch {
+  } catch (err) {
+    const pause = pauseForCategoryError(err);
+    if (pause) {
+      const current = await GiniSyncJob.findById(jobId).lean();
+      if (!(await previewStateCanPause(current))) throw unsafePreviewError(pause);
+      throw pause;
+    }
     status = "stale";
   }
-  await finish(jobId, token, counters, state, status, {});
+  await finish(
+    jobId,
+    token,
+    counters,
+    state,
+    status,
+    staleReason ? { lastError: staleReason, errorCode: "preview_stale" } : {}
+  );
 }
 
 function publicJob(job, extras = {}) {
@@ -1071,6 +1214,8 @@ function publicJob(job, extras = {}) {
     failureSummary: raw.failureSummary || "",
     lastError: raw.lastError || "",
     errorCode: raw.errorCode || "",
+    lastHttpStatus: Number(raw.lastHttpStatus) || 0,
+    failureClass: raw.failureClass || "",
     startedAt: raw.startedAt,
     finishedAt: raw.finishedAt,
     pausedAt: raw.pausedAt,
@@ -1731,10 +1876,27 @@ export async function pauseGiniSyncAll() {
 }
 
 export async function resumeGiniSyncAll() {
-  const job = await GiniSyncJob.findOne({
+  let job = await GiniSyncJob.findOne({
     partner: "gini",
     status: { $in: ["paused", "auth_failed", "rate_limited", "edge_blocked"] },
   }).sort({ createdAt: -1 });
+  if (!job) {
+    const failed = await GiniSyncJob.findOne({
+      partner: "gini",
+      status: "failed",
+      mode: "preview",
+      errorCode: "categories_unavailable",
+    }).sort({ createdAt: -1 });
+    if (failed) {
+      if (!(await previewStateCanPause(failed))) {
+        throw new GiniBulkError("This Full Preview cannot be resumed safely. Run Full Preview again.", {
+          status: 409,
+          code: "preview_not_resumable",
+        });
+      }
+      job = failed;
+    }
+  }
   if (!job) throw new GiniBulkError("No paused GINI sync job to resume.", { status: 404, code: "not_paused" });
   if (job.mode === "sync" && !giniBulkWritesEnabled()) {
     throw new GiniBulkError("GINI bulk writes are disabled.", { status: 409, code: "bulk_writes_disabled" });
@@ -1748,7 +1910,19 @@ export async function resumeGiniSyncAll() {
   const next = job.mode === "preview" ? "preview_running" : "running";
   await GiniSyncJob.updateOne(
     { _id: job._id },
-    { $set: { status: next, pausedAt: null, lastError: "", runnerToken: "", heartbeatAt: null } }
+    {
+      $set: {
+        status: next,
+        pausedAt: null,
+        finishedAt: null,
+        lastError: "",
+        errorCode: "",
+        failureClass: "",
+        lastHttpStatus: 0,
+        runnerToken: "",
+        heartbeatAt: null,
+      },
+    }
   );
   launchGiniJob(job._id);
   const fresh = await GiniSyncJob.findById(job._id);

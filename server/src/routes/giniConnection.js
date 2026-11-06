@@ -23,16 +23,22 @@ import {
   stopGiniChangedSync,
 } from "../services/giniProductUpdate.js";
 import { reconcileGiniImageReplacement, resolveGiniImageReplacement, startGiniImageReplacement } from "../services/giniImageReplacement.js";
+import { getLatestGiniResyncJob, reconcileGiniResync, runGiniResyncPreview, startGiniResync } from "../services/giniResync.js";
 import { previewGiniSkuCreate, sendGiniSkuCreate } from "../services/giniSkuCreate.js";
 
 export const giniConnectionRouter = Router();
 
 function fail(res, err, fallback) {
   if (err instanceof GiniConnectionError) {
-    return res.status(err.status >= 400 && err.status < 500 ? err.status : 400).json({
+    const body = {
       message: err.message || fallback,
       code: err.code || undefined,
-    });
+    };
+    if (err.code === "categories_unavailable" || err.failureClass) {
+      body.httpStatus = Number(err.httpStatus) || 0;
+      if (err.failureClass) body.failureClass = err.failureClass;
+    }
+    return res.status(err.status >= 400 && err.status < 500 ? err.status : 400).json(body);
   }
   const status = Number(err?.status) || 500;
   if (status >= 500) console.error("GINI connection error");
@@ -329,6 +335,54 @@ giniConnectionRouter.post("/platforms/gini/sku-create/send", async (req, res) =>
     );
   } catch (err) {
     fail(res, err, "Failed to create the GINI product");
+  }
+});
+
+giniConnectionRouter.get("/platforms/gini/resync", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await getLatestGiniResyncJob(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to load GINI re-sync");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/resync/preview", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await runGiniResyncPreview(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to preview GINI re-sync");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/resync/start", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(
+      assertNoSecretLeak(
+        await startGiniResync({
+          confirm: body.confirm === true,
+          previewId: body.previewId,
+          previewSignature: body.previewSignature,
+          skus: body.skus,
+          expectedCount: body.expectedCount,
+          scope: body.scope,
+          all: body.all === true,
+          authorizeHistorical: body.authorizeHistorical === true,
+        }),
+        ""
+      )
+    );
+  } catch (err) {
+    fail(res, err, "Failed to re-sync GINI products");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/resync/reconcile", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(assertNoSecretLeak(await reconcileGiniResync({ confirm: body.confirm === true, sku: body.sku }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to reconcile GINI re-sync");
   }
 });
 

@@ -50,6 +50,8 @@ const giniSyncJobSchema = new mongoose.Schema(
     failureSummary: { type: String, default: "" },
     lastError: { type: String, default: "" },
     errorCode: { type: String, default: "" },
+    lastHttpStatus: { type: Number, default: 0 },
+    failureClass: { type: String, default: "" },
     runnerToken: { type: String, default: "" },
     heartbeatAt: { type: Date, default: null },
     startedAt: { type: Date, default: null },
