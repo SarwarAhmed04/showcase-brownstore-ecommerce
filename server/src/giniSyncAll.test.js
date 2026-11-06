@@ -94,6 +94,7 @@ let mediaCalls;
 let allowPost;
 let remote;
 let lookupMode;
+let uncertainSkus;
 let rateBudget;
 let postMode;
 let recoverOnLose;
@@ -239,6 +240,7 @@ function installFetch() {
 }
 
 function handleLookup(sku) {
+  if (uncertainSkus?.has(giniSkuKey(sku))) return mockResponse(500, { message: "upstream" });
   if (lookupMode === "auth") return mockResponse(401, { message: "unauthorized" });
   if (lookupMode === "edge") {
     return mockResponse(
@@ -345,6 +347,10 @@ async function call(method, urlPath, { body, auth = true } = {}) {
   });
   const json = await response.json().catch(() => ({}));
   return { status: response.status, json };
+}
+
+function catalogId(index) {
+  return index.toString(16).padStart(24, "0");
 }
 
 function simpleVariant(stock = 5, extra = {}) {
@@ -734,6 +740,7 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     delete process.env.GINI_ALLOW_LIVE_UPDATE_WRITES;
     remote = new Map();
     lookupMode = "";
+    uncertainSkus = null;
     rateBudget = 0;
     postMode = "";
     recoverOnLose = false;
@@ -1330,6 +1337,195 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     assert.equal(job.lookupUncertain, 5);
     assert.equal(job.readyCreate, 0);
     assert.equal(posts().length, 0);
+  });
+
+  it("continues a preview when five LOOKUP_UNCERTAIN results are separated by valid outcomes", async () => {
+    const keep = await makeProduct({ _id: catalogId(5), itemCode: "KEEP-1", ibsherId: "keep-1" });
+    await mapCollection();
+    const seeded = await previewAll();
+    const seededRow = (await rowsFor(seeded))[0];
+    assert.equal(seededRow.classification, "READY_CREATE");
+    assert.ok(seededRow.payloadHash);
+    await GiniSyncSendState.create({
+      partner: "gini",
+      productId: String(keep._id),
+      sku: "KEEP-1",
+      skuKey: giniSkuKey("KEEP-1"),
+      giniProductId: "901",
+      payloadHash: seededRow.payloadHash,
+      jobId: seeded.id,
+    });
+    await GiniSyncJob.deleteMany({});
+    await GiniSyncProductResult.deleteMany({});
+    calls = [];
+
+    const specs = [
+      { sku: "OK-A", id: 1 },
+      { sku: "MISS-1", id: 2, uncertain: true },
+      { sku: "EXISTS-1", id: 3, exists: "77" },
+      { sku: "MISS-2", id: 4, uncertain: true },
+      { sku: "MISS-3", id: 6, uncertain: true },
+      { sku: "OFF-1", id: 7, inactive: true },
+      { sku: "MISS-4", id: 8, uncertain: true },
+      { sku: "NO-IMAGE", id: 9, noImage: true },
+      { sku: "MISS-5", id: 10, uncertain: true },
+      { sku: "REVIEW-1", id: 11, price: 0 },
+      { sku: "OK-B", id: 12 },
+    ];
+    uncertainSkus = new Set();
+    for (const spec of specs) {
+      if (spec.uncertain) uncertainSkus.add(giniSkuKey(spec.sku));
+      if (spec.exists) remote.set(giniSkuKey(spec.sku), { id: spec.exists, sku: spec.sku });
+      await makeProduct({
+        _id: catalogId(spec.id),
+        itemCode: spec.sku,
+        ibsherId: `streak-${spec.sku}`,
+        isActive: !spec.inactive,
+        price: spec.price,
+        variants: spec.noImage
+          ? [{ color: { en: "white" }, images: [], sizes: [{ size: "medium", stockQuantity: 5 }] }]
+          : undefined,
+      });
+    }
+
+    const job = await previewAll();
+    const rows = await rowsFor(job);
+    const bySku = Object.fromEntries(rows.map((row) => [row.sku, row]));
+    assert.equal(job.status, "preview");
+    assert.equal(job.processed, 12);
+    assert.equal(job.total, 12);
+    assert.equal(job.lookupUncertain, 5);
+    assert.equal(job.readyCreate, 2);
+    assert.equal(job.alreadyExists, 1);
+    assert.equal(job.unchanged, 1);
+    assert.equal(job.inactive, 1);
+    assert.equal(job.blocked, 1);
+    assert.equal(job.needsReview, 1);
+    assert.equal(job.created, 0);
+    assert.equal(rows.length, 12);
+    assert.equal(bySku["OK-A"].classification, "READY_CREATE");
+    assert.equal(bySku["OK-B"].classification, "READY_CREATE");
+    assert.equal(bySku["EXISTS-1"].classification, "ALREADY_EXISTS");
+    assert.equal(bySku["KEEP-1"].classification, "UNCHANGED");
+    assert.equal(bySku["OFF-1"].classification, "INACTIVE");
+    assert.equal(bySku["NO-IMAGE"].classification, "BLOCKED");
+    assert.equal(bySku["NO-IMAGE"].blockers.includes("missing_image"), true);
+    assert.equal(bySku["REVIEW-1"].classification, "NEEDS_REVIEW");
+    for (const sku of ["MISS-1", "MISS-2", "MISS-3", "MISS-4", "MISS-5"]) {
+      assert.equal(bySku[sku].classification, "LOOKUP_UNCERTAIN");
+      assert.equal(bySku[sku].blockers.includes("gini_lookup_failed"), true);
+      assert.equal(bySku[sku].giniProductId, "");
+    }
+    assert.equal(posts().length, 0);
+    assert.equal(await GiniSyncSendState.countDocuments({ sku: { $in: ["MISS-1", "MISS-2", "MISS-3", "MISS-4", "MISS-5"] } }), 0);
+  });
+
+  it("pauses on five consecutive lookup failures and resumes the same preview from its cursor", async () => {
+    const skus = ["OK-A", "OK-B", "E-1", "E-2", "E-3", "E-4", "E-5", "OK-C", "OK-D"];
+    uncertainSkus = new Set(["E-1", "E-2", "E-3", "E-4", "E-5"].map((sku) => giniSkuKey(sku)));
+    for (let index = 0; index < skus.length; index += 1) {
+      await makeProduct({ _id: catalogId(index + 1), itemCode: skus[index], ibsherId: `run-${skus[index]}` });
+    }
+    await mapCollection();
+    await runGiniSyncPreview();
+    await waitForGiniBulkIdle();
+    const paused = (await getLatestGiniSyncJob()).job;
+    const products = await Product.find().sort({ _id: 1 }).select("_id itemCode").lean();
+    assert.deepEqual(
+      products.map((item) => item.itemCode),
+      skus
+    );
+    const fifthUncertain = String(products[6]._id);
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.processed, 7);
+    assert.equal(paused.total, 9);
+    assert.equal(paused.readyCreate, 2);
+    assert.equal(paused.lookupUncertain, 5);
+    assert.equal(paused.created, 0);
+    assert.equal(paused.cursorProductId, fifthUncertain);
+    assert.equal(posts().length, 0);
+    const pausedRows = await GiniSyncProductResult.find({ jobId: paused.id }).lean();
+    assert.equal(pausedRows.length, 7);
+    const pausedBySku = Object.fromEntries(pausedRows.map((row) => [row.sku, row]));
+    assert.equal(pausedBySku["OK-A"].classification, "READY_CREATE");
+    assert.equal(pausedBySku["OK-B"].classification, "READY_CREATE");
+    for (const sku of ["E-1", "E-2", "E-3", "E-4", "E-5"]) {
+      assert.equal(pausedBySku[sku].classification, "LOOKUP_UNCERTAIN");
+      assert.equal(pausedBySku[sku].blockers.includes("gini_lookup_failed"), true);
+      assert.equal(pausedBySku[sku].giniProductId, "");
+    }
+    assert.equal(pausedRows.some((row) => row.sku === "OK-C" || row.sku === "OK-D"), false);
+    const savedIds = new Map(pausedRows.map((row) => [row.productId, String(row._id)]));
+    await rejectsCode(runGiniSyncPreview, "sync_active");
+    await rejectsCode(
+      () =>
+        startGiniSyncAll({
+          confirm: true,
+          previewJobId: paused.id,
+          catalogSignature: paused.catalogSignature,
+          expectedReady: paused.readyCreate,
+          scope: "full",
+          approveFullRun: true,
+        }),
+      "preview_required"
+    );
+
+    const signature = paused.catalogSignature;
+    calls = [];
+    await resumeGiniSyncAll();
+    await waitForGiniBulkIdle();
+    const done = (await getLatestGiniSyncJob()).job;
+    const doneRows = await rowsFor(done);
+    const doneBySku = Object.fromEntries(doneRows.map((row) => [row.sku, row]));
+    assert.equal(done.id, paused.id);
+    assert.equal(done.status, "preview");
+    assert.equal(done.processed, 9);
+    assert.equal(done.total, 9);
+    assert.equal(done.readyCreate, 4);
+    assert.equal(done.lookupUncertain, 5);
+    assert.equal(done.created, 0);
+    assert.equal(done.catalogSignature, signature);
+    assert.equal(done.cursorProductId, String(products[8]._id));
+    assert.equal(doneRows.length, 9);
+    assert.equal(new Set(doneRows.map((row) => row.productId)).size, 9);
+    for (const [productId, id] of savedIds) {
+      assert.equal(String(doneBySku[pausedRows.find((row) => row.productId === productId).sku]._id), id);
+    }
+    for (const sku of ["E-1", "E-2", "E-3", "E-4", "E-5"]) {
+      assert.equal(doneBySku[sku].classification, "LOOKUP_UNCERTAIN");
+      assert.equal(doneBySku[sku].blockers.includes("gini_lookup_failed"), true);
+      assert.equal(doneBySku[sku].giniProductId, "");
+    }
+    assert.equal(doneBySku["OK-A"].classification, "READY_CREATE");
+    assert.equal(doneBySku["OK-B"].classification, "READY_CREATE");
+    assert.equal(doneBySku["OK-C"].classification, "READY_CREATE");
+    assert.equal(doneBySku["OK-D"].classification, "READY_CREATE");
+    for (const product of products.slice(7)) {
+      assert.equal(String(product._id) > fifthUncertain, true);
+      assert.equal(doneBySku[product.itemCode].classification, "READY_CREATE");
+    }
+    const lookedUp = productGets().map((item) => skuFromProductUrl(item.url));
+    assert.deepEqual(lookedUp.filter((sku) => skus.includes(sku)).sort(), ["OK-C", "OK-D"]);
+    assert.equal(posts().length, 0);
+
+    calls = [];
+    const synced = await runSync(done);
+    const sent = posts().map((item) => formFields(item.options).sku);
+    assert.deepEqual(sent, ["OK-A", "OK-B", "OK-C", "OK-D"]);
+    assert.equal(synced.created, 4);
+    const syncedBySku = Object.fromEntries((await rowsFor(synced)).map((row) => [row.sku, row]));
+    for (const sku of ["E-1", "E-2", "E-3", "E-4", "E-5"]) {
+      assert.equal(syncedBySku[sku].classification, "BLOCKED");
+      assert.equal(syncedBySku[sku].errorCode, "not_in_approved_preview");
+    }
+    const preserved = await GiniSyncProductResult.find({ jobId: done.id }).lean();
+    const preservedBySku = Object.fromEntries(preserved.map((row) => [row.sku, row]));
+    for (const sku of ["E-1", "E-2", "E-3", "E-4", "E-5"]) {
+      assert.equal(preservedBySku[sku].classification, "LOOKUP_UNCERTAIN");
+      assert.equal(preservedBySku[sku].blockers.includes("gini_lookup_failed"), true);
+      assert.equal(String(preservedBySku[sku]._id), savedIds.get(preservedBySku[sku].productId));
+    }
+    assert.equal(await GiniSyncSendState.countDocuments({ sku: { $in: ["E-1", "E-2", "E-3", "E-4", "E-5"] } }), 0);
   });
 
   it("recovers a stale runner without creating an accepted SKU again", async () => {

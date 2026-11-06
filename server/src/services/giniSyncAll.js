@@ -56,6 +56,12 @@ export const GINI_SYNC_BATCH_SIZE = 100;
 export const GINI_BULK_LIMIT_MAX = 25;
 const LOCK_STALE_MS = 15000;
 const SYSTEMATIC_FAILURES = 5;
+const FAILURE_STREAK_CLASSIFICATIONS = new Set([
+  "FAILED",
+  "CREATE_UNCERTAIN",
+  "LOOKUP_UNCERTAIN",
+  "UPDATE_UNCERTAIN",
+]);
 const ACTIVE_JOB = ["preview_running", "running", "paused", "auth_failed", "rate_limited", "edge_blocked"];
 const RUNNING = ["preview_running", "running"];
 const CLASS_FIELDS = {
@@ -1434,10 +1440,10 @@ async function execute(jobId, token) {
         noteBlockers(state.blockerCounts, evaluation.blockers);
         pushExample(state.examples, evaluation);
         await rememberSend(evaluation, jobId);
-        if (evaluation.classification === "CREATED") failureStreak = 0;
-        if (["FAILED", "CREATE_UNCERTAIN", "LOOKUP_UNCERTAIN", "UPDATE_UNCERTAIN"].includes(evaluation.classification)) {
-          failureStreak += 1;
-        }
+        // Full Preview never creates products. Count only consecutive failed or
+        // uncertain results, and clear the streak after every other stored outcome.
+        if (FAILURE_STREAK_CLASSIFICATIONS.has(evaluation.classification)) failureStreak += 1;
+        else failureStreak = 0;
       }
       state.cursor = productId;
       state.sinceFlush = (state.sinceFlush || 0) + 1;
