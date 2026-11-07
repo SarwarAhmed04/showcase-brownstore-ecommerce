@@ -166,6 +166,7 @@ export default function ElryanSyncOneProduct({ t, lang }) {
     token_expired: t.elryanSendReasonExpired,
     send_attempt_blocked: t.elryanSendReasonAttempt,
     wrong_sku: t.elryanSendReasonSku,
+    pricing_unverified: t.elryanSendReasonPrice,
   };
   const lineText = {
     created: t.elryanSendResultCreated,

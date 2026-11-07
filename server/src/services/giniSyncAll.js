@@ -48,6 +48,12 @@ import {
 import { findExistingGiniProduct } from "./giniSkuLookup.js";
 import { isGiniHistoricalHoldSku } from "../utils/giniHistoricalHold.js";
 import { classifyOfficialFieldChange, localConfirmedCatalogDecision } from "../utils/giniCatalogSync.js";
+import {
+  canReuseLocalPreviewRow,
+  localPreviewFingerprint,
+  lookupOutcomeOf,
+  storedLookupReusable,
+} from "../utils/giniPreviewRecovery.js";
 import { giniMappingStatus, summarizeGiniMappingCoverage } from "../utils/giniCategoryTree.js";
 import { confirmedFieldSnapshotKey, loadConfirmedFieldSnapshots } from "../utils/giniConfirmedFields.js";
 import { giniUpdateWritesEnabled } from "./giniProductUpdate.js";
@@ -56,7 +62,6 @@ export const GINI_SYNC_BATCH_SIZE = 100;
 export const GINI_BULK_LIMIT_MAX = 25;
 const LOCK_STALE_MS = 15000;
 const SYSTEMATIC_FAILURES = 5;
-const PREVIEW_CATALOG_STALE_MESSAGE = "The catalog changed during Full Preview. Run Full Preview again.";
 const FAILURE_STREAK_CLASSIFICATIONS = new Set([
   "FAILED",
   "CREATE_UNCERTAIN",
@@ -86,6 +91,7 @@ let activeRunner = null;
 let paceOverride = null;
 let batchOverride = null;
 let afterProduct = null;
+let beforePreviewSeal = null;
 let beforeSend = null;
 let batchSizes = [];
 let skuIndexScans = 0;
@@ -166,12 +172,18 @@ export function setGiniBulkBeforeSend(fn) {
   beforeSend = typeof fn === "function" ? fn : null;
 }
 
+/** Test hook. Runs between the two final catalog reads, before a preview can be approved. */
+export function setGiniBulkBeforePreviewSeal(fn) {
+  beforePreviewSeal = typeof fn === "function" ? fn : null;
+}
+
 export function resetGiniBulkForTests() {
   activeRunner = null;
   paceOverride = 0;
   batchOverride = null;
   afterProduct = null;
   beforeSend = null;
+  beforePreviewSeal = null;
   batchSizes = [];
   skuIndexScans = 0;
   remoteLookupCount = 0;
@@ -365,7 +377,7 @@ export function canonicalGiniSignatureTree(categories) {
     );
 }
 
-export async function catalogSignature(categories) {
+async function signatureParts(categories) {
   const [bounds, rules, context] = await Promise.all([
     productBounds(),
     Commission.find({ partner: "gini" }).select("scope targetId percentage isActive filterPath").lean(),
@@ -383,19 +395,65 @@ export async function catalogSignature(categories) {
   const inactive = ["category", "subcategory", "collection", "brand", "vendor", "product"].map((scope) =>
     [...(context.inactive?.[scope] || [])].sort().join(",")
   );
-  const body = JSON.stringify({
+  return {
+    bounds,
+    policy: {
+      version: "policy-1",
+      partnerActive: context.partnerActive === true,
+      rules: ruleRows,
+      mappings,
+      inactive,
+      vendorBrands: [...(context.blockedVendorBrands || [])].sort(),
+      tree,
+    },
+  };
+}
+
+function hashSignature(body) {
+  return crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex");
+}
+
+/** Commission, mappings, visibility, and the GINI category policy. Product membership is not included. */
+export async function policySignature(categories) {
+  const { policy } = await signatureParts(categories);
+  return hashSignature(policy);
+}
+
+/** Full catalog hash, including product count and id bounds. Membership changes do not invalidate a preview. */
+export async function catalogSignature(categories) {
+  const { bounds, policy } = await signatureParts(categories);
+  return hashSignature({
     version: 1,
     total: bounds.total,
     min: bounds.min,
     max: bounds.max,
-    partnerActive: context.partnerActive === true,
-    rules: ruleRows,
-    mappings,
-    inactive,
-    vendorBrands: [...(context.blockedVendorBrands || [])].sort(),
-    tree,
+    partnerActive: policy.partnerActive,
+    rules: policy.rules,
+    mappings: policy.mappings,
+    inactive: policy.inactive,
+    vendorBrands: policy.vendorBrands,
+    tree: policy.tree,
   });
-  return crypto.createHash("sha256").update(body).digest("hex");
+}
+
+export async function loadGiniPreviewAssessmentContext(categories) {
+  const [rules, eligibility, skuOwners, sendState] = await Promise.all([
+    Commission.find({ partner: "gini", isActive: { $ne: false } }).lean(),
+    loadEligibilityContext("gini"),
+    buildSkuOwnerIndex(),
+    loadSendState(),
+  ]);
+  return {
+    rules,
+    eligibility,
+    categories: categories || [],
+    skuOwners,
+    policySignature: await policySignature(categories),
+    mappingCache: new Map(),
+    sendByProduct: sendState.byProduct,
+    sendBySku: sendState.bySku,
+    approvedIds: null,
+  };
 }
 
 async function buildSkuOwnerIndex() {
@@ -411,6 +469,24 @@ async function buildSkuOwnerIndex() {
     else owners.set(key, [id]);
   }
   return owners;
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Candidates for one giniSkuKey. Whitespace runs match a hyphen; callers confirm with giniSkuKey. */
+function skuKeyCandidatePattern(skuKey) {
+  const body = [...String(skuKey)].map((char) => (char === "-" ? "(?:-|\\s+)" : escapeRegex(char))).join("");
+  return new RegExp(`^\\s*${body}\\s*$`, "i");
+}
+
+/** Current BrownStore ids that share this SKU. One query, not another full owner-index scan. */
+async function loadFreshSkuOwnerIds(sku) {
+  const skuKey = giniSkuKey(sku);
+  if (!skuKey) return [];
+  const docs = await Product.find({ itemCode: skuKeyCandidatePattern(skuKey) }).select("_id itemCode").lean();
+  return docs.filter((doc) => giniSkuKey(doc.itemCode) === skuKey).map((doc) => String(doc._id));
 }
 
 async function loadSendState() {
@@ -441,6 +517,92 @@ async function loadApprovedIds(previewJobId, classification = "READY_CREATE") {
     .cursor();
   for await (const row of cursor) ids.add(String(row.productId));
   return ids;
+}
+
+/** Approved create evidence. A product id alone does not authorize a later payload. */
+async function loadApprovedCreates(previewJobId) {
+  const rows = new Map();
+  if (!mongoose.isValidObjectId(previewJobId)) return rows;
+  const cursor = GiniSyncProductResult.find({
+    jobId: previewJobId,
+    classification: "READY_CREATE",
+  })
+    .select("productId skuKey payloadHash")
+    .lean()
+    .cursor();
+  for await (const row of cursor) {
+    rows.set(String(row.productId), {
+      skuKey: String(row.skuKey || ""),
+      payloadHash: String(row.payloadHash || ""),
+    });
+  }
+  return rows;
+}
+
+function matchesApprovedCreate(evidence, evaluation) {
+  if (!evidence || !evaluation) return false;
+  const skuKey = String(evaluation.skuKey || "");
+  const payloadHash = String(evaluation.payloadHash || "");
+  return (
+    Boolean(evidence.skuKey) &&
+    evidence.skuKey === skuKey &&
+    Boolean(evidence.payloadHash) &&
+    evidence.payloadHash === payloadHash &&
+    evaluation.classification === "READY_CREATE"
+  );
+}
+
+function approvedCreateDrifted(evidence, assessed) {
+  if (!evidence) return false;
+  const skuKey = String(assessed?.skuKey || "");
+  const payloadHash = String(assessed?.payloadHash || "");
+  const stillEligible = assessed?.requiresLookup === true;
+  return !(
+    evidence.skuKey &&
+    evidence.skuKey === skuKey &&
+    evidence.payloadHash &&
+    evidence.payloadHash === payloadHash &&
+    stillEligible
+  );
+}
+
+function blockUnapprovedCreate(doc, evaluation) {
+  return withIdentity(doc, evaluation, {
+    classification: "BLOCKED",
+    blockers: ["approved_preview_mismatch"],
+    reason: blockerMessage("approved_preview_mismatch"),
+    errorCode: "approved_preview_mismatch",
+    giniProductId: "",
+    attemptedSend: false,
+  });
+}
+
+function blockDuplicateSku(doc, evaluation) {
+  return withIdentity(doc, evaluation, {
+    classification: "BLOCKED",
+    blockers: ["duplicate_brownstore_sku"],
+    reason: blockerMessage("duplicate_brownstore_sku"),
+    errorCode: "duplicate_brownstore_sku",
+    giniProductId: "",
+    attemptedSend: false,
+  });
+}
+
+function approvedPreviewMismatch(doc, assessed) {
+  return withIdentity(doc, {
+    classification: "BLOCKED",
+    blockers: ["approved_preview_mismatch"],
+    reason: blockerMessage("approved_preview_mismatch"),
+    errorCode: "approved_preview_mismatch",
+    sku: assessed?.sku || "",
+    skuKey: assessed?.skuKey || "",
+    giniPrice: assessed?.localPlan?.giniPrice ?? null,
+    quantity: assessed?.localPlan?.quantity ?? null,
+    imageCount: assessed?.localPlan?.imageCount || 0,
+    payloadHash: assessed?.payloadHash || "",
+    payloadPreview: assessed?.localPlan?.payloadPreview || null,
+    attemptedSend: false,
+  });
 }
 
 async function pacedGiniRead(request) {
@@ -562,17 +724,52 @@ function withIdentity(doc, evaluation, extras = {}) {
   };
 }
 
-async function evaluateCatalogProduct(doc, shared) {
+function stampPreviewEvidence(evaluation, assessed, lookupOutcome, lookupSkuKey = "") {
+  return {
+    ...evaluation,
+    localFingerprint: assessed?.localFingerprint || "",
+    policySignature: assessed?.policySignature || "",
+    lookupOutcome: lookupOutcome || "",
+    lookupSkuKey: lookupSkuKey || "",
+  };
+}
+
+function inactivePreviewCodes(isActive, eligibility) {
+  const codes = [];
+  if (!isActive) codes.push("product_inactive");
+  for (const reason of eligibility?.reasons || []) {
+    if (reason.code && reason.code !== "taxonomy_config_missing") codes.push(reason.code);
+  }
+  return codes;
+}
+
+/** Local plan for one product. A lookup is still required before READY_CREATE. */
+export function assessGiniPreviewProduct(doc, shared) {
   const resolved = toResolvedProduct(doc);
+  const policy = shared?.policySignature || "";
   if (!resolved) {
-    return withIdentity(doc, {
+    const evaluation = withIdentity(doc, {
       classification: "BLOCKED",
       blockers: ["product_not_found"],
       reason: blockerMessage("product_not_found"),
       errorCode: "product_not_found",
     });
+    const localFingerprint = localPreviewFingerprint({
+      blockers: evaluation.blockers,
+      policySignature: policy,
+    });
+    return {
+      requiresLookup: false,
+      evaluation,
+      localFingerprint,
+      policySignature: policy,
+      sku: "",
+      skuKey: "",
+      payloadHash: "",
+      ownerIds: [],
+      inactiveCodes: [],
+    };
   }
-  const productId = String(doc._id);
   const priced = partnerPricePreview(doc, shared.rules);
   const sku = normalizeGiniItemCode(doc.itemCode);
   const skuKey = giniSkuKey(sku);
@@ -593,46 +790,101 @@ async function evaluateCatalogProduct(doc, shared) {
     existing: null,
   });
   const isActive = resolved.isActive !== false;
-  const inactiveByRule = (eligibility.reasons || []).some((reason) => reason.code !== "taxonomy_config_missing");
+  const inactiveCodes = inactivePreviewCodes(isActive, eligibility);
+  const localFingerprint = localPreviewFingerprint({
+    skuKey,
+    payloadHash: giniPayloadHash(localPlan.payloadPreview),
+    blockers: localPlan.blockers,
+    ownerIds: owners,
+    inactiveCodes,
+    policySignature: policy,
+  });
+  const assessed = {
+    requiresLookup: false,
+    localFingerprint,
+    policySignature: policy,
+    sku,
+    skuKey,
+    payloadHash: giniPayloadHash(localPlan.payloadPreview),
+    ownerIds: owners.map(String),
+    inactiveCodes,
+    localPlan,
+    resolved,
+    priced,
+    owners,
+    mapping,
+  };
+  const inactiveByRule = inactiveCodes.length > 0;
   if (!isActive || inactiveByRule) {
-    return withIdentity(
-      doc,
-      classifyGiniBulk({ plan: localPlan, isActive, eligibility, localSend: null })
-    );
+    return {
+      ...assessed,
+      evaluation: withIdentity(doc, classifyGiniBulk({ plan: localPlan, isActive, eligibility, localSend: null })),
+    };
   }
   if (localPlan.blockers.length) {
-    return withIdentity(doc, classifyGiniBulk({ plan: localPlan, isActive: true, eligibility, localSend: null }));
+    return {
+      ...assessed,
+      evaluation: withIdentity(doc, classifyGiniBulk({ plan: localPlan, isActive: true, eligibility, localSend: null })),
+    };
   }
+  return { ...assessed, requiresLookup: true, evaluation: null };
+}
+
+async function evaluateCatalogProduct(doc, shared, options = {}) {
+  const assessed = assessGiniPreviewProduct(doc, shared);
+  const productKey = String(doc._id);
+  const approvedCreate = shared.approvedCreates?.get(productKey);
+  if (approvedCreate && approvedCreateDrifted(approvedCreate, assessed)) {
+    return stampPreviewEvidence(approvedPreviewMismatch(doc, assessed), assessed, "skipped");
+  }
+  const source = options.skipSourceReuse ? null : shared.sourceByProduct?.get(String(doc._id));
+  if (source && !assessed.requiresLookup && canReuseLocalPreviewRow(source, assessed.evaluation)) {
+    return stampPreviewEvidence(assessed.evaluation, assessed, "skipped");
+  }
+  if (!assessed.requiresLookup) return stampPreviewEvidence(assessed.evaluation, assessed, "skipped");
+  const { localPlan, sku, skuKey, owners, mapping, resolved, priced } = assessed;
+  const productId = String(doc._id);
   const localSend =
     shared.sendByProduct.get(productId) || (skuKey ? shared.sendBySku.get(skuKey) : null) || null;
   if (localSend?.giniProductId) {
     const decision = localConfirmedCatalogDecision({ plan: localPlan, localSend });
-    if (decision.action === "store") return withIdentity(doc, decision.result);
+    if (decision.action === "store") return stampPreviewEvidence(withIdentity(doc, decision.result), assessed, "skipped");
     const found = await lookupSku(sku, shared, { fresh: true });
     const confirmed = classifyConfirmedSend({ plan: localPlan, localSend, found });
-    if (confirmed.classification !== "ALREADY_EXISTS") return withIdentity(doc, confirmed);
+    if (confirmed.classification !== "ALREADY_EXISTS") {
+      return stampPreviewEvidence(withIdentity(doc, confirmed), assessed, lookupOutcomeOf(found), skuKey);
+    }
     const snapshot =
       shared.snapshots?.get(confirmedFieldSnapshotKey(localSend.skuKey || skuKey, localSend.giniProductId, localSend.payloadHash)) ||
       null;
-    return withIdentity(doc, classifyOfficialFieldChange({ plan: localPlan, localSend, snapshot }));
+    return stampPreviewEvidence(
+      withIdentity(doc, classifyOfficialFieldChange({ plan: localPlan, localSend, snapshot })),
+      assessed,
+      "exists",
+      skuKey
+    );
   }
   const approved = !shared.approvedIds || shared.approvedIds.has(productId);
   if (!approved) {
-    return withIdentity(doc, {
-      classification: "BLOCKED",
-      blockers: ["not_in_approved_preview"],
-      reason: blockerMessage("not_in_approved_preview"),
-      errorCode: "not_in_approved_preview",
-      sku,
-      skuKey,
-      giniPrice: localPlan.giniPrice,
-      quantity: localPlan.quantity,
-      imageCount: localPlan.imageCount,
-      payloadHash: giniPayloadHash(localPlan.payloadPreview),
-      payloadPreview: localPlan.payloadPreview,
-    });
+    return stampPreviewEvidence(
+      withIdentity(doc, {
+        classification: "BLOCKED",
+        blockers: ["not_in_approved_preview"],
+        reason: blockerMessage("not_in_approved_preview"),
+        errorCode: "not_in_approved_preview",
+        sku,
+        skuKey,
+        giniPrice: localPlan.giniPrice,
+        quantity: localPlan.quantity,
+        imageCount: localPlan.imageCount,
+        payloadHash: giniPayloadHash(localPlan.payloadPreview),
+        payloadPreview: localPlan.payloadPreview,
+      }),
+      assessed,
+      "skipped"
+    );
   }
-  const found = await lookupSku(sku, shared, { fresh: false });
+  const found = options.lookupOverride || (await lookupSku(sku, shared, { fresh: false }));
   const plan = buildGiniPlanFromParts({
     doc,
     resolved,
@@ -641,7 +893,12 @@ async function evaluateCatalogProduct(doc, shared) {
     mapping,
     existing: found,
   });
-  return withIdentity(doc, classifyGiniBulk({ plan, isActive: true, eligibility: null, localSend: null }));
+  return stampPreviewEvidence(
+    withIdentity(doc, classifyGiniBulk({ plan, isActive: true, eligibility: null, localSend: null })),
+    assessed,
+    lookupOutcomeOf(found),
+    skuKey
+  );
 }
 
 function confirmedCreateId(response, skuKey) {
@@ -742,6 +999,8 @@ async function postCreate(doc, evaluation, shared) {
   }
   await pace();
   if (beforeSend) await beforeSend({ productId: evaluation.productId, sku: evaluation.sku });
+  const ownerIds = await loadFreshSkuOwnerIds(evaluation.sku);
+  if (ownerIds.length !== 1 || !ownerIds.includes(String(doc._id))) return blockDuplicateSku(doc, evaluation);
   const form = buildGiniCreateForm(evaluation.payloadPreview, files);
   let response;
   try {
@@ -1286,20 +1545,6 @@ async function loadCategoryTree(jobId) {
   return live;
 }
 
-async function markPreviewTreeStale(jobId, token) {
-  await GiniSyncJob.updateOne(
-    { _id: jobId, runnerToken: token, status: { $in: RUNNING } },
-    {
-      $set: {
-        status: "stale",
-        finishedAt: new Date(),
-        lastError: PREVIEW_CATALOG_STALE_MESSAGE,
-        errorCode: "preview_stale",
-      },
-    }
-  );
-}
-
 async function execute(jobId, token) {
   const job = await GiniSyncJob.findById(jobId);
   if (!job || !RUNNING.includes(job.status)) return;
@@ -1314,41 +1559,38 @@ async function execute(jobId, token) {
     }
   }
   const live = await loadCategoryTree(jobId);
+  const policy = await policySignature(live.categories);
   const signature = await catalogSignature(live.categories);
-  let startSignature = signature;
   if (job.mode === "preview") {
-    const saved = String(job.catalogSignature || "");
-    if (saved && saved !== signature) {
-      await markPreviewTreeStale(jobId, token);
-      return;
-    }
-    if (!saved) {
+    const savedPolicy = String(job.policySignature || "");
+    const savedFull = String(job.catalogSignature || "");
+    if (!savedPolicy && !savedFull) {
       const claimed = await GiniSyncJob.updateOne(
         { _id: jobId, runnerToken: token, status: { $in: RUNNING }, catalogSignature: { $in: ["", null] } },
-        { $set: { catalogSignature: signature } }
+        { $set: { catalogSignature: signature, policySignature: policy } }
       );
       if (!claimed.matchedCount) {
-        const fresh = await GiniSyncJob.findById(jobId).select("catalogSignature status").lean();
+        const fresh = await GiniSyncJob.findById(jobId).select("status").lean();
         if (!fresh || !RUNNING.includes(fresh.status)) return;
-        if (fresh.catalogSignature && fresh.catalogSignature !== signature) {
-          await markPreviewTreeStale(jobId, token);
-          return;
-        }
       }
     }
-    startSignature = saved || signature;
-  } else if (signature !== job.catalogSignature) {
-    await GiniSyncJob.updateOne(
-      { _id: jobId, runnerToken: token, status: { $in: RUNNING } },
-      {
-        $set: {
-          status: "stale",
-          finishedAt: new Date(),
-          lastError: "The catalog changed after Full Preview. Run Full Preview again.",
-        },
-      }
-    );
-    return;
+  } else {
+    const expectedPolicy = String(job.policySignature || "");
+    const expected = expectedPolicy || String(job.catalogSignature || "");
+    const actual = expectedPolicy ? policy : signature;
+    if (expected && actual !== expected) {
+      await GiniSyncJob.updateOne(
+        { _id: jobId, runnerToken: token, status: { $in: RUNNING } },
+        {
+          $set: {
+            status: "stale",
+            finishedAt: new Date(),
+            lastError: "The catalog changed after Full Preview. Run Full Preview again.",
+          },
+        }
+      );
+      return;
+    }
   }
   const [rules, eligibility, skuOwners, sendState] = await Promise.all([
     Commission.find({ partner: "gini", isActive: { $ne: false } }).lean(),
@@ -1357,6 +1599,7 @@ async function execute(jobId, token) {
     loadSendState(),
   ]);
   const snapshots = await loadConfirmedFieldSnapshots(sendState.rows);
+  const approvedCreates = job.mode === "sync" ? await loadApprovedCreates(job.previewJobId) : null;
   if (!job.mappingCoverage) {
     const coverage = await collectMappingCoverage(live.categories);
     await GiniSyncJob.updateOne({ _id: jobId, runnerToken: token }, { $set: { mappingCoverage: coverage } });
@@ -1375,6 +1618,7 @@ async function execute(jobId, token) {
     rules,
     eligibility,
     categories: live.categories,
+    policySignature: policy,
     skuOwners,
     sendBySku: sendState.bySku,
     sendByProduct: sendState.byProduct,
@@ -1382,13 +1626,29 @@ async function execute(jobId, token) {
     jobId,
     runScope: job.runScope,
     applyUpdates: job.applyUpdates === true,
-    approvedIds: job.mode === "sync" ? await loadApprovedIds(job.previewJobId) : null,
+    approvedCreates,
+    approvedIds: approvedCreates ? new Set(approvedCreates.keys()) : null,
     approvedChanged: job.mode === "sync" && job.applyUpdates === true ? await loadApprovedIds(job.previewJobId, "CHANGED") : null,
+    sourceByProduct: job.mode === "preview" ? await loadSourcePreviewRows(job.sourceJobId) : null,
     mappingCache: new Map(),
     lookupCache: new Map(),
     counters,
     sendLimit: Number.isInteger(job.sendLimit) ? job.sendLimit : null,
   };
+  if (job.mode === "preview") {
+    const retryUncertain = job.retryUncertainLookups === true;
+    if (retryUncertain) {
+      await GiniSyncJob.updateOne(
+        { _id: jobId, runnerToken: token, status: { $in: RUNNING } },
+        { $set: { retryUncertainLookups: false } }
+      );
+    }
+    await reconcilePreviewCheckpoint(jobId, shared, { retryUncertain });
+    const refreshed = await countersFromDb(jobId);
+    refreshed.remoteLookups = counters.remoteLookups;
+    Object.assign(counters, refreshed);
+    state.blockerCounts = await blockerCountsFromDb(jobId);
+  }
   const batchSize = job.batchSize || currentBatchSize();
   let failureStreak = 0;
   while (await stillRunning(jobId)) {
@@ -1398,7 +1658,7 @@ async function execute(jobId, token) {
     }
     const batch = await Product.find(cursorFilter(state.cursor)).sort({ _id: 1 }).limit(batchSize).lean();
     if (!batch.length) {
-      if (job.mode === "preview") await finishPreview(jobId, token, counters, state, startSignature);
+      if (job.mode === "preview") await finishPreview(jobId, token, counters, state, shared);
       else await finish(jobId, token, counters, state, "completed", {});
       return;
     }
@@ -1459,7 +1719,13 @@ async function execute(jobId, token) {
           });
         } else {
           const again = await evaluateCatalogProduct(fresh, shared);
-          evaluation = again.classification === "READY_CREATE" ? await postCreate(fresh, again, shared) : again;
+          const evidence = shared.approvedCreates?.get(String(fresh._id));
+          evaluation =
+            again.classification === "READY_CREATE" && matchesApprovedCreate(evidence, again)
+              ? await postCreate(fresh, again, shared)
+              : again.classification === "READY_CREATE"
+                ? blockUnapprovedCreate(fresh, again)
+                : again;
         }
       }
       const inserted = await insertResult(jobId, evaluation);
@@ -1493,30 +1759,235 @@ async function execute(jobId, token) {
   }
 }
 
+function storedResultFields(evaluation) {
+  return {
+    sku: evaluation.sku || "",
+    skuKey: evaluation.skuKey || "",
+    classification: evaluation.classification,
+    blockers: evaluation.blockers || [],
+    reason: safeText(evaluation.reason || ""),
+    errorCode: String(evaluation.errorCode || "").slice(0, 80),
+    httpStatus: Number(evaluation.httpStatus) || 0,
+    giniProductId: String(evaluation.giniProductId || ""),
+    giniPrice: evaluation.giniPrice ?? null,
+    quantity: evaluation.quantity ?? null,
+    imageCount: evaluation.imageCount || 0,
+    payloadHash: evaluation.payloadHash || "",
+    localFingerprint: evaluation.localFingerprint || "",
+    policySignature: evaluation.policySignature || "",
+    lookupOutcome: evaluation.lookupOutcome || "",
+    lookupSkuKey: evaluation.lookupSkuKey || "",
+  };
+}
+
 async function insertResult(jobId, evaluation) {
   try {
     await GiniSyncProductResult.create({
       jobId,
       partner: "gini",
       productId: evaluation.productId,
-      sku: evaluation.sku || "",
-      skuKey: evaluation.skuKey || "",
-      classification: evaluation.classification,
-      blockers: evaluation.blockers || [],
-      reason: safeText(evaluation.reason || ""),
-      errorCode: String(evaluation.errorCode || "").slice(0, 80),
-      httpStatus: Number(evaluation.httpStatus) || 0,
-      giniProductId: String(evaluation.giniProductId || ""),
-      giniPrice: evaluation.giniPrice ?? null,
-      quantity: evaluation.quantity ?? null,
-      imageCount: evaluation.imageCount || 0,
-      payloadHash: evaluation.payloadHash || "",
+      ...storedResultFields(evaluation),
     });
     return true;
   } catch (err) {
     if (err?.code === 11000) return false;
     throw err;
   }
+}
+
+async function updateStoredResult(jobId, evaluation) {
+  const updated = await GiniSyncProductResult.updateOne(
+    { jobId, productId: evaluation.productId },
+    { $set: storedResultFields(evaluation) }
+  );
+  return updated.matchedCount > 0;
+}
+
+async function refreshPreviewShared(shared, categories) {
+  const [rules, eligibility, skuOwners] = await Promise.all([
+    Commission.find({ partner: "gini", isActive: { $ne: false } }).lean(),
+    loadEligibilityContext("gini"),
+    buildSkuOwnerIndex(),
+  ]);
+  shared.rules = rules;
+  shared.eligibility = eligibility;
+  shared.skuOwners = skuOwners;
+  shared.mappingCache = new Map();
+  shared.categories = categories;
+  shared.policySignature = await policySignature(categories);
+}
+
+async function loadSourcePreviewRows(sourceJobId) {
+  const map = new Map();
+  if (!mongoose.isValidObjectId(String(sourceJobId || ""))) return map;
+  const cursor = GiniSyncProductResult.find({ jobId: sourceJobId })
+    .select("productId sku skuKey classification blockers payloadHash")
+    .lean()
+    .cursor();
+  for await (const row of cursor) map.set(String(row.productId), row);
+  return map;
+}
+
+async function reconcilePreviewCheckpoint(jobId, shared, { retryUncertain = false } = {}) {
+  const products = await Product.find().sort({ _id: 1 }).lean();
+  const rows = await GiniSyncProductResult.find({ jobId }).lean();
+  const rowById = new Map(rows.map((row) => [String(row.productId), row]));
+  const liveIds = new Set(products.map((doc) => String(doc._id)));
+  const orphanIds = rows.filter((row) => !liveIds.has(String(row.productId))).map((row) => row._id);
+  if (orphanIds.length) await GiniSyncProductResult.deleteMany({ _id: { $in: orphanIds } });
+  for (const doc of products) {
+    const row = rowById.get(String(doc._id));
+    if (!row) continue;
+    const uncertain = row.classification === "LOOKUP_UNCERTAIN" || row.lookupOutcome === "uncertain";
+    if (!row.localFingerprint && !(retryUncertain && uncertain)) continue;
+    const assessed = assessGiniPreviewProduct(doc, shared);
+    if (!uncertain && row.localFingerprint && row.localFingerprint === assessed.localFingerprint) continue;
+    if (uncertain && !retryUncertain && row.localFingerprint === assessed.localFingerprint) continue;
+    const localSend =
+      shared.sendByProduct.get(String(doc._id)) || (assessed.skuKey ? shared.sendBySku.get(assessed.skuKey) : null) || null;
+    const lookupOverride = localSend?.giniProductId ? null : storedLookupReusable(row, assessed.skuKey);
+    const evaluation = await evaluateCatalogProduct(doc, shared, {
+      lookupOverride: lookupOverride || undefined,
+      skipSourceReuse: true,
+    });
+    await updateStoredResult(jobId, evaluation);
+  }
+  return products;
+}
+
+async function fillMissingPreviewProducts(jobId, token, shared, counters, state) {
+  const products = await Product.find().sort({ _id: 1 }).select("_id").lean();
+  const rows = await GiniSyncProductResult.find({ jobId }).select("productId").lean();
+  const have = new Set(rows.map((row) => String(row.productId)));
+  const missingIds = products.map((doc) => String(doc._id)).filter((id) => !have.has(id));
+  if (!missingIds.length) {
+    if (products.length) state.cursor = String(products[products.length - 1]._id);
+    return;
+  }
+  const docs = await Product.find({ _id: { $in: missingIds } }).lean();
+  docs.sort((left, right) => compareCodeUnit(String(left._id), String(right._id)));
+  for (const doc of docs) {
+    if (!(await stillRunning(jobId))) return;
+    const evaluation = await evaluateCatalogProduct(doc, shared);
+    const inserted = await insertResult(jobId, evaluation);
+    if (inserted) {
+      addCount(counters, evaluation.classification);
+      if (catalogEligible(evaluation)) counters.eligible += 1;
+      noteBlockers(state.blockerCounts, evaluation.blockers);
+      pushExample(state.examples, evaluation);
+      await rememberSend(evaluation, jobId);
+    }
+    state.cursor = String(doc._id);
+    const kept = await flush(jobId, token, counters, state);
+    if (!kept) return;
+  }
+  if (products.length) state.cursor = String(products[products.length - 1]._id);
+}
+
+const PREVIEW_SEAL_ATTEMPTS = 3;
+const PREVIEW_SEAL_PAUSE =
+  "The catalog changed while Full Preview was checking its final results. Resume to check again. Nothing was sent.";
+
+function stableJson(value) {
+  if (Array.isArray(value)) return value.map(stableJson);
+  if (value instanceof Date) return value.toISOString();
+  if (value && typeof value === "object") {
+    if (typeof value.toHexString === "function") return value.toHexString();
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      if (value[key] !== undefined) out[key] = stableJson(value[key]);
+    }
+    return out;
+  }
+  return value ?? null;
+}
+
+/**
+ * Persisted product fields that can change GINI classification, payload, SKU identity, or eligibility.
+ * lastSyncedAt and other sync timestamps are omitted so a refresh of those fields does not refuse the seal.
+ */
+const CATALOG_EPOCH_SELECT =
+  "itemCode price discountPrice ibsherDiscountPrice isActive name description brand category subCategory collectionName createdBy variants overrides";
+
+function catalogEpochMaterial(doc) {
+  return JSON.stringify(
+    stableJson({
+      id: String(doc._id),
+      itemCode: doc.itemCode || "",
+      price: doc.price ?? null,
+      discountPrice: doc.discountPrice ?? null,
+      ibsherDiscountPrice: doc.ibsherDiscountPrice ?? null,
+      isActive: doc.isActive !== false,
+      name: doc.name || null,
+      description: doc.description || null,
+      brand: doc.brand || null,
+      category: doc.category || null,
+      subCategory: doc.subCategory || null,
+      collectionName: doc.collectionName || null,
+      createdBy: doc.createdBy || null,
+      variants: doc.variants || null,
+      overrides: doc.overrides ?? null,
+    })
+  );
+}
+
+async function catalogContentEpoch() {
+  const hash = crypto.createHash("sha256");
+  let count = 0;
+  const cursor = Product.find().sort({ _id: 1 }).select(CATALOG_EPOCH_SELECT).lean().cursor();
+  for await (const doc of cursor) {
+    count += 1;
+    hash.update(catalogEpochMaterial(doc));
+  }
+  hash.update(String(count));
+  return hash.digest("hex");
+}
+
+async function previewCatalogRowsMatch(jobId, shared) {
+  const rows = await GiniSyncProductResult.find({ jobId }).select("productId localFingerprint").lean();
+  const pending = new Map(rows.map((row) => [String(row.productId), row]));
+  let seen = 0;
+  const cursor = Product.find().sort({ _id: 1 }).lean().cursor();
+  for await (const doc of cursor) {
+    seen += 1;
+    const id = String(doc._id);
+    const row = pending.get(id);
+    if (!row) return false;
+    if (row.localFingerprint) {
+      const assessed = assessGiniPreviewProduct(doc, shared);
+      if (assessed.localFingerprint !== row.localFingerprint) return false;
+    }
+    pending.delete(id);
+  }
+  return seen === rows.length && pending.size === 0;
+}
+
+async function pauseUnstablePreview(jobId, token) {
+  await pauseJob(jobId, token, "paused", PREVIEW_SEAL_PAUSE, { code: "preview_catalog_moving" });
+}
+
+/**
+ * Reconcile and fill, then require two identical local catalog reads.
+ * A change between those reads pauses the preview instead of approving it.
+ * The check is bounded and does not take a catalog write lock.
+ */
+async function sealFinishedPreview(jobId, token, shared, counters, state, categories) {
+  for (let attempt = 0; attempt < PREVIEW_SEAL_ATTEMPTS; attempt += 1) {
+    if (!(await stillRunning(jobId))) return "";
+    if (attempt > 0) await refreshPreviewShared(shared, categories);
+    await reconcilePreviewCheckpoint(jobId, shared, { retryUncertain: false });
+    await fillMissingPreviewProducts(jobId, token, shared, counters, state);
+    if (!(await stillRunning(jobId))) return "";
+    const before = await catalogContentEpoch();
+    const aligned = await previewCatalogRowsMatch(jobId, shared);
+    if (beforePreviewSeal) await beforePreviewSeal({ attempt });
+    if (!(await stillRunning(jobId))) return "";
+    const after = await catalogContentEpoch();
+    const policyNow = await policySignature(categories);
+    if (aligned && before === after && policyNow === String(shared.policySignature || "")) return after;
+  }
+  await pauseUnstablePreview(jobId, token);
+  return "";
 }
 
 async function finish(jobId, token, counters, state, status, extras) {
@@ -1537,20 +2008,33 @@ async function finish(jobId, token, counters, state, status, extras) {
   );
 }
 
-async function finishPreview(jobId, token, counters, state, startSignature) {
+async function finishPreview(jobId, token, counters, state, shared) {
   const kept = await flush(jobId, token, counters, state);
   if (!kept) return;
   let status = "preview";
   let staleReason = "";
+  let signatures = null;
   try {
     const live = await fetchGiniCategoryTree();
     if (live.connectionRequired) status = "stale";
     else {
-      const end = await catalogSignature(live.categories);
-      if (end !== startSignature) {
-        status = "stale";
-        staleReason = PREVIEW_CATALOG_STALE_MESSAGE;
+      await refreshPreviewShared(shared, live.categories);
+      const sealedEpoch = await sealFinishedPreview(jobId, token, shared, counters, state, live.categories);
+      if (!sealedEpoch) return;
+      const confirmEpoch = await catalogContentEpoch();
+      const confirmPolicy = await policySignature(live.categories);
+      if (confirmEpoch !== sealedEpoch || confirmPolicy !== String(shared.policySignature || "")) {
+        await pauseUnstablePreview(jobId, token);
+        return;
       }
+      const refreshed = await countersFromDb(jobId);
+      refreshed.remoteLookups = counters.remoteLookups;
+      Object.assign(counters, refreshed);
+      state.blockerCounts = await blockerCountsFromDb(jobId);
+      signatures = {
+        catalogSignature: await catalogSignature(live.categories),
+        policySignature: shared.policySignature,
+      };
     }
   } catch (err) {
     const pause = pauseForCategoryError(err);
@@ -1559,6 +2043,7 @@ async function finishPreview(jobId, token, counters, state, startSignature) {
       if (!(await previewStateCanPause(current))) throw unsafePreviewError(pause);
       throw pause;
     }
+    if (err instanceof GiniBulkPause) throw err;
     status = "stale";
   }
   await finish(
@@ -1567,7 +2052,9 @@ async function finishPreview(jobId, token, counters, state, startSignature) {
     counters,
     state,
     status,
-    staleReason ? { lastError: staleReason, errorCode: "preview_stale" } : {}
+    status === "preview"
+      ? { ...(signatures || {}), lastError: "", errorCode: "", failureClass: "", lastHttpStatus: 0 }
+      : { ...(signatures || {}), ...(staleReason ? { lastError: staleReason, errorCode: "preview_stale" } : {}) }
   );
 }
 
@@ -1584,6 +2071,8 @@ function publicJob(job, extras = {}) {
     cursorProductId: raw.cursorProductId || "",
     previewJobId: raw.previewJobId || "",
     catalogSignature: raw.catalogSignature || "",
+    policySignature: raw.policySignature || "",
+    sourceJobId: raw.sourceJobId || "",
     expectedReady: raw.expectedReady || 0,
     expectedChanged: raw.expectedChanged || 0,
     applyUpdates: raw.applyUpdates === true,
@@ -2131,6 +2620,103 @@ export async function runGiniSyncPreview() {
   };
 }
 
+async function assertPreviewCanStart() {
+  const active = await GiniSyncJob.findOne({ partner: "gini", status: { $in: ACTIVE_JOB } }).sort({ createdAt: -1 });
+  if (active) {
+    throw new GiniBulkError("A GINI sync job is already active. Resume or stop it before starting another.", {
+      status: 409,
+      code: "sync_active",
+    });
+  }
+  const connection = await getGiniConnectionPublic();
+  if (connection.secretUnreadable) {
+    throw new GiniBulkError(GINI_SECRET_UNREADABLE_MESSAGE, { status: 409, code: "secret_unreadable" });
+  }
+  if (connection.status !== "connected") {
+    throw new GiniBulkError("Connect GINI API first.", { status: 409, code: "connection_required" });
+  }
+}
+
+/**
+ * New preview job that reads a previous preview and reuses only local decisions
+ * that still match. It never updates the source job. READY_CREATE still requires
+ * a new verified-absence lookup.
+ */
+export async function runGiniSuccessorPreview({ sourceJobId } = {}) {
+  if (!mongoose.isValidObjectId(String(sourceJobId || ""))) {
+    throw new GiniBulkError("A finished or stale Full Preview is required.", { status: 409, code: "preview_required" });
+  }
+  const source = await GiniSyncJob.findById(sourceJobId).lean();
+  if (!source || source.partner !== "gini" || source.mode !== "preview") {
+    throw new GiniBulkError("A finished or stale Full Preview is required.", { status: 409, code: "preview_required" });
+  }
+  if (source.status !== "stale" && source.status !== "preview") {
+    throw new GiniBulkError("Successor preview reads a stale or finished Full Preview.", {
+      status: 409,
+      code: "preview_required",
+    });
+  }
+  await assertPreviewCanStart();
+  const bounds = await productBounds();
+  const job = await GiniSyncJob.create({
+    partner: "gini",
+    status: "preview_running",
+    mode: "preview",
+    runScope: "preview",
+    batchSize: currentBatchSize(),
+    sourceJobId: String(source._id),
+    total: bounds.total,
+    startedAt: new Date(),
+    cursorProductId: "",
+    runnerToken: "",
+  });
+  launchGiniJob(job._id);
+  return {
+    job: await decorate(job),
+    sourceJobId: String(source._id),
+    sourceUntouched: true,
+    dryRun: true,
+    sentToGini: 0,
+    writesEnabled: giniBulkWritesEnabled(),
+    message: "Successor preview started. The previous preview was not modified. Nothing is sent.",
+  };
+}
+
+/** Re-check a finished preview after later catalog edits without discarding lookup checkpoints. */
+export async function reconcileStoredGiniPreview(jobId) {
+  if (!mongoose.isValidObjectId(String(jobId || ""))) {
+    throw new GiniBulkError("Finish Full Preview before reconciling it.", { status: 409, code: "preview_required" });
+  }
+  const job = await GiniSyncJob.findById(jobId);
+  if (!job || job.partner !== "gini" || job.mode !== "preview" || job.status !== "preview") {
+    throw new GiniBulkError("Finish Full Preview before reconciling it.", { status: 409, code: "preview_required" });
+  }
+  await assertPreviewCanStart();
+  await GiniSyncJob.updateOne(
+    { _id: job._id, status: "preview" },
+    {
+      $set: {
+        status: "preview_running",
+        finishedAt: null,
+        runnerToken: "",
+        heartbeatAt: null,
+        lastError: "",
+        errorCode: "",
+        retryUncertainLookups: true,
+      },
+    }
+  );
+  launchGiniJob(job._id);
+  const fresh = await GiniSyncJob.findById(job._id);
+  return {
+    job: await decorate(fresh),
+    dryRun: true,
+    sentToGini: 0,
+    writesEnabled: giniBulkWritesEnabled(),
+    message: "Preview reconcile started. Completed absence checks are kept when the payload is unchanged.",
+  };
+}
+
 export async function startGiniSyncAll({
   confirm = false,
   previewJobId,
@@ -2175,7 +2761,15 @@ export async function startGiniSyncAll({
       code: "preview_mismatch",
     });
   }
-  if (!preview.catalogSignature || suppliedSignature !== preview.catalogSignature) {
+  const approvedPolicy = String(preview.policySignature || "");
+  if (approvedPolicy) {
+    if (suppliedSignature !== preview.catalogSignature && suppliedSignature !== approvedPolicy) {
+      throw new GiniBulkError("This Full Preview does not match the current catalog.", {
+        status: 409,
+        code: "preview_stale",
+      });
+    }
+  } else if (!preview.catalogSignature || suppliedSignature !== preview.catalogSignature) {
     throw new GiniBulkError("This Full Preview does not match the current catalog.", {
       status: 409,
       code: "preview_stale",
@@ -2215,12 +2809,22 @@ export async function startGiniSyncAll({
   if (live.connectionRequired) {
     throw new GiniBulkError("Connect GINI API first.", { status: 409, code: "connection_required" });
   }
-  const freshSignature = await catalogSignature(live.categories);
-  if (freshSignature !== preview.catalogSignature) {
-    throw new GiniBulkError("The catalog changed after Full Preview. Run Full Preview again.", {
-      status: 409,
-      code: "preview_stale",
-    });
+  const freshPolicy = await policySignature(live.categories);
+  if (approvedPolicy) {
+    if (freshPolicy !== approvedPolicy) {
+      throw new GiniBulkError("The catalog changed after Full Preview. Run Full Preview again.", {
+        status: 409,
+        code: "preview_stale",
+      });
+    }
+  } else {
+    const freshSignature = await catalogSignature(live.categories);
+    if (freshSignature !== preview.catalogSignature) {
+      throw new GiniBulkError("The catalog changed after Full Preview. Run Full Preview again.", {
+        status: 409,
+        code: "preview_stale",
+      });
+    }
   }
   const active = await GiniSyncJob.findOne({ partner: "gini", status: { $in: ACTIVE_JOB } }).sort({ createdAt: -1 });
   if (active) {
@@ -2237,6 +2841,7 @@ export async function startGiniSyncAll({
     batchSize: currentBatchSize(),
     previewJobId: String(preview._id),
     catalogSignature: preview.catalogSignature,
+    policySignature: preview.policySignature || "",
     expectedReady: preview.readyCreate,
     expectedChanged: sendUpdates ? previewChanged : 0,
     applyUpdates: sendUpdates,

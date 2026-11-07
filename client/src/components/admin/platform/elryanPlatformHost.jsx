@@ -1,6 +1,8 @@
 /**
- * Local Elryan WIP host — keep untracked for GINI-only deploys.
- * Imported optionally from Commissions.jsx / PlatformSidebar.jsx.
+ * Elryan admin panels, code-split from the main admin bundle.
+ * Commissions.jsx and PlatformSidebar.jsx load this file with a static
+ * dynamic import. Do not mark that import @vite-ignore: Vite must bundle it.
+ * GINI and Miswag never render this host.
  */
 import ElryanDimensionsMapping from "./ElryanDimensionsMapping";
 import ElryanApiConnection from "./ElryanApiConnection";

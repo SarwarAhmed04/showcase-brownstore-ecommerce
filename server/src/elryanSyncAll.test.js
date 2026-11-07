@@ -532,7 +532,10 @@ describe("Elryan Sync All preview", { concurrency: 1 }, () => {
     assert.equal(preview.proposedPayload.width, 10);
     assert.equal(preview.proposedPayload.height, 20);
     assert.equal(preview.proposedPayload.depth, 20);
-    assert.equal(preview.readiness, ELRYAN_READINESS.READY);
+    assert.equal(preview.pricingApproval.valid, false);
+    assert.equal(preview.blockers.some((blocker) => blocker.code === "pricing_unverified"), true);
+    assert.equal(preview.blockers.some((blocker) => blocker.code === "category_not_leaf"), true);
+    assert.equal(preview.readiness, ELRYAN_READINESS.MISSING_MAPPING);
     assert.equal(
       inherited.payloadHash,
       elryanOutboundPriceHash(preview.proposedPayload, preview.pricing.pricingSource)

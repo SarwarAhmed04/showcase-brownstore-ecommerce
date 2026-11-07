@@ -28,6 +28,7 @@ function readyPreview(overrides = {}) {
     },
     connection: { environment: "staging" },
     pricing: { proposedElryanPrice: 66250 },
+    pricingApproval: { valid: true, reason: "matched" },
     proposedPayload: {
       price: 66250,
       quantity: 3,
@@ -86,6 +87,26 @@ describe("Elryan Sync One send UI gate", () => {
     assert.equal(blocked.reason, "blockers");
     const otherSku = gate(readyPreview({ product: { ...readyPreview().product, sku: "OTHER" } }));
     assert.equal(otherSku.reason, "wrong_sku");
+  });
+
+  it("keeps send closed without a matching Staging price approval", () => {
+    const missing = gate(readyPreview({ pricingApproval: undefined }));
+    assert.equal(missing.enabled, false);
+    assert.equal(missing.reason, "pricing_unverified");
+    const mismatched = gate(readyPreview({ pricingApproval: { valid: false, reason: "payload_mismatch" } }));
+    assert.equal(mismatched.enabled, false);
+    assert.equal(mismatched.reason, "pricing_unverified");
+    const matched = gate(readyPreview({ pricingApproval: { valid: true, reason: "matched" } }));
+    assert.equal(matched.enabled, true);
+    assert.equal(
+      elryanStagingSendRequest({
+        preview: readyPreview({ pricingApproval: { valid: false, reason: "price" } }),
+        writesGate: bothOn,
+        now,
+        confirm: true,
+      }),
+      null
+    );
   });
 
   it("requires an explicit confirmation before building the send body", () => {

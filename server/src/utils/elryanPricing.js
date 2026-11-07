@@ -6,12 +6,13 @@ import { toResolvedProduct } from "./productView.js";
 import { ELRYAN_READINESS } from "./elryanConstants.js";
 
 /**
- * Outgoing Elryan `price` is the BrownStore selling price after Elryan-only
- * commission rules and the existing 250 IQD rounding. `cost` stays omitted.
- * Elryan's marketplace commission is not added to the price.
+ * Outgoing Elryan `price` uses Elryan commission rules only.
+ * No applicable Elryan rule keeps the BrownStore selling price unchanged.
+ * An applicable rule keeps the existing commission calculation and 250 IQD rounding.
+ * `cost` stays omitted. Elryan's marketplace commission is not added.
  */
 export const ELRYAN_PRICING_NOTE =
-  "Outgoing price comes from the BrownStore selling price and Elryan commission rules only, using the existing 250 IQD rounding. If no Elryan rule applies, the rounded selling price is sent. cost is omitted. Elryan marketplace commission and vendor payout are not added and are not required.";
+  "Outgoing price comes from the BrownStore selling price and Elryan commission rules only. If no Elryan rule applies, the selling price is sent unchanged. If an Elryan rule applies, the existing commission calculation and 250 IQD rounding are used. cost is omitted. Elryan marketplace commission and vendor payout are not added and are not required.";
 
 export const ELRYAN_PACKAGE_DIMENSIONS_NOTE =
   "UNVERIFIED. Create lets width, height, and depth fall back to the category minimum. A category without a minimum makes all three required. Category responses do not include those minimums, so dimensions are not invented and are not treated as universally required.";
@@ -90,19 +91,23 @@ export async function buildElryanPricingView(productDoc, { commissionRules } = {
       elryanCommissionInvestigation: null,
     };
   }
-  const pricingNote = rule
+  const selling = Number(resolved?.sellingPrice) || 0;
+  const ruled = Boolean(rule);
+  const platformPrice = ruled ? preview.price : selling;
+  const rawPrice = ruled ? preview.rawPrice : selling;
+  const pricingNote = ruled
     ? "Outgoing price is the BrownStore selling price plus the Elryan commission rule, rounded with the existing 250 IQD step. cost is omitted. Elryan marketplace commission is not added."
-    : "No Elryan commission rule applies. Outgoing price is the BrownStore selling price after the existing 250 IQD rounding. cost is omitted. Elryan marketplace commission is not added.";
+    : "No Elryan commission rule applies. Outgoing price is the BrownStore selling price unchanged. cost is omitted. Elryan marketplace commission is not added.";
   return {
-    storeSellingPrice: Number(resolved?.sellingPrice) || 0,
+    storeSellingPrice: selling,
     commissionRate: rate,
-    commission: preview.commission,
+    commission: ruled ? preview.commission : 0,
     commissionScope: rule?.scope || null,
     commissionTargetId: rule?.targetId || null,
     winningScope: rule?.scope || null,
-    rawPrice: preview.rawPrice,
-    platformPrice: preview.price,
-    proposedElryanPrice: preview.price > 0 ? preview.price : null,
+    rawPrice,
+    platformPrice,
+    proposedElryanPrice: platformPrice > 0 ? platformPrice : null,
     proposedElryanCost: null,
     priceReview: false,
     priceReviewReason: "",

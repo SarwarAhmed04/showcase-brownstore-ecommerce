@@ -12,10 +12,13 @@ import {
   pauseGiniSyncAll,
   resumeGiniSyncAll,
   runGiniChangedPreview,
+  reconcileStoredGiniPreview,
+  runGiniSuccessorPreview,
   runGiniSyncPreview,
   startGiniSyncAll,
   stopGiniSyncAll,
 } from "../services/giniSyncAll.js";
+import { diagnoseGiniPreviewRecovery } from "../services/giniPreviewRecovery.js";
 import {
   pauseGiniChangedSync,
   resumeGiniChangedSync,
@@ -157,6 +160,30 @@ giniConnectionRouter.post("/platforms/gini/sync-all/preview", async (_req, res) 
     res.json(assertNoSecretLeak(await runGiniSyncPreview(), ""));
   } catch (err) {
     fail(res, err, "Failed to preview GINI catalog");
+  }
+});
+
+giniConnectionRouter.get("/platforms/gini/sync-all/recovery/:jobId", async (req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await diagnoseGiniPreviewRecovery(req.params.jobId), ""));
+  } catch (err) {
+    fail(res, err, "Failed to read the GINI preview recovery");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/successor-preview", async (req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await runGiniSuccessorPreview({ sourceJobId: req.body?.sourceJobId }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to start the GINI successor preview");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/reconcile", async (req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await reconcileStoredGiniPreview(req.body?.jobId), ""));
+  } catch (err) {
+    fail(res, err, "Failed to reconcile the GINI preview");
   }
 });
 

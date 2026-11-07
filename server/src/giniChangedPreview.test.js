@@ -381,7 +381,8 @@ describe("GINI changed preview classification", () => {
     assert.equal(page.includes('scope: "changed"'), false);
     assert.match(api, /\/platforms\/gini\/sync-all\/changed-preview/);
     assert.match(syncAll, /export async function runGiniChangedPreview/);
-    assert.equal(/miswag|elryan|ibsher/i.test(syncAll), false);
+    // The stored imported-discount field can change the GINI price. It is not an IBSHER call.
+    assert.equal(/miswag|elryan|ibsher/i.test(syncAll.replaceAll("ibsherDiscountPrice", "")), false);
     assert.equal(/Product\.(update|updateOne|updateMany|findOneAndUpdate|delete|deleteMany)/.test(syncAll), false);
     for (const language of ["ku", "en", "ar"]) {
       assert.equal(typeof translations[language].giniRunChangedPreview, "string");

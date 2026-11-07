@@ -7,6 +7,7 @@ import { ElryanConfirmedSend } from "../models/ElryanConfirmedSend.js";
 import { ElryanSendAttempt } from "../models/ElryanSendAttempt.js";
 import { ElryanStagingProductOverride } from "../models/ElryanStagingProductOverride.js";
 import { ElryanStagingPriceApproval } from "../models/ElryanStagingPriceApproval.js";
+import { ElryanCategoryCatalogSnapshot } from "../models/ElryanCategoryCatalogSnapshot.js";
 import { loadElryanDimensionInputs } from "./elryanCollectionDimensions.js";
 import {
   brownCollectionIdentity,
@@ -26,7 +27,11 @@ import {
 } from "../utils/elryanPricing.js";
 import { buildElryanProductPayload, collectElryanImageUrls } from "../utils/elryanPayloadBuilder.js";
 import { verifyElryanPublicImages } from "../utils/elryanImages.js";
-import { validateElryanPreviewParts } from "../utils/elryanValidator.js";
+import {
+  elryanParentCategoryBlocker,
+  elryanVerifiedLeafBlocker,
+  validateElryanPreviewParts,
+} from "../utils/elryanValidator.js";
 import { assessElryanSellableUnits } from "../utils/elryanVariations.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import { sanitizeElryanText } from "../utils/elryanRedact.js";
@@ -133,6 +138,24 @@ async function readLiveCommission(categoryId, brandLabel) {
   }
 }
 
+async function mappedElryanCategory(environment, categoryId) {
+  const id = String(categoryId || "").trim();
+  if (!id || environment !== "staging") return { snapshot: null, category: null };
+  const snap = await ElryanCategoryCatalogSnapshot.findOne({ environment: "staging" })
+    .select("status coverage categories.id categories.isParent")
+    .lean();
+  if (!snap) return { snapshot: null, category: null };
+  const numeric = /^\d+$/.test(id) ? Number(id) : null;
+  const category =
+    (snap.categories || []).find(
+      (row) => String(row?.id) === id || (numeric != null && row?.id === numeric)
+    ) || null;
+  return {
+    snapshot: { status: snap.status, coverage: snap.coverage },
+    category,
+  };
+}
+
 /**
  * Shared Staging preview assembly. Reads Elryan catalog data and does not send a product.
  */
@@ -158,10 +181,11 @@ export async function assembleElryanSyncOne({ productId, origin = "", investigat
   const warrantyResolved = await resolveElryanWarrantyForProduct(doc, config.environment);
   const warrantyFallback = warrantyResolved.mapping;
 
-  const [override, approvalRow, dimensionInputs] = await Promise.all([
+  const [override, approvalRow, dimensionInputs, categoryLookup] = await Promise.all([
     ElryanStagingProductOverride.findOne({ environment: "staging", productId: productKey }).lean(),
     ElryanStagingPriceApproval.findOne({ environment: "staging", productId: productKey }).lean(),
     loadElryanDimensionInputs(config.environment, [doc]),
+    mappedElryanCategory(config.environment, mappingValues.categoryId),
   ]);
   const collectionIdentity = brownCollectionIdentity(doc);
   const dimensions = resolveElryanDimensions({
@@ -276,7 +300,13 @@ export async function assembleElryanSyncOne({ productId, origin = "", investigat
     pricing,
     pricingApproval,
     images,
-    extraBlockers: [...elryanDimensionBlockers(dimensions), ...imageBlockers],
+    extraBlockers: [
+      ...elryanDimensionBlockers(dimensions),
+      ...imageBlockers,
+      config.environment === "staging" && String(mappingValues.categoryId || "").trim()
+        ? elryanVerifiedLeafBlocker(categoryLookup)
+        : elryanParentCategoryBlocker(categoryLookup?.category),
+    ].filter(Boolean),
   });
 
   return {
@@ -626,6 +656,16 @@ export async function sendElryanSyncOne({ productId, confirm, previewToken } = {
         "The first Staging create is limited to SKU OWCH180002. No product was sent."
       );
     }
+    if (assembled.pricingApproval?.valid !== true) {
+      return blockedSend(
+        "pricing_unverified",
+        "The saved Staging price approval does not match this SKU, product, and payload. No product was sent.",
+        {
+          blockers: assembled.validation.blockers,
+          readiness: assembled.validation.readiness,
+        }
+      );
+    }
     if (!assembled.validation.ready) {
       return blockedSend("not_ready", "The product is not READY. No product was sent.", {
         blockers: assembled.validation.blockers,
@@ -819,7 +859,8 @@ export async function approveElryanStagingPrice({ productId, confirm } = {}) {
     throw inputError("This approval is limited to SKU OWCH180002.", "first_test_sku_only");
   }
   const price = Number(assembled.payload.price);
-  if (assembled.validation.blockers.length || !(price > 0)) {
+  const blocking = assembled.validation.blockers.filter((blocker) => blocker.code !== "pricing_unverified");
+  if (blocking.length || !(price > 0)) {
     throw inputError("Pricing can be recorded only after BrownStore price rules resolve a final payload.", "not_ready");
   }
   if (assembled.payload.cost != null) {

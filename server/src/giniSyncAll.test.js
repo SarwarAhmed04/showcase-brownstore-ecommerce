@@ -39,6 +39,8 @@ import { encryptApiKey } from "./utils/partnerAuth.js";
 import { previewGiniSyncOne, setGiniMediaFetch } from "./services/giniSyncOne.js";
 import { GINI_PRODUCTS_PATH, giniSkuKey, isAllowedMediaUrl } from "./utils/giniSyncOnePlan.js";
 import { classifyConfirmedSend, giniPayloadHash } from "./utils/giniSyncEvaluate.js";
+import { diagnoseGiniPreviewRecovery } from "./services/giniPreviewRecovery.js";
+import { GINI_HISTORICAL_HOLD_SKUS } from "./utils/giniHistoricalHold.js";
 import { classifyOfficialFieldChange, localConfirmedCatalogDecision } from "./utils/giniCatalogSync.js";
 import {
   categoryOptions,
@@ -55,12 +57,16 @@ import {
   giniBulkWritesEnabled,
   canonicalGiniSignatureTree,
   catalogSignature,
+  policySignature,
   pauseGiniSyncAll,
+  reconcileStoredGiniPreview,
+  runGiniSuccessorPreview,
   resetGiniBulkForTests,
   resumeGiniSyncAll,
   runGiniSyncPreview,
   setGiniBulkAfterProduct,
   setGiniBulkBatchSize,
+  setGiniBulkBeforePreviewSeal,
   setGiniBulkBeforeSend,
   startGiniSyncAll,
   stopGiniSyncAll,
@@ -558,23 +564,6 @@ async function pausePreviewAfterFirst(itemCode) {
   return paused;
 }
 
-async function assertResumeStale(paused) {
-  calls = [];
-  await resumeGiniSyncAll();
-  await waitForGiniBulkIdle();
-  const stale = (await getLatestGiniSyncJob()).job;
-  assert.equal(stale.id, paused.id);
-  assert.equal(stale.status, "stale");
-  assert.equal(stale.errorCode, "preview_stale");
-  assert.equal(stale.lastError, "The catalog changed during Full Preview. Run Full Preview again.");
-  assert.equal(stale.catalogSignature, paused.catalogSignature);
-  assert.equal(stale.processed, paused.processed);
-  assert.equal(stale.created, 0);
-  assert.equal(posts().length, 0);
-  assert.equal(giniBulkWritesEnabled(), false);
-  return stale;
-}
-
 describe("GINI sync all contract", () => {
   it("keeps both live write gates off unless each one is exactly true", () => {
     const previousEnabled = process.env.GINI_BULK_WRITES_ENABLED;
@@ -602,7 +591,8 @@ describe("GINI sync all contract", () => {
     const sidebar = fs.readFileSync(new URL("../../client/src/components/admin/platform/PlatformSidebar.jsx", import.meta.url), "utf8");
     assert.equal(syncOne.includes("evaluatePlatformEligibility"), false);
     assert.equal(syncAll.includes("evaluatePlatformEligibility"), true);
-    assert.equal(/miswag|elryan|ibsher/i.test(syncAll), false);
+    // The stored imported-discount field can change the GINI price. It is not an IBSHER call.
+    assert.equal(/miswag|elryan|ibsher/i.test(syncAll.replaceAll("ibsherDiscountPrice", "")), false);
     assert.equal(/Product\.(update|updateOne|updateMany|findOneAndUpdate|delete|deleteMany)/.test(syncAll), false);
     assert.equal(page.includes('confirm: true'), true);
     assert.equal(page.includes('scope: "limited"'), true);
@@ -1242,9 +1232,13 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     await rejectsCode(() => startGiniSyncAll({ ...start, catalogSignature: "other-preview" }), "preview_stale");
     await rejectsCode(() => startGiniSyncAll({ ...start, previewJobId: new mongoose.Types.ObjectId().toString() }), "preview_required");
     await makeProduct({ itemCode: "GATE-2" });
+    await Commission.create({ partner: "gini", scope: "all", targetId: "*", percentage: 12, isActive: true });
     await rejectsCode(() => startGiniSyncAll(start), "preview_stale");
-    assert.equal(posts().length, 0);
-    assert.equal(await GiniSyncJob.countDocuments({ mode: "sync" }), 0);
+    await Commission.deleteMany({ partner: "gini" });
+    await startGiniSyncAll(start);
+    await waitForGiniBulkIdle();
+    assert.deepEqual(posts().map((item) => formFields(item.options).sku), ["GATE-1"]);
+    assert.equal(await GiniSyncJob.countDocuments({ mode: "sync" }), 1);
   });
 
   it("sends only an approved limited count, then a later full run skips confirmed products", async () => {
@@ -2021,7 +2015,7 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     assert.equal(job.inactive, 0);
     assert.equal(sizes.reduce((sum, size) => sum + size, 0), total);
     assert.equal(Math.max(...sizes) <= 100, true);
-    assert.equal(giniBulkSkuIndexScans(), 1);
+    assert.equal(giniBulkSkuIndexScans(), 2);
     assert.equal(giniBulkRemoteLookups(), 0);
     assert.equal(posts().length, 0);
     assert.equal(await GiniSyncProductResult.countDocuments({ jobId: job.id }), total);
@@ -2327,10 +2321,13 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     await Commission.deleteMany({ partner: "gini" });
     assert.equal(await catalogSignature(original), mapped);
 
+    const policyBeforeBounds = await policySignature(original);
     await makeProduct({ itemCode: "BOUND-HASH", ibsherId: "bound-hash" });
     assert.notEqual(await catalogSignature(original), mapped);
+    assert.equal(await policySignature(original), policyBeforeBounds);
     await Product.deleteMany({ itemCode: "BOUND-HASH" });
     assert.equal(await catalogSignature(original), mapped);
+    assert.equal(await policySignature(original), policyBeforeBounds);
 
     await PlatformVisibilityRule.create({
       partner: "gini",
@@ -2408,48 +2405,107 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     assert.equal(posts().length, 0);
   });
 
-  it("marks a preview stale when a category id or active flag changes", async () => {
+  it("reclassifies a preview when a category id or active flag changes", async () => {
     const activePaused = await pausePreviewAfterFirst("ACTIVE-STALE");
+    const activePolicy = activePaused.policySignature;
     categoryMode = "inactive-home";
-    await assertResumeStale(activePaused);
+    calls = [];
+    await resumeGiniSyncAll();
+    await waitForGiniBulkIdle();
+    const inactive = (await getLatestGiniSyncJob()).job;
+    const inactiveRow = (await rowsFor(inactive))[0];
+    assert.equal(inactive.status, "preview");
+    assert.notEqual(inactive.status, "stale");
+    assert.equal(inactiveRow.classification, "BLOCKED");
+    assert.equal(inactiveRow.blockers.includes("inactive_mapping"), true);
+    assert.notEqual(inactive.policySignature, activePolicy);
+    assert.equal(productGets().length, 0);
+    assert.equal(posts().length, 0);
 
+    await Product.deleteMany({});
     await GiniSyncJob.deleteMany({});
     await GiniSyncProductResult.deleteMany({});
     calls = [];
     categoryMode = "";
     const idPaused = await pausePreviewAfterFirst("ID-STALE");
     categoryMode = "replaced-id";
-    await assertResumeStale(idPaused);
+    calls = [];
+    await resumeGiniSyncAll();
+    await waitForGiniBulkIdle();
+    const replaced = (await getLatestGiniSyncJob()).job;
+    assert.equal(replaced.status, "preview");
+    assert.equal(replaced.processed, 1);
+    assert.equal(productGets().length, 0);
+    assert.equal(posts().length, 0);
+    assert.equal(giniBulkWritesEnabled(), false);
   });
 
-  it("marks a preview stale when mappings, commission, or product bounds change", async () => {
+  it("keeps verified rows when mappings, commission, or product membership change", async () => {
     const mapped = await pausePreviewAfterFirst("MAP-STALE");
+    const mappedHash = (await rowsFor(mapped))[0].payloadHash;
     await mapCollection({
       categoryId: "2",
       categoryName: "Hidden",
       subcategoryId: "20",
       subcategoryName: "Archived",
     });
-    await assertResumeStale(mapped);
+    calls = [];
+    await resumeGiniSyncAll();
+    await waitForGiniBulkIdle();
+    const mappingDone = (await getLatestGiniSyncJob()).job;
+    const mappingRow = (await rowsFor(mappingDone))[0];
+    assert.equal(mappingDone.status, "preview");
+    assert.equal(mappingRow.classification, "BLOCKED");
+    assert.equal(mappingRow.blockers.includes("inactive_mapping"), true);
+    assert.notEqual(mappingRow.payloadHash, mappedHash);
+    assert.equal(productGets().length, 0);
+    assert.equal(posts().length, 0);
 
+    await Product.deleteMany({});
     await GiniSyncJob.deleteMany({});
     await GiniSyncProductResult.deleteMany({});
     await mapCollection();
     calls = [];
     const ruled = await pausePreviewAfterFirst("RULE-STALE");
+    const ruledHash = (await rowsFor(ruled))[0].payloadHash;
+    const ruledPolicy = ruled.policySignature;
     await Commission.create({ partner: "gini", scope: "all", targetId: "*", percentage: 12, isActive: true });
-    await assertResumeStale(ruled);
+    calls = [];
+    await resumeGiniSyncAll();
+    await waitForGiniBulkIdle();
+    const ruleDone = (await getLatestGiniSyncJob()).job;
+    const ruleRow = (await rowsFor(ruleDone))[0];
+    assert.equal(ruleDone.status, "preview");
+    assert.equal(ruleRow.classification, "READY_CREATE");
+    assert.equal(ruleRow.lookupOutcome, "absent");
+    assert.notEqual(ruleRow.payloadHash, ruledHash);
+    assert.notEqual(ruleDone.policySignature, ruledPolicy);
+    assert.equal(productGets().length, 0);
+    assert.equal(posts().length, 0);
 
+    await Product.deleteMany({});
     await GiniSyncJob.deleteMany({});
     await GiniSyncProductResult.deleteMany({});
     await Commission.deleteMany({ partner: "gini" });
     calls = [];
     const bounded = await pausePreviewAfterFirst("BOUND-STALE");
+    const boundedPolicy = bounded.policySignature;
     await makeProduct({ itemCode: "BOUND-STALE-2", ibsherId: "bound-stale-2" });
-    await assertResumeStale(bounded);
+    calls = [];
+    await resumeGiniSyncAll();
+    await waitForGiniBulkIdle();
+    const boundsDone = (await getLatestGiniSyncJob()).job;
+    const boundsRows = await rowsFor(boundsDone);
+    assert.equal(boundsDone.status, "preview");
+    assert.equal(boundsDone.policySignature, boundedPolicy);
+    assert.equal(boundsRows.length, 2);
+    assert.equal(boundsRows.every((row) => row.classification === "READY_CREATE"), true);
+    assert.equal(productGets().length, 1);
+    assert.equal(posts().length, 0);
+    assert.equal(giniBulkWritesEnabled(), false);
   });
 
-  it("keeps the saved category signature when a resumed preview sees a different tree", async () => {
+  it("adopts a new category policy without discarding completed absence checks", async () => {
     await makeProduct({ itemCode: "SIG-1" });
     await makeProduct({ itemCode: "SIG-2" });
     await makeProduct({ itemCode: "SIG-3" });
@@ -2461,20 +2517,21 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     const paused = await startPreview();
     assert.equal(paused.status, "paused");
     assert.equal(paused.processed, 1);
-    const signature = paused.catalogSignature;
+    const signature = paused.policySignature;
     setGiniBulkAfterProduct(null);
     categoryMode = "shifted";
     calls = [];
     await resumeGiniSyncAll();
     await waitForGiniBulkIdle();
-    const stale = (await getLatestGiniSyncJob()).job;
-    assert.equal(stale.status, "stale");
-    assert.equal(stale.errorCode, "preview_stale");
-    assert.equal(stale.lastError, "The catalog changed during Full Preview. Run Full Preview again.");
-    assert.equal(stale.catalogSignature, signature);
-    assert.equal(stale.processed, 1);
-    assert.equal(await GiniSyncProductResult.countDocuments({ jobId: stale.id }), 1);
-    assert.equal(stale.created, 0);
+    const done = (await getLatestGiniSyncJob()).job;
+    const rows = await rowsFor(done);
+    assert.equal(done.status, "preview");
+    assert.notEqual(done.policySignature, signature);
+    assert.equal(done.processed, 3);
+    assert.equal(rows.length, 3);
+    assert.equal(rows.every((row) => row.classification === "READY_CREATE" && row.lookupOutcome === "absent"), true);
+    assert.equal(productGets().length, 2);
+    assert.equal(done.created, 0);
     assert.equal(posts().length, 0);
     assert.equal(giniBulkWritesEnabled(), false);
   });
@@ -2942,5 +2999,428 @@ describe("GINI sync all", { concurrency: 1, timeout: 360000 }, () => {
     assert.equal(posts().length, 0);
     assert.equal(puts().length, 0);
     assert.equal((await Product.findById(keep._id).lean()).price, 6500);
+  });
+
+  it("keeps the 60 historical holds and does not create from a preview", () => {
+    assert.equal(GINI_HISTORICAL_HOLD_SKUS.length, 60);
+    assert.equal(GINI_HISTORICAL_HOLD_SKUS.includes("HB-632"), true);
+    assert.equal(giniBulkWritesEnabled(), false);
+  });
+
+  it("survives 279 deletions and one insertion without a second absence check", async () => {
+    const total = 300;
+    const docs = [];
+    for (let index = 0; index < total; index += 1) {
+      docs.push({
+        ibsherId: `ibs-member-${index}`,
+        itemCode: `MEM-${index}`,
+        name: { en: `Member ${index}`, ar: `Member ${index}`, ku: `Member ${index}` },
+        description: { en: "Covers a blemish.", ar: "لصقات", ku: "پەچە" },
+        price: 6500,
+        brand: { _id: "brand-cosrx", name: "COSRX" },
+        category: { _id: "cat-beauty", name: { en: "Beauty" } },
+        subCategory: { _id: "sub-skin", name: { en: "Skin" } },
+        collectionName: { _id: "col-acne", name: { en: "Acne" } },
+        isActive: true,
+        variants: simpleVariant(4),
+      });
+    }
+    await Product.insertMany(docs);
+    await mapCollection();
+    setGiniBulkBatchSize(1);
+    setGiniBulkAfterProduct(async ({ processed }) => {
+      if (processed === 21) await pauseGiniSyncAll();
+    });
+    const paused = await startPreview();
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.processed, 21);
+    setGiniBulkAfterProduct(null);
+    const kept = new Set((await rowsFor(paused)).map((row) => row.productId));
+    const removed = await Product.find({ _id: { $nin: [...kept] } }).select("_id").lean();
+    assert.equal(removed.length, 279);
+    await Product.deleteMany({ _id: { $in: removed.map((doc) => doc._id) } });
+    await makeProduct({ itemCode: "MEM-NEW", ibsherId: "ibs-member-new" });
+    calls = [];
+    await resumeGiniSyncAll();
+    await waitForGiniBulkIdle();
+    const done = (await getLatestGiniSyncJob()).job;
+    const rows = await rowsFor(done);
+    assert.equal(done.status, "preview");
+    assert.notEqual(done.status, "stale");
+    assert.equal(rows.length, 22);
+    assert.equal(rows.filter((row) => kept.has(row.productId)).length, 21);
+    assert.equal(rows.find((row) => row.sku === "MEM-NEW").classification, "READY_CREATE");
+    assert.equal(rows.find((row) => row.sku === "MEM-NEW").lookupOutcome, "absent");
+    assert.equal(productGets().length, 1);
+    assert.equal(posts().length, 0);
+    assert.equal(giniBulkWritesEnabled(), false);
+  });
+
+  it("reuses an absence checkpoint when price or stock changes and ignores a lastSyncedAt refresh", async () => {
+    await makeProduct({ itemCode: "KEEP-SYNC", ibsherId: "keep-sync" });
+    await makeProduct({ itemCode: "PRICE-SYNC", ibsherId: "price-sync" });
+    await makeProduct({ itemCode: "STOCK-SYNC", ibsherId: "stock-sync" });
+    await mapCollection();
+    const preview = await previewAll();
+    assert.equal(preview.readyCreate, 3);
+    assert.equal(productGets().length, 3);
+    const before = Object.fromEntries((await rowsFor(preview)).map((row) => [row.sku, row.payloadHash]));
+    await Product.updateMany({}, { $set: { lastSyncedAt: new Date() } });
+    await Product.updateOne({ itemCode: "PRICE-SYNC" }, { $set: { price: 9000, lastSyncedAt: new Date() } });
+    await Product.updateOne(
+      { itemCode: "STOCK-SYNC" },
+      { $set: { variants: simpleVariant(9), lastSyncedAt: new Date() } }
+    );
+    calls = [];
+    await reconcileStoredGiniPreview(preview.id);
+    await waitForGiniBulkIdle();
+    const reconciled = (await getLatestGiniSyncJob()).job;
+    const bySku = Object.fromEntries((await rowsFor(reconciled)).map((row) => [row.sku, row]));
+    assert.equal(reconciled.id, preview.id);
+    assert.equal(reconciled.status, "preview");
+    assert.equal(bySku["KEEP-SYNC"].payloadHash, before["KEEP-SYNC"]);
+    assert.equal(bySku["KEEP-SYNC"].lookupOutcome, "absent");
+    assert.notEqual(bySku["PRICE-SYNC"].payloadHash, before["PRICE-SYNC"]);
+    assert.equal(bySku["PRICE-SYNC"].lookupOutcome, "absent");
+    assert.equal(bySku["PRICE-SYNC"].giniPrice, 9000);
+    assert.notEqual(bySku["STOCK-SYNC"].payloadHash, before["STOCK-SYNC"]);
+    assert.equal(bySku["STOCK-SYNC"].quantity, 9);
+    assert.equal(bySku["STOCK-SYNC"].lookupOutcome, "absent");
+    assert.equal(productGets().length, 0);
+    assert.equal(posts().length, 0);
+  });
+
+  it("reclassifies SKU owner changes without another remote absence check", async () => {
+    await makeProduct({ itemCode: "OWNER-A", ibsherId: "owner-a" });
+    await makeProduct({ itemCode: "OWNER-B", ibsherId: "owner-b" });
+    await mapCollection();
+    const preview = await previewAll();
+    assert.equal(preview.readyCreate, 2);
+    await Product.updateOne({ itemCode: "OWNER-B" }, { $set: { itemCode: "OWNER-A" } });
+    calls = [];
+    await reconcileStoredGiniPreview(preview.id);
+    await waitForGiniBulkIdle();
+    const rows = await rowsFor((await getLatestGiniSyncJob()).job);
+    assert.equal(rows.length, 2);
+    assert.equal(rows.every((row) => row.classification === "BLOCKED"), true);
+    assert.equal(rows.every((row) => row.blockers.includes("duplicate_brownstore_sku")), true);
+    assert.equal(productGets().length, 0);
+    assert.equal(posts().length, 0);
+  });
+
+  it("recovers five uncertain lookups without repeating them on resume or creating products", async () => {
+    uncertainSkus = new Set(["u-0", "u-1", "u-2", "u-3", "u-4"].map((sku) => giniSkuKey(sku)));
+    for (let index = 0; index < 5; index += 1) {
+      await makeProduct({ itemCode: `U-${index}`, ibsherId: `uncertain-${index}` });
+    }
+    await mapCollection();
+    const paused = await startPreview();
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.lookupUncertain, 5);
+    assert.equal(paused.readyCreate, 0);
+    calls = [];
+    await resumeGiniSyncAll();
+    await waitForGiniBulkIdle();
+    const held = (await getLatestGiniSyncJob()).job;
+    assert.equal(held.id, paused.id);
+    assert.equal(held.status, "preview");
+    assert.equal(held.lookupUncertain, 5);
+    assert.equal(held.readyCreate, 0);
+    assert.equal(productGets().length, 0);
+    assert.equal(posts().length, 0);
+    uncertainSkus = null;
+    calls = [];
+    await reconcileStoredGiniPreview(held.id);
+    await waitForGiniBulkIdle();
+    const done = (await getLatestGiniSyncJob()).job;
+    const rows = await rowsFor(done);
+    assert.equal(done.id, paused.id);
+    assert.equal(done.status, "preview");
+    assert.equal(done.readyCreate, 5);
+    assert.equal(done.lookupUncertain, 0);
+    assert.equal(rows.every((row) => row.classification === "READY_CREATE" && row.lookupOutcome === "absent"), true);
+    assert.equal(productGets().length, 5);
+    assert.equal(posts().length, 0);
+  });
+
+  it("resumes a PM2-style interruption without duplicating rows or lookups", async () => {
+    await makeProduct({ itemCode: "PM2-1", ibsherId: "pm2-1" });
+    await makeProduct({ itemCode: "PM2-2", ibsherId: "pm2-2" });
+    await makeProduct({ itemCode: "PM2-3", ibsherId: "pm2-3" });
+    await mapCollection();
+    setGiniBulkBatchSize(1);
+    setGiniBulkAfterProduct(async ({ processed }) => {
+      if (processed === 1) await pauseGiniSyncAll();
+    });
+    const paused = await startPreview();
+    setGiniBulkAfterProduct(null);
+    assert.equal(paused.processed, 1);
+    await GiniSyncJob.updateOne(
+      { _id: paused.id },
+      { $set: { status: "preview_running", runnerToken: "dead-process", heartbeatAt: new Date(Date.now() - 60000) } }
+    );
+    calls = [];
+    await ensureGiniSyncRunner();
+    await waitForGiniBulkIdle();
+    const done = (await getLatestGiniSyncJob()).job;
+    const rows = await rowsFor(done);
+    assert.equal(done.id, paused.id);
+    assert.equal(done.status, "preview");
+    assert.equal(rows.length, 3);
+    assert.equal(new Set(rows.map((row) => row.productId)).size, 3);
+    assert.equal(productGets().length, 2);
+    assert.equal(posts().length, 0);
+    assert.equal(giniBulkWritesEnabled(), false);
+  });
+
+  it("diagnoses a stale preview without writing and starts a successor that leaves it untouched", async () => {
+    const ready = await makeProduct({ itemCode: "OLD-READY", ibsherId: "old-ready" });
+    const blocked = await makeProduct({
+      itemCode: "OLD-BLOCK",
+      ibsherId: "old-block",
+      variants: [{ color: { en: "white" }, images: [], sizes: [{ size: "m", stockQuantity: 2 }] }],
+    });
+    const removed = await makeProduct({ itemCode: "OLD-GONE", ibsherId: "old-gone" });
+    await mapCollection();
+    const preview = await previewAll();
+    assert.equal(preview.readyCreate, 2);
+    assert.equal((await rowsFor(preview)).find((row) => row.sku === "OLD-BLOCK").classification, "BLOCKED");
+    await Product.deleteOne({ _id: removed._id });
+    await Product.updateOne({ _id: ready._id }, { $set: { price: 9000 } });
+    await makeProduct({ itemCode: "OLD-NEW", ibsherId: "old-new" });
+    const sourceBefore = await GiniSyncJob.findById(preview.id).lean();
+    await GiniSyncJob.updateOne(
+      { _id: preview.id },
+      { $set: { status: "stale", errorCode: "preview_stale", lastError: "stale for recovery test" } }
+    );
+    const staleBefore = await GiniSyncJob.findById(preview.id).lean();
+    const sourceRows = await GiniSyncProductResult.countDocuments({ jobId: preview.id });
+    calls = [];
+    const report = await diagnoseGiniPreviewRecovery(preview.id);
+    assert.equal(report.readOnly, true);
+    assert.equal(report.readyCreateIsNotRemoteAbsence, true);
+    assert.equal(report.deletedProductIds, 1);
+    assert.equal(report.missingPreviewRows, 1);
+    assert.equal(report.payloadChanged >= 1, true);
+    assert.equal(report.locallyReusable >= 1, true);
+    assert.equal(report.freshLookupByPriorClassification.READY_CREATE >= 1, true);
+    assert.equal(report.samples.locallyReusable.includes(String(blocked._id)), true);
+    assert.equal(productGets().length, 0);
+    calls = [];
+    const successor = await runGiniSuccessorPreview({ sourceJobId: preview.id });
+    assert.notEqual(successor.job.id, preview.id);
+    assert.equal(successor.sourceUntouched, true);
+    await waitForGiniBulkIdle();
+    const sourceAfter = await GiniSyncJob.findById(preview.id).lean();
+    assert.equal(sourceAfter.status, "stale");
+    assert.equal(sourceAfter.catalogSignature, staleBefore.catalogSignature);
+    assert.equal(sourceAfter.processed, sourceBefore.processed);
+    assert.equal(new Date(sourceAfter.updatedAt).toISOString(), new Date(staleBefore.updatedAt).toISOString());
+    assert.equal(await GiniSyncProductResult.countDocuments({ jobId: preview.id }), sourceRows);
+    const done = (await getLatestGiniSyncJob()).job;
+    const rows = await rowsFor(done);
+    assert.equal(done.id, successor.job.id);
+    assert.equal(done.status, "preview");
+    assert.equal(done.sourceJobId, preview.id);
+    const blockedRow = rows.find((row) => row.sku === "OLD-BLOCK");
+    const readyRow = rows.find((row) => row.sku === "OLD-READY");
+    const inserted = rows.find((row) => row.sku === "OLD-NEW");
+    assert.equal(blockedRow.classification, "BLOCKED");
+    assert.equal(blockedRow.lookupOutcome, "skipped");
+    assert.equal(readyRow.classification, "READY_CREATE");
+    assert.equal(readyRow.lookupOutcome, "absent");
+    assert.equal(readyRow.giniPrice, 9000);
+    assert.equal(inserted.classification, "READY_CREATE");
+    assert.equal(inserted.lookupOutcome, "absent");
+    assert.equal(rows.some((row) => row.sku === "OLD-GONE"), false);
+    assert.equal(productGets().map((item) => decodeURIComponent(item.url).includes("OLD-BLOCK")).some(Boolean), false);
+    assert.equal(posts().length, 0);
+    assert.equal(giniBulkWritesEnabled(), false);
+  });
+
+  it("does not create a product whose sku, payload, or eligibility changed after approval", async () => {
+    const keep = await makeProduct({ itemCode: "APPROVE-KEEP", ibsherId: "approve-keep" });
+    const priced = await makeProduct({ itemCode: "APPROVE-PRICE", ibsherId: "approve-price" });
+    const renamed = await makeProduct({ itemCode: "APPROVE-SKU", ibsherId: "approve-sku" });
+    const quiet = await makeProduct({ itemCode: "APPROVE-OFF", ibsherId: "approve-off" });
+    await mapCollection();
+    const preview = await previewAll();
+    assert.equal(preview.readyCreate, 4);
+    const approved = await rowsFor(preview);
+    const approvedById = new Map(approved.map((row) => [row.productId, row]));
+    await Product.updateOne({ _id: priced._id }, { $set: { price: 9000 } });
+    await Product.updateOne({ _id: renamed._id }, { $set: { itemCode: "APPROVE-RENAMED" } });
+    await Product.updateOne({ _id: quiet._id }, { $set: { isActive: false } });
+    calls = [];
+    const sync = await runSync(preview);
+    const syncRows = await rowsFor(sync);
+    const byId = new Map(syncRows.map((row) => [row.productId, row]));
+    assert.equal(sync.status, "completed");
+    assert.equal(sync.created, 1);
+    assert.equal(byId.get(String(keep._id)).classification, "CREATED");
+    for (const product of [priced, renamed, quiet]) {
+      const row = byId.get(String(product._id));
+      assert.equal(row.classification, "BLOCKED");
+      assert.equal(row.errorCode, "approved_preview_mismatch");
+      assert.equal(row.blockers.includes("approved_preview_mismatch"), true);
+    }
+    assert.deepEqual(posts().map((item) => formFields(item.options).sku), ["APPROVE-KEEP"]);
+    const lookedUp = productGets().map((item) => skuFromProductUrl(item.url));
+    assert.equal(lookedUp.includes("APPROVE-KEEP"), true);
+    assert.equal(lookedUp.some((sku) => ["APPROVE-PRICE", "APPROVE-SKU", "APPROVE-RENAMED", "APPROVE-OFF"].includes(sku)), false);
+    const keepGet = calls.findIndex((item) => item.method === "GET" && skuFromProductUrl(item.url) === "APPROVE-KEEP");
+    const keepPost = calls.findIndex((item) => item.method === "POST" && formFields(item.options).sku === "APPROVE-KEEP");
+    assert.equal(keepGet >= 0 && keepGet < keepPost, true);
+    const previewAfter = await rowsFor(preview);
+    assert.equal(previewAfter.length, 4);
+    for (const row of previewAfter) {
+      const before = approvedById.get(row.productId);
+      assert.equal(row.classification, "READY_CREATE");
+      assert.equal(row.sku, before.sku);
+      assert.equal(row.skuKey, before.skuKey);
+      assert.equal(row.payloadHash, before.payloadHash);
+    }
+    assert.equal(await GiniSyncSendState.countDocuments({ skuKey: { $in: [giniSkuKey("APPROVE-PRICE"), giniSkuKey("APPROVE-RENAMED"), giniSkuKey("APPROVE-OFF"), giniSkuKey("APPROVE-SKU")] } }), 0);
+    assert.equal(giniBulkWritesEnabled(), true);
+    delete process.env.GINI_BULK_WRITES_ENABLED;
+    delete process.env.GINI_ALLOW_LIVE_BULK_WRITES;
+    allowPost = false;
+  });
+
+  it("does not approve a preview whose catalog changes during the final check", async () => {
+    await makeProduct({ itemCode: "SEAL-KEEP", ibsherId: "seal-keep" });
+    const priced = await makeProduct({ itemCode: "SEAL-PRICE", ibsherId: "seal-price" });
+    await mapCollection();
+    let fired = false;
+    setGiniBulkBeforePreviewSeal(async ({ attempt }) => {
+      if (attempt !== 0 || fired) return;
+      fired = true;
+      await Product.updateOne({ _id: priced._id }, { $set: { price: 9000 } });
+      await Product.updateOne({ itemCode: "SEAL-KEEP" }, { $set: { lastSyncedAt: new Date() } });
+      await makeProduct({ itemCode: "SEAL-NEW", ibsherId: "seal-new" });
+    });
+    const sealed = await startPreview();
+    setGiniBulkBeforePreviewSeal(null);
+    const sealedRows = await rowsFor(sealed);
+    const sealedBySku = Object.fromEntries(sealedRows.map((row) => [row.sku, row]));
+    assert.equal(fired, true);
+    assert.equal(sealed.status, "preview");
+    assert.equal(Boolean(sealed.finishedAt), true);
+    assert.equal(sealedRows.length, 3);
+    assert.equal(sealedBySku["SEAL-KEEP"].classification, "READY_CREATE");
+    assert.equal(sealedBySku["SEAL-KEEP"].lookupOutcome, "absent");
+    assert.equal(sealedBySku["SEAL-PRICE"].giniPrice, 9000);
+    assert.equal(sealedBySku["SEAL-PRICE"].lookupOutcome, "absent");
+    assert.equal(sealedBySku["SEAL-NEW"].classification, "READY_CREATE");
+    assert.equal(sealedBySku["SEAL-NEW"].lookupOutcome, "absent");
+    const lookedUp = productGets().map((item) => skuFromProductUrl(item.url));
+    assert.equal(lookedUp.filter((sku) => sku === "SEAL-KEEP").length, 1);
+    assert.equal(lookedUp.filter((sku) => sku === "SEAL-PRICE").length, 1);
+    assert.equal(lookedUp.filter((sku) => sku === "SEAL-NEW").length, 1);
+    assert.equal(posts().length, 0);
+
+    await Product.deleteMany({});
+    await GiniSyncJob.deleteMany({});
+    await GiniSyncProductResult.deleteMany({});
+    calls = [];
+    await makeProduct({ itemCode: "MOVING-1", ibsherId: "moving-1" });
+    await mapCollection();
+    let attempts = 0;
+    setGiniBulkBeforePreviewSeal(async () => {
+      attempts += 1;
+      await Product.updateOne({ itemCode: "MOVING-1" }, { $set: { price: 6500 + attempts * 250 } });
+    });
+    const moving = await startPreview();
+    setGiniBulkBeforePreviewSeal(null);
+    assert.equal(attempts, 3);
+    assert.equal(moving.status, "paused");
+    assert.equal(moving.errorCode, "preview_catalog_moving");
+    assert.equal(Boolean(moving.finishedAt), false);
+    assert.equal(productGets().length, 1);
+    assert.equal(posts().length, 0);
+    await resumeGiniSyncAll();
+    await waitForGiniBulkIdle();
+    const resumed = (await getLatestGiniSyncJob()).job;
+    const resumedRow = (await rowsFor(resumed))[0];
+    assert.equal(resumed.id, moving.id);
+    assert.equal(resumed.status, "preview");
+    assert.equal(resumedRow.classification, "READY_CREATE");
+    assert.equal(resumedRow.lookupOutcome, "absent");
+    assert.equal(resumedRow.giniPrice, 6500 + attempts * 250);
+    assert.equal(productGets().length, 1);
+    assert.equal(posts().length, 0);
+    assert.equal(giniBulkWritesEnabled(), false);
+  });
+
+  it("does not approve a preview when overrides change between the final catalog reads", async () => {
+    const priced = await makeProduct({ itemCode: "OVR-PRICE", ibsherId: "ovr-price" });
+    const quiet = await makeProduct({ itemCode: "OVR-OFF", ibsherId: "ovr-off" });
+    await mapCollection();
+    let fired = false;
+    setGiniBulkBeforePreviewSeal(async ({ attempt }) => {
+      if (attempt !== 0 || fired) return;
+      fired = true;
+      await Product.updateOne({ _id: priced._id }, { $set: { "overrides.price": 9000, lastSyncedAt: new Date() } });
+      await Product.updateOne({ _id: quiet._id }, { $set: { "overrides.isActive": false } });
+    });
+    const sealed = await startPreview();
+    setGiniBulkBeforePreviewSeal(null);
+    const sealedRows = await rowsFor(sealed);
+    const sealedBySku = Object.fromEntries(sealedRows.map((row) => [row.sku, row]));
+    assert.equal(fired, true);
+    assert.equal(sealed.status, "preview");
+    assert.equal(Boolean(sealed.finishedAt), true);
+    assert.equal(sealedRows.length, 2);
+    assert.equal(sealedBySku["OVR-PRICE"].classification, "READY_CREATE");
+    assert.equal(sealedBySku["OVR-PRICE"].giniPrice, 9000);
+    assert.equal(sealedBySku["OVR-PRICE"].lookupOutcome, "absent");
+    assert.equal(sealedBySku["OVR-OFF"].classification, "INACTIVE");
+    assert.equal(sealedBySku["OVR-OFF"].blockers.includes("product_inactive"), true);
+    assert.equal(sealedBySku["OVR-OFF"].lookupOutcome, "skipped");
+    const lookedUp = productGets().map((item) => skuFromProductUrl(item.url));
+    assert.equal(lookedUp.filter((sku) => sku === "OVR-PRICE").length, 1);
+    assert.equal(lookedUp.filter((sku) => sku === "OVR-OFF").length, 1);
+    assert.equal(posts().length, 0);
+    assert.equal(giniBulkWritesEnabled(), false);
+  });
+
+  it("does not create an approved product when a duplicate normalized sku appears after the owner map", async () => {
+    const approved = await makeProduct({ itemCode: "Honor Pad", ibsherId: "honor-approved" });
+    await makeProduct({ itemCode: "KEEP-OWN", ibsherId: "keep-own" });
+    await mapCollection();
+    const preview = await previewAll();
+    assert.equal(preview.readyCreate, 2);
+    const scansAfterPreview = giniBulkSkuIndexScans();
+    setGiniBulkBeforeSend(async ({ sku }) => {
+      if (giniSkuKey(sku) !== giniSkuKey("Honor Pad")) return;
+      await makeProduct({ itemCode: "  HONOR   PAD  ", ibsherId: "honor-late" });
+    });
+    calls = [];
+    const sync = await runSync(preview);
+    setGiniBulkBeforeSend(null);
+    const syncRows = await rowsFor(sync);
+    const approvedRow = syncRows.find((row) => row.productId === String(approved._id));
+    assert.equal(sync.status, "completed");
+    assert.equal(sync.created, 1);
+    assert.equal(approvedRow.classification, "BLOCKED");
+    assert.equal(approvedRow.errorCode, "duplicate_brownstore_sku");
+    assert.equal(approvedRow.blockers.includes("duplicate_brownstore_sku"), true);
+    assert.equal(await Product.countDocuments({ itemCode: "  HONOR   PAD  " }), 1);
+    assert.deepEqual(
+      posts().map((item) => formFields(item.options).sku),
+      ["KEEP-OWN"]
+    );
+    const lookedUp = productGets().map((item) => skuFromProductUrl(item.url));
+    assert.equal(lookedUp.includes("Honor-Pad"), true);
+    const keepGet = calls.findIndex((item) => item.method === "GET" && skuFromProductUrl(item.url) === "KEEP-OWN");
+    const keepPost = calls.findIndex((item) => item.method === "POST" && formFields(item.options).sku === "KEEP-OWN");
+    assert.equal(keepGet >= 0 && keepGet < keepPost, true);
+    assert.equal(giniBulkSkuIndexScans() - scansAfterPreview, 1);
+    assert.equal(await GiniSyncSendState.countDocuments({ skuKey: giniSkuKey("Honor Pad") }), 0);
+    assert.equal((await GiniSyncSendState.findOne({ skuKey: giniSkuKey("KEEP-OWN") }).lean()).giniProductId !== "", true);
+    delete process.env.GINI_BULK_WRITES_ENABLED;
+    delete process.env.GINI_ALLOW_LIVE_BULK_WRITES;
+    allowPost = false;
+    assert.equal(giniBulkWritesEnabled(), false);
   });
 });

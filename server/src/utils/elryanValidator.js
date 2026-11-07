@@ -17,6 +17,7 @@ export function validateElryanPreviewParts({
   attributeSetUnverified = false,
   variation,
   pricing,
+  pricingApproval,
   images,
   extraBlockers = [],
 }) {
@@ -104,6 +105,25 @@ export function validateElryanPreviewParts({
     blockers.push({ code: "invalid_platform_price", status: ELRYAN_READINESS.NOT_READY });
   }
 
+  if (pricingApproval && pricingApproval.valid !== true) {
+    const reason = String(pricingApproval.reason || "missing");
+    const approvalMessage = {
+      missing: "No Staging price approval is saved for this product.",
+      environment: "The saved price approval is not for Staging.",
+      product: "The saved price approval is for a different product.",
+      sku: "The saved price approval does not match this SKU.",
+      payload_mismatch: "The saved price approval does not match the current payload.",
+      price: "The saved price approval does not match the calculated price.",
+      cost: "The saved price approval does not omit cost.",
+      currency: "The saved price approval is not IQD.",
+    }[reason];
+    blockers.push({
+      code: "pricing_unverified",
+      status: ELRYAN_READINESS.PRICING_UNVERIFIED,
+      message: approvalMessage || "The saved Staging price approval does not match this product.",
+    });
+  }
+
   const decision = elryanPreviewDecision({ blockers });
   return {
     readiness: decision.readiness,
@@ -146,4 +166,52 @@ export function elryanPreviewDecision({ blockers = [], readiness = "" } = {}) {
   }
   const ready = next === ELRYAN_READINESS.READY && list.length === 0;
   return { readiness: ready ? ELRYAN_READINESS.READY : next, ready, statuses };
+}
+
+/** Sync All blocks a category the snapshot explicitly marks as a parent. */
+export function elryanParentCategoryBlocker(category) {
+  if (!category || category.isParent !== true) return null;
+  return {
+    code: "category_not_leaf",
+    status: ELRYAN_READINESS.MISSING_MAPPING,
+    message: "Mapped Elryan category is a parent. Product create needs a leaf category id.",
+  };
+}
+
+/**
+ * Sync One may create a Staging product, so a mapped category is a leaf only when
+ * this row was stored with isParent false in a complete Staging snapshot.
+ * A missing row, unknown isParent, or incomplete snapshot is not treated as a leaf.
+ */
+export function elryanVerifiedLeafBlocker({ category = null, snapshot = null } = {}) {
+  if (!snapshot || snapshot.status !== "complete" || snapshot.coverage !== "complete") {
+    return {
+      code: "category_not_leaf",
+      status: ELRYAN_READINESS.MISSING_MAPPING,
+      message:
+        "The Staging category catalog snapshot is missing or incomplete, so the mapped category is not a verified leaf.",
+    };
+  }
+  if (!category) {
+    return {
+      code: "category_not_leaf",
+      status: ELRYAN_READINESS.MISSING_MAPPING,
+      message: "The mapped Elryan category is not in the Staging catalog snapshot.",
+    };
+  }
+  if (category.isParent === true) {
+    return {
+      code: "category_not_leaf",
+      status: ELRYAN_READINESS.MISSING_MAPPING,
+      message: "Mapped Elryan category is a parent. Product create needs a leaf category id.",
+    };
+  }
+  if (category.isParent !== false) {
+    return {
+      code: "category_not_leaf",
+      status: ELRYAN_READINESS.MISSING_MAPPING,
+      message: "The mapped Elryan category is not a confirmed leaf because isParent is unknown.",
+    };
+  }
+  return null;
 }

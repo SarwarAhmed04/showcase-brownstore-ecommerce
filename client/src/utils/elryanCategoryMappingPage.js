@@ -49,6 +49,41 @@ export function withElryanSharedSections(elryanSections, sharedSections) {
   return [...elryan, ...shared];
 }
 
+/** Tabs rendered by ElryanPlatformHost, including retired category tab ids. */
+export function isElryanHostTab(tab) {
+  if (isElryanCategoryMappingTab(tab)) return true;
+  const id = String(tab || "");
+  return elryanPlatformSectionEntries().some(([sectionId]) => sectionId === id);
+}
+
+/**
+ * Advanced Elryan sections stay hidden until their chunk loads.
+ * A failed load keeps the shared admin sections usable.
+ */
+export function selectElryanSidebarSections({ elryanSections, error, sharedSections } = {}) {
+  if (Array.isArray(elryanSections) && elryanSections.length) {
+    return {
+      status: "ready",
+      sections: withElryanSharedSections(elryanSections, sharedSections),
+    };
+  }
+  if (error) {
+    return {
+      status: "error",
+      sections: Array.isArray(sharedSections) ? sharedSections : [],
+    };
+  }
+  return { status: "loading", sections: [] };
+}
+
+/** Keep a real module error. Replace empty failures with a readable fallback. */
+export function elryanLoadError(error, fallback) {
+  if (error instanceof Error && String(error.message || "").trim()) return error;
+  const failure = new Error(fallback);
+  if (error != null) failure.cause = error;
+  return failure;
+}
+
 export function locName(name, lang = "en") {
   if (!name) return "";
   if (typeof name === "string") return name.trim();

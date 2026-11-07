@@ -7,12 +7,15 @@ import {
   ELRYAN_CATEGORY_MAPPING_TAB,
   applySaveToCardDraft,
   brownStoreTaxonomyPath,
+  elryanLoadError,
   elryanPlatformSectionEntries,
   isElryanCategoryMappingTab,
+  isElryanHostTab,
   pickCategoryOnCard,
   resolveElryanPlatformTab,
   reviewBrownStorePath,
   searchHitsForCollection,
+  selectElryanSidebarSections,
   toggleElryanPicker,
   unmappedCollectionCount,
   withElryanSharedSections,
@@ -352,5 +355,109 @@ describe("Elryan unified category mapping page", () => {
     assert.match(i18n, /elryanCategoryMappingTitle: "Category Mapping"/);
     assert.match(i18n, /elryanCategoryMappingTitle: "نەخشەکردنی پۆل"/);
     assert.match(i18n, /elryanCategoryMappingTitle: "تعيين الفئات"/);
+  });
+
+  it("bundles the Elryan host with a static import and keeps advanced sections", () => {
+    const commissions = read("client/src/pages/admin/Commissions.jsx");
+    const sidebar = read("client/src/components/admin/platform/PlatformSidebar.jsx");
+    const host = read("client/src/components/admin/platform/elryanPlatformHost.jsx");
+    assert.equal(commissions.includes("@vite-ignore"), false);
+    assert.equal(sidebar.includes("@vite-ignore"), false);
+    assert.match(commissions, /import\("\.\.\/\.\.\/components\/admin\/platform\/elryanPlatformHost\.jsx"\)/);
+    assert.match(sidebar, /import\("\.\/elryanPlatformHost\.jsx"\)/);
+    assert.match(commissions, /Failed to load Elryan platform host/);
+    assert.match(sidebar, /Failed to load Elryan platform sections/);
+    assert.match(commissions, /console\.error\("Failed to load Elryan platform host\."/);
+    assert.match(sidebar, /console\.error\("Failed to load Elryan platform sections\."/);
+    assert.match(commissions, /ElryanModuleLoadNotice/);
+    assert.match(sidebar, /ElryanModuleLoadNotice/);
+    const i18n = read("client/src/i18n.js");
+    assert.match(i18n, /elryanModuleLoadTitle: "Elryan sections failed to load\."/);
+    assert.match(i18n, /elryanModuleLoadTitle: "بەشەکانی Elryan بارنەکران\."/);
+    assert.match(i18n, /elryanModuleLoadTitle: "تعذّر تحميل أقسام Elryan\."/);
+    assert.match(sidebar, /partnerSlug === "gini"/);
+    assert.match(sidebar, /\["syncAll", "giniSyncAllTitle"\]/);
+    assert.match(sidebar, /\["connection", "miswagApiConnection"\]/);
+    assert.match(sidebar, /\["mappingCategories", "miswagMappingCategories"\]/);
+    assert.match(commissions, /tab === "syncOne" && partnerSlug === "gini"/);
+    assert.match(commissions, /tab === "syncAll" && partnerSlug === "miswag"/);
+    for (const snippet of [
+      'tab === "connection"',
+      "isElryanCategoryMappingTab(tab)",
+      'tab === "elryanAttributes"',
+      'tab === "elryanWarrantyMapping"',
+      'tab === "elryanDimensionsMapping"',
+      'tab === "syncOne"',
+      'tab === "syncAll"',
+      "<ElryanSmartMapping",
+      "<ElryanAttributeMappings",
+      "<ElryanWarrantyMapping",
+      "<ElryanDimensionsMapping",
+      "<ElryanSyncOneProduct",
+      "<ElryanSyncAll",
+      "<ElryanApiConnection",
+    ]) {
+      assert.equal(host.includes(snippet), true, snippet);
+    }
+
+    const ready = selectElryanSidebarSections({
+      elryanSections: elryanPlatformSectionEntries(),
+      error: "",
+      sharedSections: SHARED,
+    });
+    assert.equal(ready.status, "ready");
+    const ids = ready.sections.map(([id]) => id);
+    for (const id of [
+      "connection",
+      ELRYAN_CATEGORY_MAPPING_TAB,
+      "elryanAttributes",
+      "elryanWarrantyMapping",
+      "elryanDimensionsMapping",
+      "syncOne",
+      "syncAll",
+      "overview",
+      "availability",
+      "commissions",
+      "products",
+      "excel",
+      "api",
+    ]) {
+      assert.equal(ids.includes(id), true, id);
+    }
+    assert.equal(ids.includes("mapping"), false);
+    assert.equal(ids.filter((id) => id === ELRYAN_CATEGORY_MAPPING_TAB).length, 1);
+
+    const loading = selectElryanSidebarSections({
+      elryanSections: null,
+      error: "",
+      sharedSections: SHARED,
+    });
+    assert.equal(loading.status, "loading");
+    assert.deepEqual(loading.sections, []);
+
+    const failed = selectElryanSidebarSections({
+      elryanSections: null,
+      error: "chunk missing",
+      sharedSections: SHARED,
+    });
+    assert.equal(failed.status, "error");
+    assert.deepEqual(
+      failed.sections.map(([id]) => id),
+      SHARED.map(([id]) => id)
+    );
+
+    assert.equal(isElryanHostTab("connection"), true);
+    assert.equal(isElryanHostTab("elryanWarrantyMapping"), true);
+    assert.equal(isElryanHostTab("elryanDimensionsMapping"), true);
+    assert.equal(isElryanHostTab("syncOne"), true);
+    assert.equal(isElryanHostTab("syncAll"), true);
+    assert.equal(isElryanHostTab("mapping"), true);
+    assert.equal(isElryanHostTab("overview"), false);
+    assert.equal(isElryanHostTab("products"), false);
+
+    const chunkError = new Error("Failed to fetch dynamically imported module");
+    assert.equal(elryanLoadError(chunkError, "fallback"), chunkError);
+    assert.equal(elryanLoadError(null, "Failed to load Elryan platform host.").message, "Failed to load Elryan platform host.");
+    assert.equal(elryanLoadError(new Error("  "), "Failed to load Elryan platform sections.").message, "Failed to load Elryan platform sections.");
   });
 });

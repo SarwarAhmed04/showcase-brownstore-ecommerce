@@ -84,6 +84,8 @@ const BLOCKER_TEXT = {
   update_in_progress: "An update for this SKU is already open. No second update was sent.",
   change_not_in_preview: "This price or stock change was not in the approved preview.",
   not_in_approved_preview: "This product was not ready to create in the approved Full Preview.",
+  approved_preview_mismatch:
+    "The SKU, payload, or eligibility no longer matches the approved Full Preview. Reconcile the preview before creating this product. No create was sent.",
   historical_sku_hold:
     "This SKU is on the historical hold list. A verified absence does not authorize creating it again.",
   sku_identity_conflict: "The SKU and BrownStore product id do not identify the same product.",

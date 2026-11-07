@@ -12,7 +12,7 @@ function clip(value, max) {
 
 /**
  * Build OpenAPI-shaped create payload. Does not call Elryan.
- * Omits `cost`. `price` is the BrownStore selling price after Elryan commission rules.
+ * Omits `cost`. `price` is the calculated Elryan selling price.
  */
 export function buildElryanProductPayload({
   resolved,

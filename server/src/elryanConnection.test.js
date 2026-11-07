@@ -536,7 +536,7 @@ describe("Elryan connection state and catalog reads", { concurrency: 1 }, () => 
     assert.equal(preview.json.liveWritesAllowed, false);
     assert.equal(preview.json.writesGate.productPostCalled, false);
     assert.notEqual(preview.json.readiness, ELRYAN_READINESS.READY);
-    assert.equal(preview.json.blockers.some((blocker) => blocker.code === "pricing_unverified"), false);
+    assert.equal(preview.json.blockers.some((blocker) => blocker.code === "pricing_unverified"), true);
     assert.equal(preview.json.blockers.some((blocker) => blocker.code === "dimensions_unverified"), true);
     const send = await call("POST", "/api/admin/platforms/elryan/sync-one/send", {
       body: { productId, confirm: true, previewToken: preview.json.previewToken },

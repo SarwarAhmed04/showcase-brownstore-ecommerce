@@ -34,6 +34,10 @@ const giniSyncProductResultSchema = new mongoose.Schema(
     quantity: { type: Number, default: null },
     imageCount: { type: Number, default: 0 },
     payloadHash: { type: String, default: "" },
+    localFingerprint: { type: String, default: "" },
+    policySignature: { type: String, default: "" },
+    lookupOutcome: { type: String, default: "" },
+    lookupSkuKey: { type: String, default: "" },
   },
   { timestamps: true }
 );

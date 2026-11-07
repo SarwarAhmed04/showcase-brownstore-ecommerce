@@ -13,14 +13,16 @@ import { ElryanSyncOnePreview } from "./models/ElryanSyncOnePreview.js";
 import { ElryanStagingProductOverride } from "./models/ElryanStagingProductOverride.js";
 import { ElryanStagingPriceApproval } from "./models/ElryanStagingPriceApproval.js";
 import { ElryanStagingDimensionCheck } from "./models/ElryanStagingDimensionCheck.js";
+import { ElryanCategoryCatalogSnapshot } from "./models/ElryanCategoryCatalogSnapshot.js";
 import { PlatformTaxonomyConfig } from "./models/PlatformTaxonomyConfig.js";
 import { encryptApiKey } from "./utils/partnerAuth.js";
 import { applyCommissionRate } from "./utils/commission.js";
 import { ELRYAN_READINESS } from "./utils/elryanConstants.js";
 import { buildElryanPricingView, elryanOutboundPriceHash } from "./utils/elryanPricing.js";
+import { buildElryanProductPayload } from "./utils/elryanPayloadBuilder.js";
 import { collectElryanImageUrls, setElryanMediaFetchForTests } from "./utils/elryanImages.js";
 import { publicMediaUrl } from "./utils/commissionExcel.js";
-import { validateElryanPreviewParts } from "./utils/elryanValidator.js";
+import { elryanVerifiedLeafBlocker, validateElryanPreviewParts } from "./utils/elryanValidator.js";
 import {
   matchElryanStagingPriceApproval,
   mergeElryanStagingAttributes,
@@ -89,9 +91,38 @@ describe("Elryan staging create gates", () => {
     assert.equal(branded.proposedElryanPrice, applyCommissionRate(10000, 10));
     assert.equal(branded.proposedElryanCost, null);
 
-    const rounded = await buildElryanPricingView({ _id: "p2", price: 10001 }, { commissionRules: [] });
-    assert.equal(rounded.storeSellingPrice, 10001);
-    assert.equal(rounded.proposedElryanPrice, applyCommissionRate(10001, 0));
+    const exact = await buildElryanPricingView({ _id: "p2", price: 10001 }, { commissionRules: [] });
+    assert.equal(exact.storeSellingPrice, 10001);
+    assert.equal(exact.commissionRate, 0);
+    assert.equal(exact.rawPrice, 10001);
+    assert.equal(exact.platformPrice, 10001);
+    assert.equal(exact.proposedElryanPrice, 10001);
+    assert.equal(exact.proposedElryanCost, null);
+    assert.equal(exact.proposedElryanPrice === applyCommissionRate(10001, 0), false);
+    const exactPayload = buildElryanProductPayload({
+      resolved: { name: { en: "Chopper" }, variants: [{ images: [{ url: "https://cdn.example.com/a.jpg" }] }] },
+      sku: "OWCH180002",
+      pricing: exact,
+      quantity: 1,
+    });
+    assert.equal(exactPayload.price, 10001);
+    assert.equal("cost" in exactPayload, false);
+
+    const ruledOdd = await buildElryanPricingView(
+      { _id: "p4", price: 10001 },
+      { commissionRules: [{ partner: "elryan", scope: "all", targetId: "*", percentage: 10, isActive: true }] }
+    );
+    assert.equal(ruledOdd.commissionRate, 10);
+    assert.equal(ruledOdd.proposedElryanPrice, applyCommissionRate(10001, 10));
+    assert.notEqual(ruledOdd.proposedElryanPrice, 10001);
+    const ruledPayload = buildElryanProductPayload({
+      resolved: { name: { en: "Chopper" }, variants: [{ images: [{ url: "https://cdn.example.com/a.jpg" }] }] },
+      sku: "OWCH180002",
+      pricing: ruledOdd,
+      quantity: 1,
+    });
+    assert.equal(ruledPayload.price, applyCommissionRate(10001, 10));
+    assert.equal("cost" in ruledPayload, false);
 
     const edited = await buildElryanPricingView(product, {
       commissionRules: [
@@ -137,9 +168,59 @@ describe("Elryan staging create gates", () => {
     const ready = validateElryanPreviewParts(base);
     assert.equal(ready.ready, true);
     assert.equal(ready.blockers.some((blocker) => blocker.code === "pricing_unverified"), false);
+    const matchedApproval = validateElryanPreviewParts({
+      ...base,
+      pricingApproval: { valid: true, reason: "matched" },
+    });
+    assert.equal(matchedApproval.ready, true);
+    assert.equal(matchedApproval.readiness, ELRYAN_READINESS.READY);
+    for (const reason of ["missing", "payload_mismatch", "price", "sku", "product", "currency", "cost"]) {
+      const rejected = validateElryanPreviewParts({
+        ...base,
+        pricingApproval: { valid: false, reason },
+      });
+      assert.equal(rejected.ready, false, reason);
+      assert.equal(rejected.readiness, ELRYAN_READINESS.PRICING_UNVERIFIED, reason);
+      assert.equal(rejected.blockers.some((blocker) => blocker.code === "pricing_unverified"), true, reason);
+    }
     const blocked = validateElryanPreviewParts({ ...base, pricing: ambiguous });
     assert.equal(blocked.ready, false);
     assert.equal(blocked.blockers.some((blocker) => blocker.code === "price_needs_review"), true);
+  });
+
+  it("accepts only a confirmed leaf from a complete Staging snapshot", () => {
+    const leaf = { id: 340, isParent: false };
+    const complete = { status: "complete", coverage: "complete" };
+    assert.equal(elryanVerifiedLeafBlocker({ category: leaf, snapshot: complete }), null);
+    assert.match(elryanVerifiedLeafBlocker({ category: null, snapshot: null }).message, /missing or incomplete/);
+    assert.match(
+      elryanVerifiedLeafBlocker({ category: null, snapshot: complete }).message,
+      /not in the Staging catalog snapshot/
+    );
+    assert.match(
+      elryanVerifiedLeafBlocker({ category: { id: 340, isParent: true }, snapshot: complete }).message,
+      /parent/
+    );
+    assert.match(
+      elryanVerifiedLeafBlocker({ category: { id: 340, isParent: null }, snapshot: complete }).message,
+      /unknown/
+    );
+    assert.match(
+      elryanVerifiedLeafBlocker({ category: { id: 340 }, snapshot: complete }).message,
+      /unknown/
+    );
+    for (const snapshot of [
+      { status: "incomplete", coverage: "partial" },
+      { status: "complete", coverage: "partial" },
+      { status: "complete", coverage: "unknown" },
+      { status: "complete", coverage: "unreliable_meta" },
+      { status: "failed", coverage: "complete" },
+      { status: "running", coverage: "complete" },
+    ]) {
+      const blocker = elryanVerifiedLeafBlocker({ category: leaf, snapshot });
+      assert.equal(blocker.code, "category_not_leaf");
+      assert.match(blocker.message, /missing or incomplete/);
+    }
   });
 
   it("does not treat a staging override or a mismatched approval as production-ready", () => {
@@ -300,6 +381,7 @@ describe("Elryan single-product staging create", { concurrency: 1 }, () => {
       ElryanSendAttempt.deleteMany({}),
       ElryanConfirmedSend.deleteMany({}),
       ElryanSyncOnePreview.deleteMany({}),
+      ElryanCategoryCatalogSnapshot.deleteMany({}),
     ]);
     const product = await Product.create({
       ibsherId: "ibs-chopper",
@@ -374,6 +456,12 @@ describe("Elryan single-product staging create", { concurrency: 1 }, () => {
         elryanLabel: "waranty kenwood",
       },
     ]);
+    await ElryanCategoryCatalogSnapshot.create({
+      environment: "staging",
+      status: "complete",
+      coverage: "complete",
+      categories: [{ id: 340, name: "Chopper", hierarchy: "Appliances : Chopper", isParent: false }],
+    });
   });
 
   it("stores a staging override for one product and leaves the catalog product unchanged", async () => {
@@ -409,7 +497,7 @@ describe("Elryan single-product staging create", { concurrency: 1 }, () => {
     assert.equal(other.proposedPayload.attributes, undefined);
     assert.equal(other.blockers.some((blocker) => blocker.code === "missing_attribute_chopper_power"), true);
     assert.equal(preview.blockers.some((blocker) => blocker.code === "dimensions_unverified"), true);
-    assert.equal(preview.blockers.some((blocker) => blocker.code === "pricing_unverified"), false);
+    assert.equal(preview.blockers.some((blocker) => blocker.code === "pricing_unverified"), true);
     assert.notEqual(preview.readiness, ELRYAN_READINESS.READY);
     assert.equal(posts, 0);
   });
@@ -475,15 +563,16 @@ describe("Elryan single-product staging create", { concurrency: 1 }, () => {
       const changed = await previewElryanSyncOne({ productId });
       assert.equal(changed.pricingApproval.valid, false);
       assert.equal(changed.pricingApproval.reason, "payload_mismatch");
-      assert.equal(changed.blockers.some((blocker) => blocker.code === "pricing_unverified"), false);
-      assert.equal(changed.readiness, ELRYAN_READINESS.READY);
+      assert.equal(changed.blockers.some((blocker) => blocker.code === "pricing_unverified"), true);
+      assert.notEqual(changed.readiness, ELRYAN_READINESS.READY);
       enableWrites();
       const stale = await sendElryanSyncOne({
         productId,
         confirm: true,
         previewToken: first.previewToken,
       });
-      assert.equal(stale.code, "preview_mismatch");
+      assert.equal(stale.code, "pricing_unverified");
+      assert.equal(posts, 0);
 
       await ElryanStagingDimensionCheck.updateOne({ productId }, { $set: { depth: 20 } });
       await Commission.create({
@@ -496,13 +585,28 @@ describe("Elryan single-product staging create", { concurrency: 1 }, () => {
       const marked = await previewElryanSyncOne({ productId });
       assert.equal(marked.proposedPayload.price, applyCommissionRate(66250, 10));
       assert.equal(marked.pricing.commissionRate, 10);
-      assert.equal(marked.blockers.some((blocker) => blocker.code === "pricing_unverified"), false);
+      assert.equal(marked.blockers.some((blocker) => blocker.code === "pricing_unverified"), true);
+      assert.notEqual(marked.readiness, ELRYAN_READINESS.READY);
+      const blockedAfterRule = await sendElryanSyncOne({
+        productId,
+        confirm: true,
+        previewToken: first.previewToken,
+      });
+      assert.equal(blockedAfterRule.code, "pricing_unverified");
+      assert.equal(posts, 0);
+      await approveElryanStagingPrice({ productId, confirm: true });
+      const renewed = await previewElryanSyncOne({ productId });
+      assert.equal(renewed.readiness, ELRYAN_READINESS.READY);
+      assert.equal(renewed.pricingApproval.valid, true);
+      assert.equal(renewed.proposedPayload.price, applyCommissionRate(66250, 10));
+      assert.equal("cost" in renewed.proposedPayload, false);
       const staleAfterRule = await sendElryanSyncOne({
         productId,
         confirm: true,
         previewToken: first.previewToken,
       });
       assert.equal(staleAfterRule.code, "preview_mismatch");
+      assert.equal(posts, 0);
 
       await Commission.create({
         partner: "miswag",
@@ -567,7 +671,16 @@ describe("Elryan single-product staging create", { concurrency: 1 }, () => {
         confirm: true,
         previewToken: preview.previewToken,
       });
-      assert.equal(staleImage.code, "preview_mismatch");
+      assert.equal(staleImage.code, "pricing_unverified");
+      assert.equal(posts, 0);
+      await approveElryanStagingPrice({ productId, confirm: true });
+      const staleToken = await sendElryanSyncOne({
+        productId,
+        confirm: true,
+        previewToken: preview.previewToken,
+      });
+      assert.equal(staleToken.code, "preview_mismatch");
+      assert.equal(posts, 0);
 
       await Commission.create({
         partner: "elryan",
@@ -576,12 +689,21 @@ describe("Elryan single-product staging create", { concurrency: 1 }, () => {
         percentage: 10,
         isActive: true,
       });
+      const blockedRule = await sendElryanSyncOne({
+        productId,
+        confirm: true,
+        previewToken: preview.previewToken,
+      });
+      assert.equal(blockedRule.code, "pricing_unverified");
+      assert.equal(posts, 0);
+      await approveElryanStagingPrice({ productId, confirm: true });
       const staleRule = await sendElryanSyncOne({
         productId,
         confirm: true,
         previewToken: preview.previewToken,
       });
       assert.equal(staleRule.code, "preview_mismatch");
+      assert.equal(posts, 0);
       const marked = await previewElryanSyncOne({ productId });
       assert.equal(marked.proposedPayload.price, applyCommissionRate(66250, 10));
       assert.equal(marked.proposedPayload.images[0].fileUrl, publicMediaUrl("/uploads/products/other.webp"));
@@ -875,5 +997,256 @@ describe("Elryan single-product staging create", { concurrency: 1 }, () => {
     const created = await first;
     assert.equal(created.ok, true);
     assert.equal(posts, 1);
+  });
+
+  it("blocks READY and create until the saved Staging price approval matches", async () => {
+    await saveElryanStagingProductOverride({
+      environment: "staging",
+      productId,
+      sku: "OWCH180002",
+      attributes: { chopper_power: 6150 },
+      confirm: true,
+    });
+    await confirmElryanStagingDimensions({
+      environment: "staging",
+      productId,
+      sku: "OWCH180002",
+      unit: "cm",
+      width: 30,
+      height: 40,
+      depth: 20,
+      axesConfirmed: true,
+      confirm: true,
+    });
+    const missing = await previewElryanSyncOne({ productId });
+    assert.equal(missing.pricingApproval.valid, false);
+    assert.equal(missing.pricingApproval.reason, "missing");
+    assert.equal(missing.blockers.some((blocker) => blocker.code === "pricing_unverified"), true);
+    assert.notEqual(missing.readiness, ELRYAN_READINESS.READY);
+    assert.equal(missing.proposedPayload.price, 66250);
+    assert.equal("cost" in missing.proposedPayload, false);
+    enableWrites();
+    const denied = await sendElryanSyncOne({
+      productId,
+      confirm: true,
+      previewToken: missing.previewToken,
+    });
+    assert.equal(denied.code, "pricing_unverified");
+    assert.equal(posts, 0);
+
+    await approveElryanStagingPrice({ productId, confirm: true });
+    const matched = await previewElryanSyncOne({ productId });
+    assert.equal(matched.pricingApproval.valid, true);
+    assert.equal(matched.pricingApproval.reason, "matched");
+    assert.equal(matched.readiness, ELRYAN_READINESS.READY);
+    assert.equal(matched.blockers.length, 0);
+    assert.equal(matched.proposedPayload.price, 66250);
+    assert.equal("cost" in matched.proposedPayload, false);
+
+    await ElryanStagingPriceApproval.updateOne({ productId }, { $set: { price: 1 } });
+    const wrongPrice = await previewElryanSyncOne({ productId });
+    assert.equal(wrongPrice.pricingApproval.valid, false);
+    assert.equal(wrongPrice.pricingApproval.reason, "price");
+    assert.notEqual(wrongPrice.readiness, ELRYAN_READINESS.READY);
+    const deniedPrice = await sendElryanSyncOne({
+      productId,
+      confirm: true,
+      previewToken: matched.previewToken,
+    });
+    assert.equal(deniedPrice.code, "pricing_unverified");
+    assert.equal(posts, 0);
+
+    await ElryanStagingPriceApproval.updateOne({ productId }, { $set: { price: 66250, sku: "OTHER" } });
+    const wrongSku = await previewElryanSyncOne({ productId });
+    assert.equal(wrongSku.pricingApproval.reason, "sku");
+    const deniedSku = await sendElryanSyncOne({
+      productId,
+      confirm: true,
+      previewToken: matched.previewToken,
+    });
+    assert.equal(deniedSku.code, "pricing_unverified");
+    assert.equal(posts, 0);
+
+    await ElryanStagingPriceApproval.updateOne({ productId }, { $set: { sku: "OWCH180002", currency: "USD" } });
+    const wrongCurrency = await previewElryanSyncOne({ productId });
+    assert.equal(wrongCurrency.pricingApproval.reason, "currency");
+    assert.notEqual(wrongCurrency.readiness, ELRYAN_READINESS.READY);
+
+    await ElryanStagingDimensionCheck.updateOne({ productId }, { $set: { depth: 21 } });
+    await approveElryanStagingPrice({ productId, confirm: true });
+    await ElryanStagingDimensionCheck.updateOne({ productId }, { $set: { depth: 20 } });
+    const stalePayload = await previewElryanSyncOne({ productId });
+    assert.equal(stalePayload.pricingApproval.reason, "payload_mismatch");
+    assert.equal(stalePayload.blockers.some((blocker) => blocker.code === "pricing_unverified"), true);
+    const deniedPayload = await sendElryanSyncOne({
+      productId,
+      confirm: true,
+      previewToken: matched.previewToken,
+    });
+    assert.equal(deniedPayload.code, "pricing_unverified");
+    assert.equal(posts, 0);
+
+    await approveElryanStagingPrice({ productId, confirm: true });
+    const restored = await previewElryanSyncOne({ productId });
+    assert.equal(restored.pricingApproval.valid, true);
+    assert.equal(restored.pricingApproval.reason, "matched");
+    assert.equal(restored.readiness, ELRYAN_READINESS.READY);
+    assert.equal(posts, 0);
+  });
+
+  it("rejects a parent category and accepts a verified leaf", async () => {
+    await ElryanCategoryCatalogSnapshot.updateOne(
+      { environment: "staging" },
+      { $set: { "categories.0.isParent": true, "categories.0.name": "Appliances" } }
+    );
+    await saveElryanStagingProductOverride({
+      environment: "staging",
+      productId,
+      sku: "OWCH180002",
+      attributes: { chopper_power: 6150 },
+      confirm: true,
+    });
+    await confirmElryanStagingDimensions({
+      environment: "staging",
+      productId,
+      sku: "OWCH180002",
+      unit: "cm",
+      width: 30,
+      height: 40,
+      depth: 20,
+      axesConfirmed: true,
+      confirm: true,
+    });
+    const parent = await previewElryanSyncOne({ productId });
+    assert.equal(parent.blockers.some((blocker) => blocker.code === "category_not_leaf"), true);
+    assert.notEqual(parent.readiness, ELRYAN_READINESS.READY);
+    await assert.rejects(
+      () => approveElryanStagingPrice({ productId, confirm: true }),
+      (err) => err.code === "not_ready"
+    );
+
+    const stored = await ElryanSyncOnePreview.findOne({ productId }).sort({ createdAt: -1 }).lean();
+    await ElryanStagingPriceApproval.create({
+      environment: "staging",
+      productId,
+      sku: "OWCH180002",
+      price: parent.proposedPayload.price,
+      currency: "IQD",
+      commissionRate: 0,
+      sendPriceOnly: true,
+      costOmitted: true,
+      payoutUnknownAccepted: true,
+      payloadHash: stored.payloadHash,
+      approvedAt: new Date(),
+    });
+    const stillParent = await previewElryanSyncOne({ productId });
+    assert.equal(stillParent.pricingApproval.valid, true);
+    assert.equal(stillParent.blockers.some((blocker) => blocker.code === "category_not_leaf"), true);
+    assert.notEqual(stillParent.readiness, ELRYAN_READINESS.READY);
+    enableWrites();
+    const blocked = await sendElryanSyncOne({
+      productId,
+      confirm: true,
+      previewToken: stillParent.previewToken,
+    });
+    assert.equal(blocked.code, "not_ready");
+    assert.equal(posts, 0);
+
+    await ElryanCategoryCatalogSnapshot.updateOne(
+      { environment: "staging" },
+      { $set: { "categories.0.isParent": false } }
+    );
+    const leaf = await previewElryanSyncOne({ productId });
+    assert.equal(leaf.blockers.some((blocker) => blocker.code === "category_not_leaf"), false);
+    assert.equal(leaf.pricingApproval.valid, true);
+    assert.equal(leaf.readiness, ELRYAN_READINESS.READY);
+    assert.equal(leaf.proposedPayload.price, 66250);
+    assert.equal("cost" in leaf.proposedPayload, false);
+    assert.equal(posts, 0);
+  });
+
+  it("does not treat a missing, unknown, or incomplete category as a leaf", async () => {
+    await saveElryanStagingProductOverride({
+      environment: "staging",
+      productId,
+      sku: "OWCH180002",
+      attributes: { chopper_power: 6150 },
+      confirm: true,
+    });
+    await confirmElryanStagingDimensions({
+      environment: "staging",
+      productId,
+      sku: "OWCH180002",
+      unit: "cm",
+      width: 30,
+      height: 40,
+      depth: 20,
+      axesConfirmed: true,
+      confirm: true,
+    });
+    await approveElryanStagingPrice({ productId, confirm: true });
+    const ready = await previewElryanSyncOne({ productId });
+    assert.equal(ready.readiness, ELRYAN_READINESS.READY);
+    assert.equal(ready.pricingApproval.valid, true);
+    assert.equal(ready.blockers.some((blocker) => blocker.code === "warranty_unverified"), false);
+
+    async function blockedSend(messagePattern) {
+      const preview = await previewElryanSyncOne({ productId });
+      assert.equal(preview.blockers.some((blocker) => blocker.code === "category_not_leaf"), true);
+      assert.match(preview.blockers.find((blocker) => blocker.code === "category_not_leaf").message, messagePattern);
+      assert.notEqual(preview.readiness, ELRYAN_READINESS.READY);
+      assert.equal(preview.pricingApproval.valid, true);
+      enableWrites();
+      const sent = await sendElryanSyncOne({
+        productId,
+        confirm: true,
+        previewToken: preview.previewToken,
+      });
+      assert.equal(sent.code, "not_ready");
+      assert.equal(posts, 0);
+      return preview;
+    }
+
+    await ElryanCategoryCatalogSnapshot.deleteMany({});
+    await blockedSend(/missing or incomplete/);
+
+    await ElryanCategoryCatalogSnapshot.create({
+      environment: "staging",
+      status: "complete",
+      coverage: "complete",
+      categories: [{ id: 999, name: "Other", isParent: false }],
+    });
+    await blockedSend(/not in the Staging catalog snapshot/);
+
+    await ElryanCategoryCatalogSnapshot.collection.updateOne(
+      { environment: "staging" },
+      { $set: { "categories.0.id": 340, "categories.0.isParent": null, status: "complete", coverage: "complete" } }
+    );
+    await blockedSend(/unknown/);
+
+    await ElryanCategoryCatalogSnapshot.updateOne(
+      { environment: "staging" },
+      {
+        $set: {
+          status: "incomplete",
+          coverage: "partial",
+          categories: [{ id: 340, name: "Chopper", isParent: false }],
+        },
+      }
+    );
+    await blockedSend(/missing or incomplete/);
+
+    await ElryanCategoryCatalogSnapshot.updateOne(
+      { environment: "staging" },
+      { $set: { status: "complete", coverage: "complete" } }
+    );
+    const leaf = await previewElryanSyncOne({ productId });
+    assert.equal(leaf.blockers.some((blocker) => blocker.code === "category_not_leaf"), false);
+    assert.equal(leaf.pricingApproval.valid, true);
+    assert.equal(leaf.readiness, ELRYAN_READINESS.READY);
+    assert.equal("cost" in leaf.proposedPayload, false);
+    assert.equal(posts, 0);
+    assert.equal(await ElryanConfirmedSend.countDocuments({}), 0);
+    assert.equal(await ElryanSendAttempt.countDocuments({ status: "succeeded" }), 0);
   });
 });

@@ -18,7 +18,7 @@ import { verifyElryanPublicImages } from "../utils/elryanImages.js";
 import { sanitizeElryanText } from "../utils/elryanRedact.js";
 import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platformTaxonomy.js";
 import { evaluatePlatformEligibility } from "../utils/platformEligibility.js";
-import { validateElryanPreviewParts } from "../utils/elryanValidator.js";
+import { elryanParentCategoryBlocker, validateElryanPreviewParts } from "../utils/elryanValidator.js";
 import { assessElryanSellableUnits } from "../utils/elryanVariations.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import {
@@ -387,13 +387,8 @@ export async function evaluateElryanProductForSync(doc, context, { origin = "", 
   });
   const extraBlockers = [...elryanDimensionBlockers(dimensions)];
   const category = mapping.categoryId ? context.categoryIndex.get(String(mapping.categoryId)) : null;
-  if (category && category.isParent === true) {
-    extraBlockers.push({
-      code: "category_not_leaf",
-      status: ELRYAN_READINESS.MISSING_MAPPING,
-      message: "Mapped Elryan category is a parent. Product create needs a leaf category id.",
-    });
-  }
+  const parentBlock = elryanParentCategoryBlocker(category);
+  if (parentBlock) extraBlockers.push(parentBlock);
   const attributeInfo = await attributeInspection(context, mapping.categoryId, attributes);
   const pricing = await buildElryanPricingView(doc, { commissionRules: context.rules });
   const images = collectElryanImageUrls(resolved);

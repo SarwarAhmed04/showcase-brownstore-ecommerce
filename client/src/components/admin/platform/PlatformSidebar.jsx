@@ -2,9 +2,12 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { imgUrl } from "../../../lib/img";
+import { ElryanModuleLoadNotice } from "./ElryanPanelErrorBoundary";
 import {
   ELRYAN_CATEGORY_MAPPING_TAB,
+  elryanLoadError,
   isElryanLegacyCategoryTab,
+  selectElryanSidebarSections,
   withElryanSharedSections,
 } from "../../../utils/elryanCategoryMappingPage";
 
@@ -21,12 +24,23 @@ export const PLATFORM_SECTIONS = [
 let elryanSectionsLoader = null;
 function loadElryanSections() {
   if (!elryanSectionsLoader) {
-    elryanSectionsLoader = import(
-      /* @vite-ignore */
-      "./elryanPlatformHost.jsx"
-    )
-      .then((mod) => (typeof mod.elryanPlatformSections === "function" ? mod.elryanPlatformSections() : null))
-      .catch(() => null);
+    elryanSectionsLoader = import("./elryanPlatformHost.jsx")
+      .then((mod) => {
+        if (typeof mod.elryanPlatformSections !== "function") {
+          throw new Error("Elryan platform sections export is missing.");
+        }
+        const sections = mod.elryanPlatformSections();
+        if (!Array.isArray(sections) || sections.length === 0) {
+          throw new Error("Elryan platform sections were empty.");
+        }
+        return sections;
+      })
+      .catch((error) => {
+        elryanSectionsLoader = null;
+        const failure = elryanLoadError(error, "Failed to load Elryan platform sections.");
+        console.error("Failed to load Elryan platform sections.", failure);
+        throw failure;
+      });
   }
   return elryanSectionsLoader;
 }
@@ -97,17 +111,40 @@ function SectionButton({ active, label, onClick, disabled, badge }) {
 export function PlatformNavBody({ nav, t, onNavigate }) {
   const partner = nav?.partner;
   const [elryanSections, setElryanSections] = useState(null);
+  const [elryanSectionsError, setElryanSectionsError] = useState("");
+  const [elryanLoadAttempt, setElryanLoadAttempt] = useState(0);
   useEffect(() => {
-    if (partner?.slug !== "elryan") return undefined;
+    if (partner?.slug !== "elryan") {
+      setElryanSections(null);
+      setElryanSectionsError("");
+      return undefined;
+    }
     let cancelled = false;
-    loadElryanSections().then((sections) => {
-      if (!cancelled) setElryanSections(sections);
-    });
+    loadElryanSections()
+      .then((sections) => {
+        if (cancelled) return;
+        setElryanSections(sections);
+        setElryanSectionsError("");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        const failure = elryanLoadError(error, "Failed to load Elryan platform sections.");
+        setElryanSections(null);
+        setElryanSectionsError(failure.message);
+      });
     return () => {
       cancelled = true;
     };
-  }, [partner?.slug]);
-  const sections = platformSectionsFor(partner?.slug, elryanSections);
+  }, [partner?.slug, elryanLoadAttempt]);
+  const elryanNav =
+    partner?.slug === "elryan"
+      ? selectElryanSidebarSections({
+          elryanSections,
+          error: elryanSectionsError,
+          sharedSections: PLATFORM_SECTIONS,
+        })
+      : null;
+  const sections = elryanNav ? elryanNav.sections : platformSectionsFor(partner?.slug);
   return (
     <div className="flex h-full flex-col">
       <div className="px-4 pb-4 pt-6">
@@ -130,7 +167,27 @@ export function PlatformNavBody({ nav, t, onNavigate }) {
           <span className="min-w-0 flex-1 truncate font-display text-xl">{partner?.name || "…"}</span>
         </button>
       </div>
-      <nav className="flex flex-1 flex-col divide-y divide-brown/10 overflow-y-auto px-3 pb-6">
+      <nav
+        className="flex flex-1 flex-col divide-y divide-brown/10 overflow-y-auto px-3 pb-6"
+        data-elryan-sections={elryanNav?.status || "shared"}
+      >
+        {elryanNav?.status === "error" ? (
+          <ElryanModuleLoadNotice
+            compact
+            t={t}
+            message={elryanSectionsError}
+            onRetry={() => {
+              setElryanSections(null);
+              setElryanSectionsError("");
+              setElryanLoadAttempt((attempt) => attempt + 1);
+            }}
+          />
+        ) : null}
+        {elryanNav?.status === "loading" ? (
+          <p className="px-3 py-2 text-sm font-semibold text-brown/50">
+            {t.loading}
+          </p>
+        ) : null}
         {sections.map(([id, labelKey]) => (
           <SectionButton
             key={id}

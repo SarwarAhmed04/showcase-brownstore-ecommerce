@@ -29,6 +29,9 @@ export function elryanStagingSendGate({ preview, writesGate, now = Date.now(), l
   if (!Array.isArray(preview.blockers) || preview.blockers.length > 0) {
     return { enabled: false, reason: "blockers" };
   }
+  if (preview.pricingApproval?.valid !== true) {
+    return { enabled: false, reason: "pricing_unverified" };
+  }
 
   const token = String(preview.previewToken || "").trim();
   if (!token) return { enabled: false, reason: "preview_required" };

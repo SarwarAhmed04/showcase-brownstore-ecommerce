@@ -5,7 +5,7 @@ import { api } from "../../api";
 import { useAuth } from "../../context/AuthContext";
 import { useLang } from "../../context/LangContext";
 import { tName } from "../../i18n";
-import { resolveElryanPlatformTab } from "../../utils/elryanCategoryMappingPage";
+import { elryanLoadError, isElryanHostTab, resolveElryanPlatformTab } from "../../utils/elryanCategoryMappingPage";
 import { imgUrl } from "../../lib/img";
 import Spinner from "../../components/Spinner";
 import AdminModal from "../../components/admin/AdminModal";
@@ -18,25 +18,59 @@ import GiniResyncDeleted from "../../components/admin/platform/GiniResyncDeleted
 import GiniSyncOneProduct from "../../components/admin/platform/GiniSyncOneProduct";
 import GiniSkuCreatePanel from "../../components/admin/platform/GiniSkuCreatePanel";
 import MiswagApiConnection from "../../components/admin/platform/MiswagApiConnection";
+import { ElryanModuleLoadNotice } from "../../components/admin/platform/ElryanPanelErrorBoundary";
 
-/** Optional local Elryan WIP panels (file absent on GINI-only deploys). */
-function useOptionalElryanHost() {
+/** Lazy Elryan panels. Keep this specifier static so Vite bundles the production chunk. */
+function useElryanPlatformHost(partnerSlug) {
   const [Host, setHost] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
   useEffect(() => {
+    if (partnerSlug !== "elryan") {
+      setHost(null);
+      setError("");
+      setLoading(false);
+      return undefined;
+    }
     let cancelled = false;
-    import(
-      /* @vite-ignore */
-      "../../components/admin/platform/elryanPlatformHost.jsx"
-    )
+    setLoading(true);
+    import("../../components/admin/platform/elryanPlatformHost.jsx")
       .then((mod) => {
-        if (!cancelled && mod?.default) setHost(() => mod.default);
+        if (typeof mod?.default !== "function") {
+          throw new Error("Elryan platform host component is missing.");
+        }
+        if (cancelled) return null;
+        setHost(() => mod.default);
+        setError("");
+        return mod;
       })
-      .catch(() => {});
+      .catch((err) => {
+        const failure = elryanLoadError(err, "Failed to load Elryan platform host.");
+        console.error("Failed to load Elryan platform host.", failure);
+        if (cancelled) return;
+        setHost(null);
+        setError(failure.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
-  }, []);
-  return Host;
+  }, [partnerSlug, attempt]);
+
+  return {
+    Host,
+    error,
+    loading,
+    retry: () => {
+      setHost(null);
+      setError("");
+      setAttempt((current) => current + 1);
+    },
+  };
 }
 import MiswagMappingCategories from "../../components/admin/platform/MiswagMappingCategories";
 import MiswagSyncAll from "../../components/admin/platform/MiswagSyncAll";
@@ -976,7 +1010,12 @@ function ExcelColumnOrder({ columns, onReorder, onRemove, removeLabel }) {
 function PartnerCommission({ partnerSlug, t, lang }) {
   const { user } = useAuth();
   const { setNav } = usePlatformNav();
-  const ElryanHost = useOptionalElryanHost();
+  const {
+    Host: ElryanHost,
+    error: elryanHostError,
+    loading: elryanHostLoading,
+    retry: retryElryanHost,
+  } = useElryanPlatformHost(partnerSlug);
   const isPrimary = Boolean(user?.isPrimary);
   const [partner, setPartner] = useState(null);
   const [targets, setTargets] = useState({
@@ -2121,6 +2160,16 @@ function PartnerCommission({ partnerSlug, t, lang }) {
           <GiniSyncAll t={t} />
           <GiniResyncDeleted t={t} />
         </>
+      ) : null}
+
+      {partnerSlug === "elryan" && elryanHostError ? (
+        <ElryanModuleLoadNotice t={t} message={elryanHostError} onRetry={retryElryanHost} />
+      ) : null}
+
+      {partnerSlug === "elryan" && elryanHostLoading && !ElryanHost && isElryanHostTab(tab) ? (
+        <p className="text-sm font-semibold text-brown/55" data-elryan-host="loading">
+          {t.loading}
+        </p>
       ) : null}
 
       {ElryanHost ? <ElryanHost tab={tab} partnerSlug={partnerSlug} t={t} lang={lang} /> : null}

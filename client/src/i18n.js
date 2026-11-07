@@ -734,6 +734,9 @@ export const translations = {
     elryanPanelCrashTitle: "پانێڵی Elryan شکستی هێنا.",
     elryanPanelCrashHint: "بەشی دیکەی ئەدمین بەردەستە. دووبارە هەوڵ بدە یان پەڕەکە نوێ بکەوە. کەتەلۆگی پۆلەکان نەسڕاوەتەوە.",
     elryanPanelCrashRetry: "هەوڵی دووبارە",
+    elryanModuleLoadTitle: "بەشەکانی Elryan بارنەکران.",
+    elryanModuleLoadHint:
+      "پانێڵە پێشکەوتووەکان نەهاتن. بەشی دیکەی ئەدمین بەردەستە. دووبارە هەوڵ بدە یان پەڕەکە نوێ بکەوە.",
     elryanCatalogStatus: "دۆخی کەتەلۆگ",
     elryanPageLabel: "لاپەڕە",
     elryanPrevPage: "پێشوو",
@@ -874,6 +877,7 @@ export const translations = {
     elryanSendReasonExpired: "تۆکنی پێشبینین بەسەرچووە.",
     elryanSendReasonAttempt: "هەوڵێکی سەرکەوتوو، نادیار، یان لە جێبەجێکردندا ڕێگری لە دروستکردنێکی تر دەکات.",
     elryanSendReasonSku: "یەکەم ناردنی Staging تەنها بۆ SKU OWCH180002 ـە.",
+    elryanSendReasonPrice: "پەسەندی نرخی Staging لەگەڵ ئەم SKU و نرخەدا ناگونجێت.",
     elryanRemainingBlockers: "ئەوەی ماوە پێش ناردن",
     elryanNoBlockers: "هیچ بلۆکەرێک نەماوە.",
     elryanStagingOverride: "تایبەتمەندی تایبەتی Staging",
@@ -2116,6 +2120,9 @@ export const translations = {
     elryanPanelCrashHint:
       "The rest of admin stays available. Retry or refresh the page. The category catalog snapshot was not deleted.",
     elryanPanelCrashRetry: "Try again",
+    elryanModuleLoadTitle: "Elryan sections failed to load.",
+    elryanModuleLoadHint:
+      "The advanced Elryan panels did not load. The rest of admin stays available. Retry or refresh the page.",
     elryanCatalogStatus: "Catalog status",
     elryanPageLabel: "Page",
     elryanPrevPage: "Previous",
@@ -2263,6 +2270,7 @@ export const translations = {
     elryanSendReasonExpired: "The preview token is expired.",
     elryanSendReasonAttempt: "A successful, uncertain, or in-progress send blocks another create.",
     elryanSendReasonSku: "The first Staging send is limited to SKU OWCH180002.",
+    elryanSendReasonPrice: "The saved Staging price approval does not match this SKU and price.",
     elryanRemainingBlockers: "Remaining blockers",
     elryanNoBlockers: "No blockers remain.",
     elryanStagingOverride: "Staging product override",
@@ -3487,6 +3495,9 @@ export const translations = {
     elryanPanelCrashTitle: "فشل عرض لوحة Elryan.",
     elryanPanelCrashHint: "بقية لوحة الإدارة متاحة. أعد المحاولة أو حدّث الصفحة. لم يُحذف كتالوج الفئات.",
     elryanPanelCrashRetry: "إعادة المحاولة",
+    elryanModuleLoadTitle: "تعذّر تحميل أقسام Elryan.",
+    elryanModuleLoadHint:
+      "لم تُحمَّل اللوحات المتقدمة. بقية لوحة الإدارة متاحة. أعد المحاولة أو حدّث الصفحة.",
     elryanCatalogStatus: "حالة الكتالوج",
     elryanPageLabel: "صفحة",
     elryanPrevPage: "السابق",
@@ -3628,6 +3639,7 @@ export const translations = {
     elryanSendReasonExpired: "انتهت صلاحية رمز المعاينة.",
     elryanSendReasonAttempt: "محاولة ناجحة أو غير مؤكدة أو قيد التنفيذ تمنع إنشاءً آخر.",
     elryanSendReasonSku: "أول إرسال إلى Staging مقتصر على SKU OWCH180002.",
+    elryanSendReasonPrice: "اعتماد سعر Staging المحفوظ لا يطابق SKU والسعر.",
     elryanRemainingBlockers: "الموانع المتبقية",
     elryanNoBlockers: "لا توجد موانع.",
     elryanStagingOverride: "تجاوز خاص بالمنتج في Staging",
