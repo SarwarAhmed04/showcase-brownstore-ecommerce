@@ -124,6 +124,7 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
   const changedView = current?.strategy === "changed";
   const changedPreviewJobId = completedChangedPreviewId(changedPreview);
   const previewBusy = Boolean(runningPreview);
+  const previewBatchSize = preview?.batchSize ?? current?.batchSize ?? null;
 
   return (
     <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
@@ -263,7 +264,7 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
           ) : null}
           {showingPreview ? (
             <p className="text-xs text-brown/45">
-              {t.miswagDryRunNote} · {t.miswagBatchSize}: {preview.batchSize}
+              {t.miswagDryRunNote} · {t.miswagBatchSize}: {previewBatchSize ?? "—"}
             </p>
           ) : null}
         </div>
