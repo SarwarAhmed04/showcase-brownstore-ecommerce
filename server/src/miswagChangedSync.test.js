@@ -27,11 +27,14 @@ import {
   ensureMiswagSyncRunner,
   getLatestMiswagSyncJob,
   pauseMiswagSyncAll,
+  resetMiswagPreviewForTests,
   resumeMiswagSyncAll,
   evaluateMiswagProductForSync,
   runMiswagSyncPreview,
+  setMiswagPreviewBatchGate,
   startMiswagSyncAll,
   stopMiswagSyncAll,
+  waitForMiswagPreview,
 } from "./services/miswagSyncAll.js";
 import {
   classifyMiswagPayload,
@@ -442,6 +445,7 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
   });
 
   beforeEach(async () => {
+    resetMiswagPreviewForTests();
     setMiswagFetch(null);
     delete process.env.MISWAG_API_KEY;
     delete process.env.MISWAG_API_SECRET;
@@ -905,16 +909,23 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
     await mapDefaultCollection();
     installFetch(() => mockResponse(201, { data: { item_id: "mw" } }));
     const plain = await call("POST", "/api/admin/platforms/miswag/sync-all/preview", { body: {} });
-    assert.equal(plain.status, 200);
+    assert.equal(plain.status, 202);
     assert.equal(plain.json.strategy, "full");
     assert.equal(plain.json.sentToMiswag, 0);
-    assert.equal(plain.json.job.ready >= 1, true);
+    assert.equal(plain.json.dryRun, true);
+    assert.equal(plain.json.job.status, "preview_running");
+    const plainDone = await waitForMiswagPreview(plain.json.job.id);
+    assert.equal(plainDone.status, "preview");
+    assert.equal(plainDone.ready >= 1, true);
     const changed = await call("POST", "/api/admin/platforms/miswag/sync-all/preview", {
       body: { strategy: "changed" },
     });
-    assert.equal(changed.status, 200);
+    assert.equal(changed.status, 202);
     assert.equal(changed.json.strategy, "changed");
     assert.equal(changed.json.sentToMiswag, 0);
+    const changedDone = await waitForMiswagPreview(changed.json.job.id);
+    assert.equal(changedDone.status, "preview");
+    assert.equal(changedDone.strategy, "changed");
 
     await MiswagSyncJob.collection.insertOne({
       partner: "miswag",
@@ -1306,5 +1317,164 @@ describe("Miswag changed-product sync", { concurrency: 1 }, () => {
       release();
     }
     await sleep(200);
+  });
+
+  it("starts a changed preview without waiting for the catalog and recovers it after a newer full preview", async () => {
+    await markConnected();
+    await Product.create(sampleProduct("recover"));
+    await mapDefaultCollection();
+    const posts = [];
+    installFetch(() => {
+      posts.push("unexpected");
+      return mockResponse(201, { data: { item_id: "should-not-send" } });
+    });
+    let release = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    setMiswagPreviewBatchGate(() => gate);
+    try {
+      const started = await call("POST", "/api/admin/platforms/miswag/sync-all/preview", {
+        body: { strategy: "changed" },
+      });
+      assert.equal(started.status, 202);
+      assert.equal(started.json.accepted, true);
+      assert.equal(started.json.dryRun, true);
+      assert.equal(started.json.sentToMiswag, 0);
+      assert.equal(started.json.job.status, "preview_running");
+      assert.equal(started.json.job.mode, "preview");
+      assert.equal(started.json.job.strategy, "changed");
+      assert.equal(started.json.job.finishedAt || null, null);
+      const stored = await MiswagSyncJob.findById(started.json.job.id).lean();
+      assert.equal(stored.status, "preview_running");
+      assert.equal(stored.processed, 0);
+      assert.equal(posts.length, 0);
+
+      const same = await call("POST", "/api/admin/platforms/miswag/sync-all/preview", {
+        body: { strategy: "changed" },
+      });
+      assert.equal(same.status, 202);
+      assert.equal(same.json.alreadyRunning, true);
+      assert.equal(same.json.job.id, started.json.job.id);
+      assert.equal(await MiswagSyncJob.countDocuments({ status: "preview_running" }), 1);
+
+      const other = await call("POST", "/api/admin/platforms/miswag/sync-all/preview", {
+        body: { strategy: "full" },
+      });
+      assert.equal(other.status, 409);
+      assert.equal(other.json.code, "preview_active");
+      assert.equal(await MiswagSyncJob.countDocuments({ status: "preview_running" }), 1);
+      assert.equal(posts.length, 0);
+
+      const unconfirmed = await call("POST", "/api/admin/platforms/miswag/sync-all/start", {
+        body: { confirm: false, strategy: "changed", previewJobId: started.json.job.id },
+      });
+      assert.equal(unconfirmed.status, 400);
+      assert.equal(unconfirmed.json.code, "confirm_required");
+      const tooEarly = await call("POST", "/api/admin/platforms/miswag/sync-all/start", {
+        body: { confirm: true, strategy: "changed", previewJobId: started.json.job.id },
+      });
+      assert.equal(tooEarly.status, 409);
+      assert.equal(tooEarly.json.code, "changed_preview_required");
+      assert.equal(posts.length, 0);
+    } finally {
+      release();
+      resetMiswagPreviewForTests();
+    }
+
+    const done = await waitForMiswagPreview( (await MiswagSyncJob.findOne({ strategy: "changed" }).sort({ createdAt: -1 }))._id );
+    assert.equal(done.status, "preview");
+    assert.ok(done.finishedAt);
+    assert.equal(posts.length, 0);
+
+    const full = await call("POST", "/api/admin/platforms/miswag/sync-all/preview", { body: { strategy: "full" } });
+    assert.equal(full.status, 202);
+    const fullDone = await waitForMiswagPreview(full.json.job.id);
+    assert.equal(fullDone.strategy, "full");
+    assert.notEqual(fullDone.id, done.id);
+
+    const status = await call("GET", "/api/admin/platforms/miswag/sync-all");
+    assert.equal(status.status, 200);
+    assert.equal(status.json.job.id, fullDone.id);
+    assert.equal(status.json.job.strategy, "full");
+    assert.equal(status.json.changedPreview.job.id, done.id);
+    assert.equal(status.json.changedPreview.job.strategy, "changed");
+    assert.equal(status.json.changedPreview.completed, true);
+    assert.equal(status.json.changedPreview.sentToMiswag, 0);
+
+    const recovered = await call("GET", "/api/admin/platforms/miswag/sync-all/changed-preview");
+    assert.equal(recovered.status, 200);
+    assert.equal(recovered.json.changedPreview.job.id, done.id);
+    assert.equal(recovered.json.changedPreview.dryRun, true);
+    const progress = await call("GET", `/api/admin/platforms/miswag/sync-all/preview/${done.id}`);
+    assert.equal(progress.status, 200);
+    assert.equal(progress.json.job.id, done.id);
+    assert.equal(progress.json.completed, true);
+
+    const hidden = await fetch(`http://127.0.0.1:${server.address().port}/api/admin/platforms/miswag/sync-all/changed-preview`);
+    assert.equal(hidden.status, 401);
+
+    const ui = readSource("../../client/src/components/admin/platform/MiswagSyncAll.jsx");
+    const api = readSource("../../client/src/api.js");
+    const route = readSource("routes/miswagConnection.js");
+    assert.match(ui, /data-miswag-changed-scope="new-and-changed"/);
+    assert.match(ui, /completedChangedPreviewId\(changedPreview\)/);
+    assert.match(ui, /api\.miswagSyncAllStart\(true, "changed", changedPreviewJobId\)/);
+    assert.match(api, /miswagSyncAllChangedPreview/);
+    assert.match(route, /startMiswagSyncPreview/);
+    assert.match(route, /status\(202\)/);
+    assert.equal(route.includes("runMiswagSyncPreview"), false);
+    const service = readSource("services/miswag.js");
+    assert.match(service, /no official Miswag API document proving/);
+    assert.match(service, /\/v1\/items\/bulk-create/);
+  });
+
+  it("resumes an interrupted changed preview from the saved cursor without resetting counts", async () => {
+    await markConnected();
+    const first = await Product.create(sampleProduct("resume-a"));
+    await Product.create(sampleProduct("resume-b"));
+    await mapDefaultCollection();
+    installFetch(() => mockResponse(404, {}));
+    const job = await MiswagSyncJob.create({
+      partner: "miswag",
+      status: "preview_running",
+      mode: "preview",
+      strategy: "changed",
+      batchSize: 15,
+      total: 2,
+      processed: 1,
+      ready: 1,
+      newCount: 1,
+      changedCount: 0,
+      unchangedCount: 0,
+      cursorIbsherId: "ibs-resume-a",
+      categoryAttempted: 1,
+      categoryResolved: 1,
+      startedAt: new Date(),
+      finishedAt: null,
+    });
+    await MiswagSyncProductResult.create({
+      jobId: job._id,
+      partner: "miswag",
+      productId: String(first._id),
+      ibsherId: "ibs-resume-a",
+      externalId: "bs-ibs-resume-a",
+      sku: "SKU-resume-a",
+      status: "READY",
+      changeType: "new",
+      httpStatus: 0,
+    });
+    await ensureMiswagSyncRunner();
+    const done = await waitForMiswagPreview(job._id);
+    assert.equal(done.status, "preview");
+    assert.equal(done.processed, 2);
+    assert.equal(done.newCount, 2);
+    assert.equal(done.ready, 2);
+    assert.equal(done.categoryAttempted, 2);
+    assert.equal(await MiswagSyncProductResult.countDocuments({ jobId: job._id }), 2);
+    assert.equal(await MiswagSyncProductResult.countDocuments({ jobId: job._id, productId: String(first._id) }), 1);
+    const recovered = await getLatestMiswagSyncJob();
+    assert.equal(recovered.changedPreview.job.id, String(job._id));
+    assert.equal(recovered.changedPreview.sentToMiswag, 0);
   });
 });

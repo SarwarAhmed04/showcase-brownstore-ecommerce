@@ -578,8 +578,11 @@ export async function getItem(externalId, options = {}) {
 }
 
 /**
- * Create or upsert an item. Prior Miswag seller client used POST /v1/items/bulk-create
- * with a single item object body (upsert keyed by external_id).
+ * POST /v1/items/bulk-create with one item body.
+ * The previous Miswag seller client treated this as an upsert keyed by external_id.
+ * This repository has no official Miswag API document proving that bulk-create
+ * updates an existing external_id instead of rejecting a duplicate. A successful
+ * response does not prove that sending the same external_id again is safe.
  */
 export function createOrUpdateItem(payload, options = {}) {
   const retries = Number.isFinite(Number(options.retries)) ? Number(options.retries) : 3;

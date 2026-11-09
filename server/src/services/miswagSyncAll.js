@@ -31,8 +31,21 @@ import { loadMiswagBrandMappingMap, loadMiswagColorMappingMap } from "./miswagVa
 /** Prior Miswag seller client processed docs in batches of 15 (one API call per item). */
 export const MISWAG_SYNC_BATCH_SIZE = 15;
 const MAX_TRANSIENT_RETRIES = 4;
+const PREVIEW_BATCH_REASON =
+  "No documented bulk-create max found; reused prior Miswag seller client BATCH_SIZE=15 (one item per POST /v1/items/bulk-create).";
 
 let activeRunner = null;
+const previewTasks = new Map();
+let previewBatchGate = null;
+
+/** Test hook. Holds a preview before it reads products. Production leaves this unset. */
+export function setMiswagPreviewBatchGate(fn) {
+  previewBatchGate = typeof fn === "function" ? fn : null;
+}
+
+export function resetMiswagPreviewForTests() {
+  previewBatchGate = null;
+}
 
 function reasonFromErrors(errors = []) {
   if (errors.includes("missing_images")) return "Missing valid product image";
@@ -412,8 +425,241 @@ async function recordAcceptedPayload(result, sent) {
   return miswagProductId;
 }
 
-/** Re-attach runner after process restart if a job is still marked running. */
+function countersFromJob(job) {
+  return {
+    processed: Number(job?.processed) || 0,
+    ready: Number(job?.ready) || 0,
+    inactive: Number(job?.inactive) || 0,
+    skipped: Number(job?.skipped) || 0,
+    newCount: Number(job?.newCount) || 0,
+    changedCount: Number(job?.changedCount) || 0,
+    unchangedCount: Number(job?.unchangedCount) || 0,
+    missingCategory: Number(job?.missingCategory) || 0,
+    missingBrand: Number(job?.missingBrand) || 0,
+    missingColor: Number(job?.missingColor) || 0,
+    missingImage: Number(job?.missingImage) || 0,
+    missingData: Number(job?.missingData) || 0,
+    otherBlocked: Number(job?.otherBlocked) || 0,
+  };
+}
+
+function isFinishedPreview(job) {
+  return Boolean(job && job.mode === "preview" && job.status === "preview" && job.finishedAt);
+}
+
+function previewAccepted(job, { alreadyRunning = false } = {}) {
+  return {
+    dryRun: true,
+    accepted: true,
+    alreadyRunning,
+    sentToMiswag: 0,
+    strategy: storedStrategy(job),
+    scanned: Number(job?.processed) || 0,
+    batchSize: MISWAG_SYNC_BATCH_SIZE,
+    batchSizeReason: PREVIEW_BATCH_REASON,
+    completed: isFinishedPreview(job),
+    inProgress: job?.status === "preview_running",
+    job: publicJob(job),
+    message: alreadyRunning
+      ? "Miswag preview is already running. Nothing is sent to Miswag."
+      : "Miswag preview started. Nothing is sent to Miswag.",
+  };
+}
+
+async function loadPreviewSamples(jobId) {
+  const rows = await MiswagSyncProductResult.find({ jobId, status: "SKIPPED" })
+    .sort({ ibsherId: 1 })
+    .limit(40)
+    .select("productId sku status reason externalId")
+    .lean();
+  return rows.map((row) => ({
+    productId: row.productId,
+    sku: row.sku,
+    status: row.status,
+    reason: row.reason,
+    externalId: row.externalId,
+  }));
+}
+
+async function previewEnvelope(job) {
+  if (!job) return null;
+  const samples = job.status === "preview_running" ? [] : await loadPreviewSamples(job._id);
+  let mappedCollections = 0;
+  if (isFinishedPreview(job)) {
+    const mappings = await loadMiswagCategoryMappingMap();
+    mappedCollections = mappings.size;
+  }
+  return {
+    dryRun: true,
+    sentToMiswag: 0,
+    strategy: storedStrategy(job),
+    scanned: Number(job.processed) || 0,
+    batchSize: job.batchSize || MISWAG_SYNC_BATCH_SIZE,
+    batchSizeReason: PREVIEW_BATCH_REASON,
+    mappedCollections,
+    completed: isFinishedPreview(job),
+    inProgress: job.status === "preview_running",
+    job: publicJob(job, { blockedSamples: samples }),
+  };
+}
+
+async function recentFailureRows(jobId) {
+  const failures = await MiswagSyncProductResult.find({
+    jobId,
+    status: { $in: ["FAILED", "SKIPPED"] },
+  })
+    .sort({ updatedAt: -1 })
+    .limit(25)
+    .lean();
+  return failures.map((row) => ({
+    productId: row.productId,
+    sku: row.sku,
+    status: row.status,
+    reason: row.reason,
+    httpStatus: row.httpStatus,
+    externalId: row.externalId,
+  }));
+}
+
+function launchPreview(jobId) {
+  const id = String(jobId);
+  const existing = previewTasks.get(id);
+  if (existing) return existing;
+  const task = (async () => {
+    await Promise.resolve();
+    await runPreviewLoop(id);
+  })();
+  previewTasks.set(id, task);
+  task.finally(() => {
+    if (previewTasks.get(id) === task) previewTasks.delete(id);
+  });
+  return task;
+}
+
+async function savePreviewProgress(jobId, counters, cursor, context) {
+  const updated = await MiswagSyncJob.updateOne(
+    { _id: jobId, status: "preview_running" },
+    {
+      $set: {
+        ...counters,
+        cursorIbsherId: cursor,
+        categoryAttempted: context.stats.categoryAttempted,
+        categoryResolved: context.stats.categoryResolved,
+        brandAttempted: context.stats.brandAttempted,
+        brandResolved: context.stats.brandResolved,
+      },
+    }
+  );
+  return updated.matchedCount > 0;
+}
+
+async function runPreviewLoop(jobId) {
+  try {
+    if (previewBatchGate) await previewBatchGate({ jobId: String(jobId), phase: "start" });
+    const existing = await MiswagSyncJob.findById(jobId);
+    if (!existing || existing.status !== "preview_running") return;
+    const context = await prepareContext();
+    context.stats.categoryAttempted = Number(existing.categoryAttempted) || 0;
+    context.stats.categoryResolved = Number(existing.categoryResolved) || 0;
+    context.stats.brandAttempted = Number(existing.brandAttempted) || 0;
+    context.stats.brandResolved = Number(existing.brandResolved) || 0;
+    const counters = countersFromJob(existing);
+    let cursor = existing.cursorIbsherId || "";
+
+    while (true) {
+      const fresh = await MiswagSyncJob.findById(jobId).select("status");
+      if (!fresh || fresh.status !== "preview_running") return;
+      const filter = cursor ? { ibsherId: { $gt: cursor } } : {};
+      const batch = await Product.find(filter).sort({ ibsherId: 1 }).limit(MISWAG_SYNC_BATCH_SIZE).lean();
+      if (!batch.length) break;
+
+      const evaluated = [];
+      for (const doc of batch) {
+        const still = await MiswagSyncJob.findById(jobId).select("status");
+        if (!still || still.status !== "preview_running") return;
+        evaluated.push(await evaluateOneProduct(doc, context));
+      }
+      const annotated = await annotateChangeTypes(evaluated);
+      for (const result of annotated) {
+        counters.processed += 1;
+        cursor = String(result.ibsherId || "");
+        if (result.status === "READY") {
+          counters.ready += 1;
+          countChange(counters, result);
+        } else if (result.status === "INACTIVE") {
+          counters.inactive += 1;
+        } else {
+          counters.skipped += 1;
+          const bucket = classifyBlocked(result);
+          counters[bucket] = (counters[bucket] || 0) + 1;
+        }
+        await upsertResult(jobId, {
+          productId: result.productId,
+          ibsherId: result.ibsherId,
+          externalId: result.externalId,
+          sku: result.sku,
+          status: result.status === "READY" ? "READY" : result.status,
+          httpStatus: 0,
+          reason:
+            result.status === "READY" && result.changeType === "unchanged"
+              ? "Unchanged — checked locally, not sent to Miswag"
+              : result.reason || "",
+          ...(result.changeType ? { changeType: result.changeType } : {}),
+        });
+      }
+      const kept = await savePreviewProgress(jobId, counters, cursor, context);
+      if (!kept) return;
+    }
+
+    await MiswagSyncJob.updateOne(
+      { _id: jobId, status: "preview_running" },
+      { $set: { status: "preview", finishedAt: new Date(), lastError: "" } }
+    );
+  } catch (err) {
+    const missing =
+      err?.name === "DocumentNotFoundError" || /No document found for query/i.test(String(err?.message || ""));
+    if (missing) return;
+    await MiswagSyncJob.updateOne(
+      { _id: jobId, status: "preview_running" },
+      {
+        $set: {
+          status: "failed",
+          lastError: sanitizeMiswagText(err?.message || "Preview failed"),
+          finishedAt: new Date(),
+        },
+      }
+    );
+    console.error("Miswag preview failed:", err?.message || err);
+  }
+}
+
+async function ensureMiswagPreviewRunner() {
+  const jobs = await MiswagSyncJob.find({
+    partner: "miswag",
+    mode: "preview",
+    status: "preview_running",
+  })
+    .sort({ createdAt: 1 })
+    .select("_id");
+  for (const job of jobs) launchPreview(job._id);
+  return jobs.length ? jobs[jobs.length - 1] : null;
+}
+
+async function findLatestCompletedChangedPreview() {
+  const job = await MiswagSyncJob.findOne({
+    partner: "miswag",
+    mode: "preview",
+    strategy: "changed",
+    status: "preview",
+    finishedAt: { $ne: null },
+  }).sort({ finishedAt: -1, createdAt: -1 });
+  if (!isCompletedChangedPreview(job)) return null;
+  return job;
+}
+
+/** Re-attach runners after a process restart. Does not reset cursors or delete jobs. */
 export async function ensureMiswagSyncRunner() {
+  await ensureMiswagPreviewRunner();
   const job = await MiswagSyncJob.findOne({
     partner: "miswag",
     mode: { $ne: "preview" },
@@ -429,147 +675,112 @@ export async function ensureMiswagSyncRunner() {
 
 export async function getLatestMiswagSyncJob() {
   await ensureMiswagSyncRunner();
-  const job = await MiswagSyncJob.findOne({ partner: "miswag" }).sort({ createdAt: -1 });
-  if (!job) return { job: null };
-  const failures = await MiswagSyncProductResult.find({
-    jobId: job._id,
-    status: { $in: ["FAILED", "SKIPPED"] },
-  })
-    .sort({ updatedAt: -1 })
-    .limit(25)
-    .lean();
+  const [job, changed, activePreview] = await Promise.all([
+    MiswagSyncJob.findOne({ partner: "miswag" }).sort({ createdAt: -1 }),
+    findLatestCompletedChangedPreview(),
+    MiswagSyncJob.findOne({
+      partner: "miswag",
+      mode: "preview",
+      status: "preview_running",
+    }).sort({ createdAt: -1 }),
+  ]);
   return {
-    job: publicJob(job, {
-      recentFailures: failures.map((row) => ({
-        productId: row.productId,
-        sku: row.sku,
-        status: row.status,
-        reason: row.reason,
-        httpStatus: row.httpStatus,
-        externalId: row.externalId,
-      })),
-    }),
+    job: job ? publicJob(job, { recentFailures: await recentFailureRows(job._id) }) : null,
+    changedPreview: changed ? await previewEnvelope(changed) : null,
+    activePreview: activePreview ? await previewEnvelope(activePreview) : null,
   };
 }
 
-export async function runMiswagSyncPreview({ strategy = "full" } = {}) {
-  const context = await prepareContext();
+export async function getLatestCompletedMiswagChangedPreview() {
+  const changed = await findLatestCompletedChangedPreview();
+  return { changedPreview: changed ? await previewEnvelope(changed) : null };
+}
+
+export async function getMiswagPreviewStatus(jobId) {
+  await ensureMiswagPreviewRunner();
+  if (!mongoose.isValidObjectId(String(jobId || ""))) {
+    throw new MiswagError("Miswag preview job was not found.", { status: 404, code: "preview_not_found" });
+  }
+  const job = await MiswagSyncJob.findById(jobId);
+  if (!job || job.partner !== "miswag" || job.mode !== "preview") {
+    throw new MiswagError("Miswag preview job was not found.", { status: 404, code: "preview_not_found" });
+  }
+  return previewEnvelope(job);
+}
+
+export async function waitForMiswagPreview(jobId, timeoutMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const job = await MiswagSyncJob.findById(jobId).lean();
+    if (!job) return null;
+    if (job.status !== "preview_running") return publicJob(job);
+    await sleep(15);
+  }
+  throw new MiswagError("Miswag preview did not finish before the test wait expired.", {
+    status: 504,
+    code: "preview_wait_timeout",
+  });
+}
+
+async function beginMiswagSyncPreview({ strategy = "full" } = {}) {
+  await assertMiswagSyncAllowed();
   const requested = normalizeStrategy(strategy);
+  const active = await MiswagSyncJob.findOne({
+    partner: "miswag",
+    mode: "preview",
+    status: "preview_running",
+  }).sort({ createdAt: -1 });
+  if (active) {
+    const task = launchPreview(active._id);
+    if (storedStrategy(active) !== requested) {
+      const err = new MiswagError(
+        "A Miswag preview is already running. Wait for it to finish before starting another.",
+        { status: 409, code: "preview_active" }
+      );
+      err.job = publicJob(active);
+      throw err;
+    }
+    return { task, response: previewAccepted(active, { alreadyRunning: true }) };
+  }
+
   const total = await Product.countDocuments({});
   const job = await MiswagSyncJob.create({
     partner: "miswag",
-    status: "preview",
+    status: "preview_running",
     mode: "preview",
     strategy: requested,
     batchSize: MISWAG_SYNC_BATCH_SIZE,
     total,
     startedAt: new Date(),
+    cursorIbsherId: "",
+    finishedAt: null,
   });
+  const task = launchPreview(job._id);
+  return { task, response: previewAccepted(job, { alreadyRunning: false }) };
+}
 
-  const counters = {
-    processed: 0,
-    ready: 0,
-    inactive: 0,
-    skipped: 0,
-    newCount: 0,
-    changedCount: 0,
-    unchangedCount: 0,
-    missingCategory: 0,
-    missingBrand: 0,
-    missingColor: 0,
-    missingImage: 0,
-    missingData: 0,
-    otherBlocked: 0,
-  };
-  const blockedSamples = [];
-  let cursor = "";
+/** Returns as soon as the preview job is stored. The catalog scan continues in the background. */
+export async function startMiswagSyncPreview({ strategy = "full" } = {}) {
+  const started = await beginMiswagSyncPreview({ strategy });
+  return started.response;
+}
 
-  while (true) {
-    const filter = cursor ? { ibsherId: { $gt: cursor } } : {};
-    const batch = await Product.find(filter).sort({ ibsherId: 1 }).limit(MISWAG_SYNC_BATCH_SIZE).lean();
-    if (!batch.length) break;
-
-    const evaluated = [];
-    for (const doc of batch) {
-      evaluated.push(await evaluateOneProduct(doc, context));
-    }
-    const annotated = await annotateChangeTypes(evaluated);
-
-    for (const result of annotated) {
-      counters.processed += 1;
-      cursor = String(result.ibsherId || "");
-
-      if (result.status === "READY") {
-        counters.ready += 1;
-        countChange(counters, result);
-      } else if (result.status === "INACTIVE") {
-        counters.inactive += 1;
-      } else {
-        counters.skipped += 1;
-        const bucket = classifyBlocked(result);
-        counters[bucket] = (counters[bucket] || 0) + 1;
-        if (blockedSamples.length < 40) {
-          blockedSamples.push({
-            productId: result.productId,
-            sku: result.sku,
-            status: result.status,
-            reason: result.reason,
-            externalId: result.externalId,
-          });
-        }
-      }
-
-      await upsertResult(job._id, {
-        productId: result.productId,
-        ibsherId: result.ibsherId,
-        externalId: result.externalId,
-        sku: result.sku,
-        status: result.status === "READY" ? "READY" : result.status,
-        httpStatus: 0,
-        reason:
-          result.status === "READY" && result.changeType === "unchanged"
-            ? "Unchanged — checked locally, not sent to Miswag"
-            : result.reason || "",
-        ...(result.changeType ? { changeType: result.changeType } : {}),
-      });
-    }
-
-    job.processed = counters.processed;
-    job.ready = counters.ready;
-    job.inactive = counters.inactive;
-    job.skipped = counters.skipped;
-    job.newCount = counters.newCount;
-    job.changedCount = counters.changedCount;
-    job.unchangedCount = counters.unchangedCount;
-    job.missingCategory = counters.missingCategory;
-    job.missingBrand = counters.missingBrand;
-    job.missingColor = counters.missingColor;
-    job.missingImage = counters.missingImage;
-    job.missingData = counters.missingData;
-    job.otherBlocked = counters.otherBlocked;
-    job.cursorIbsherId = cursor;
-    job.categoryAttempted = context.stats.categoryAttempted;
-    job.categoryResolved = context.stats.categoryResolved;
-    job.brandAttempted = context.stats.brandAttempted;
-    job.brandResolved = context.stats.brandResolved;
-    await job.save();
+/**
+ * Direct callers and the local dry-run script still wait for the finished preview.
+ * The HTTP route uses startMiswagSyncPreview so Nginx is not held open for the scan.
+ */
+export async function runMiswagSyncPreview({ strategy = "full", awaitCompletion = true } = {}) {
+  const started = await beginMiswagSyncPreview({ strategy });
+  if (awaitCompletion === false) return started.response;
+  await started.task;
+  const finished = await MiswagSyncJob.findById(started.response.job.id);
+  if (!finished) {
+    throw new MiswagError("Miswag preview job was not found.", { status: 404, code: "preview_not_found" });
   }
-
-  job.status = "preview";
-  job.finishedAt = new Date();
-  await job.save();
-
-  return {
-    dryRun: true,
-    sentToMiswag: 0,
-    strategy: requested,
-    scanned: job.processed,
-    batchSize: MISWAG_SYNC_BATCH_SIZE,
-    batchSizeReason:
-      "No documented bulk-create max found; reused prior Miswag seller client BATCH_SIZE=15 (one item per POST /v1/items/bulk-create).",
-    mappedCollections: context.mappingCount,
-    job: publicJob(job, { blockedSamples }),
-  };
+  if (finished.status === "failed") {
+    throw new MiswagError(finished.lastError || "Miswag preview failed.", { status: 500, code: "preview_failed" });
+  }
+  return previewEnvelope(finished);
 }
 
 async function processSyncBatch(job, context) {
@@ -793,7 +1004,7 @@ export async function startMiswagSyncAll({
     job: publicJob(job),
     message:
       requested === "changed"
-        ? "Changed sync started. Unchanged products are checked locally and are not sent."
+        ? "Changed sync started. New and changed products are sent. Unchanged products are not sent."
         : "Miswag sync started.",
   };
 }
@@ -831,7 +1042,7 @@ export async function resumeMiswagSyncAll() {
 export async function stopMiswagSyncAll() {
   const job = await MiswagSyncJob.findOne({
     partner: "miswag",
-    status: { $in: ["running", "paused", "auth_failed"] },
+    status: { $in: ["running", "paused", "auth_failed", "preview_running"] },
   }).sort({ createdAt: -1 });
   if (!job) throw new MiswagError("No active Miswag sync job to stop.", { status: 404 });
   job.status = "stopped";

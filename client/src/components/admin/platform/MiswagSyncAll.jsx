@@ -28,6 +28,7 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
   const [connected, setConnected] = useState(syncEnabledProp === true);
   const [job, setJob] = useState(null);
   const [preview, setPreview] = useState(null);
+  const [activePreview, setActivePreview] = useState(null);
   const [changedPreview, setChangedPreview] = useState(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -44,10 +45,24 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
     }
   }
 
+  function applyRecovery(data) {
+    if (!data) return;
+    if (data.job) setJob(data.job);
+    else if (data.changedPreview || data.activePreview) setJob(data.job || null);
+    if (data.activePreview?.job?.status === "preview_running") {
+      setActivePreview(data.activePreview);
+      setPreview(data.activePreview);
+    } else {
+      setActivePreview(null);
+    }
+    if (completedChangedPreviewId(data.changedPreview)) setChangedPreview(data.changedPreview);
+  }
+
   async function refresh() {
     try {
       const data = await api.miswagSyncAllStatus();
       setJob(data.job || null);
+      applyRecovery(data);
     } catch {
       // ignore polling errors
     }
@@ -73,8 +88,10 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
       if (data.job) setJob(data.job);
       if (data.dryRun) {
         setPreview(data);
-        if (data.strategy === "changed" || data.job?.strategy === "changed") setChangedPreview(data);
+        if (data.job?.status === "preview_running") setActivePreview(data);
+        if (completedChangedPreviewId(data)) setChangedPreview(data);
       }
+      if (data.changedPreview) applyRecovery(data);
       setMessage(data.message || t.miswagSyncAllUpdated);
     } catch (err) {
       setError(err.message);
@@ -96,14 +113,17 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
     );
   }
 
+  const runningPreview =
+    [activePreview?.job, job, preview?.job].find((row) => row?.status === "preview_running") || null;
   const live = job && ["running", "paused", "auth_failed"].includes(job.status) ? job : null;
   const previewTime = preview?.job?.createdAt ? new Date(preview.job.createdAt).getTime() : 0;
   const jobTime = job?.createdAt ? new Date(job.createdAt).getTime() : 0;
-  const current = live || (job && jobTime >= previewTime ? job : preview?.job) || job;
+  const current = runningPreview || live || (job && jobTime >= previewTime ? job : preview?.job) || job;
   const failures = current?.recentFailures || preview?.job?.blockedSamples || [];
-  const showingPreview = !live && current && current === preview?.job;
+  const showingPreview = !live && current && (current === preview?.job || current.status === "preview" || current.status === "preview_running");
   const changedView = current?.strategy === "changed";
   const changedPreviewJobId = completedChangedPreviewId(changedPreview);
+  const previewBusy = Boolean(runningPreview);
 
   return (
     <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-brown/5">
@@ -126,7 +146,7 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || previewBusy}
               className={BUTTON}
               onClick={() => run(() => api.miswagSyncAllPreview("full"), "full-preview")}
             >
@@ -147,13 +167,15 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
         </div>
         <div className="rounded-2xl bg-cream px-4 py-4">
           <p className="text-xs font-semibold tracking-wide text-brown/50 uppercase">{t.miswagChangedSyncTitle}</p>
-          <p className="mt-1 text-sm text-brown/60">{t.miswagChangedSyncHint}</p>
+          <p className="mt-1 text-sm text-brown/60" data-miswag-changed-scope="new-and-changed">
+            {t.miswagChangedSyncHint}
+          </p>
           <p className="mt-2 text-sm text-brown/70">{t.miswagUnchangedNote}</p>
           <p className="mt-2 text-xs text-brown/50">{t.miswagFirstRunNote}</p>
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || previewBusy}
               className={BUTTON}
               onClick={() => run(() => api.miswagSyncAllPreview("changed"), "changed-preview")}
             >
@@ -203,6 +225,12 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
         </button>
       </div>
 
+      {runningPreview ? <p className="mt-4 text-sm text-brown/70">{t.miswagPreviewRunning}</p> : null}
+      {changedPreviewJobId ? (
+        <p className="mt-4 text-sm text-emerald-800" data-miswag-changed-preview-ready="true">
+          {t.miswagChangedPreviewReady}
+        </p>
+      ) : null}
       {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
       {message ? <p className="mt-4 text-sm text-emerald-800">{message}</p> : null}
 
@@ -228,7 +256,11 @@ export default function MiswagSyncAll({ t, syncEnabled: syncEnabledProp }) {
             <Stat label={t.miswagSyncMissingColor} value={current.missingColor ?? 0} />
             <Stat label={t.miswagSyncMissingData} value={current.missingData ?? 0} />
           </div>
-          {changedView ? <p className="text-sm text-brown/70">{t.miswagUnchangedNote}</p> : null}
+          {changedView ? (
+            <p className="text-sm text-brown/70" data-miswag-unchanged-not-sent="true">
+              {t.miswagChangedSyncHint} {t.miswagUnchangedNote}
+            </p>
+          ) : null}
           {showingPreview ? (
             <p className="text-xs text-brown/45">
               {t.miswagDryRunNote} · {t.miswagBatchSize}: {preview.batchSize}

@@ -677,7 +677,7 @@ export async function sendMiswagTestProduct({
     message: ok
       ? httpStatus === 201 || preview.plannedAction === "CREATE"
         ? "Success — product created/queued on Miswag"
-        : "Success — product upserted on Miswag"
+        : "Success — Miswag accepted the product. An update of an existing external_id is not confirmed."
       : message,
     validationErrors: [],
     storePriceUnchanged: storePriceBefore === storePriceAfter && storePriceBefore === preview.pricing.storePrice,

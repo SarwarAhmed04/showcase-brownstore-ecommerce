@@ -5,7 +5,7 @@ const miswagSyncJobSchema = new mongoose.Schema(
     partner: { type: String, required: true, default: "miswag", index: true },
     status: {
       type: String,
-      enum: ["preview", "running", "paused", "completed", "stopped", "auth_failed", "failed"],
+      enum: ["preview_running", "preview", "running", "paused", "completed", "stopped", "auth_failed", "failed"],
       default: "preview",
       index: true,
     },

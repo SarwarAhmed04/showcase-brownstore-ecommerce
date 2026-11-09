@@ -24,11 +24,13 @@ import {
   upsertMiswagValueMapping,
 } from "../services/miswagValueMapping.js";
 import {
+  getLatestCompletedMiswagChangedPreview,
   getLatestMiswagSyncJob,
+  getMiswagPreviewStatus,
   pauseMiswagSyncAll,
   resumeMiswagSyncAll,
-  runMiswagSyncPreview,
   startMiswagSyncAll,
+  startMiswagSyncPreview,
   stopMiswagSyncAll,
 } from "../services/miswagSyncAll.js";
 
@@ -55,6 +57,15 @@ function fail(res, err, fallback) {
         error: "changed_preview_required",
         code: "changed_preview_required",
         message: err.message || "Run and complete Changed Preview before starting Changed Sync.",
+      });
+    }
+    if (err.code === "preview_active" || err.code === "preview_not_found") {
+      const status = err.status === 409 || err.status === 404 ? err.status : 400;
+      return res.status(status).json({
+        message: err.message || fallback,
+        code: err.code,
+        error: err.code,
+        ...(err.job ? { job: err.job } : {}),
       });
     }
     const miswagAuth = err.status === 401 || err.status === 403;
@@ -353,9 +364,25 @@ miswagConnectionRouter.get("/platforms/miswag/sync-all", async (_req, res) => {
 
 miswagConnectionRouter.post("/platforms/miswag/sync-all/preview", async (req, res) => {
   try {
-    res.json(await runMiswagSyncPreview({ strategy: req.body?.strategy }));
+    res.status(202).json(await startMiswagSyncPreview({ strategy: req.body?.strategy }));
   } catch (err) {
     fail(res, err, "Failed to run Miswag sync preview");
+  }
+});
+
+miswagConnectionRouter.get("/platforms/miswag/sync-all/changed-preview", async (_req, res) => {
+  try {
+    res.json(await getLatestCompletedMiswagChangedPreview());
+  } catch (err) {
+    fail(res, err, "Failed to load the completed Miswag Changed Preview");
+  }
+});
+
+miswagConnectionRouter.get("/platforms/miswag/sync-all/preview/:jobId", async (req, res) => {
+  try {
+    res.json(await getMiswagPreviewStatus(req.params.jobId));
+  } catch (err) {
+    fail(res, err, "Failed to load Miswag preview status");
   }
 });
 

@@ -644,6 +644,9 @@ export const api = {
     return request(`/api/admin/platforms/miswag/sync-one/brands?${qs}`);
   },
   miswagSyncAllStatus: () => request("/api/admin/platforms/miswag/sync-all"),
+  miswagSyncAllChangedPreview: () => request("/api/admin/platforms/miswag/sync-all/changed-preview"),
+  miswagSyncAllPreviewStatus: (jobId) =>
+    request(`/api/admin/platforms/miswag/sync-all/preview/${encodeURIComponent(jobId)}`),
   miswagSyncAllPreview: (strategy = "full") =>
     request("/api/admin/platforms/miswag/sync-all/preview", {
       method: "POST",
