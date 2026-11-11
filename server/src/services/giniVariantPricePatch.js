@@ -141,7 +141,7 @@ export async function previewKe20PricePatch(deps = {}) {
   const nextStage = ke20PriceNextStage(blue?.status, black?.status);
   const baseline = nextStage ? assessKe20PriceState(remote.parent, remote.variants, nextStage, "before") : { ok: true, blockers: [] };
   const ownership = assessKe20PriceOwnership({ owner, identities });
-  const approval = assessKe20PriceApproval(approvals);
+  const approval = assessKe20PriceApproval(approvals, ownership);
   const locked = nextStage ? ke20PriceJournalBlocks(nextStage === "blue" ? blue?.status : black?.status) : true;
   const request = nextStage ? ke20PriceRequest(nextStage) : blueRequest;
   return publicResult({
@@ -184,8 +184,8 @@ export async function runKe20PricePatch({
   if (host !== KE20_REQUIRED_HOST) return closed("host_not_merchant");
   if (!request.ok) return closed(request.code || "request_shape_rejected");
   if (!operation) return closed("journal_required");
-  const approval = assessKe20PriceApproval(approvals);
   const ownership = assessKe20PriceOwnership({ owner, identities });
+  const approval = assessKe20PriceApproval(approvals, ownership);
   if (!approval.ok || !ownership.ok) return closed("approval_blocked", { blockers: [...approval.blockers, ...ownership.blockers] });
   const ownKey = ke20PriceOperationKey(selected);
   const current = await operation.read(ownKey);

@@ -14,6 +14,7 @@ import {
 
 const OPEN = { GINI_KE20_PRICE_PATCH_ENABLED: "true", GINI_ALLOW_LIVE_KE20_PRICE_PATCH: "true" };
 const OWNER_PRODUCT = "6adc7938b3764a909f6929d6";
+const PRODUCTION_PRODUCT = "6aae476f023c0be610d48093";
 const BLOCKING = ["in_progress", "uncertain", "verified", "rejected"];
 
 function parent({ price = 26500, quantity = 20, visible = false, id = 618623 } = {}) {
@@ -39,9 +40,10 @@ function variants({
   };
 }
 
-function approved(variantId, rawBody) {
+function approved(variantId, rawBody, productId = OWNER_PRODUCT) {
   return {
     parentSku: "KE20",
+    productId,
     variantId: String(variantId),
     status: "approved",
     baselinePrice: 26500,
@@ -51,16 +53,32 @@ function approved(variantId, rawBody) {
   };
 }
 
-function records(overrides = {}) {
+function identity(sku, variantId, productId, sourceVariantId, sourceSizeId, extra = {}) {
   return {
-    owner: { status: "verified_remote", giniProductId: "618623", productId: OWNER_PRODUCT, ...overrides.owner },
+    productId,
+    parentSku: "KE20",
+    parentSkuKey: "ke20",
+    approvedSku: sku,
+    approvedSkuKey: String(sku).toLowerCase(),
+    confirmedGiniVariantId: String(variantId),
+    sourceVariantId,
+    sourceSizeId,
+    status: "verified",
+    ...extra,
+  };
+}
+
+function records(overrides = {}) {
+  const productId = overrides.owner?.productId || OWNER_PRODUCT;
+  return {
+    owner: { status: "verified_remote", giniProductId: "618623", parentSku: "KE20", skuKey: "ke20", productId, ...overrides.owner },
     identities: overrides.identities || [
-      { approvedSku: "KE20-BLUE", confirmedGiniVariantId: "164306", productId: OWNER_PRODUCT },
-      { approvedSku: "KE20-BLACK", confirmedGiniVariantId: "164307", productId: OWNER_PRODUCT },
+      identity("KE20-BLUE", "164306", productId, "blue-source", "blue-size"),
+      identity("KE20-BLACK", "164307", productId, "black-source", "black-size"),
     ],
     approvals: overrides.approvals || [
-      approved(164306, KE20_BLUE_PRICE_PATCH_RAW_BODY),
-      approved(164307, KE20_BLACK_PRICE_PATCH_RAW_BODY),
+      approved(164306, KE20_BLUE_PRICE_PATCH_RAW_BODY, productId),
+      approved(164307, KE20_BLACK_PRICE_PATCH_RAW_BODY, productId),
     ],
   };
 }
@@ -456,10 +474,117 @@ describe("KE20 sequential price PATCH", () => {
     assert.equal(operation.docs.get("ke20-price-164307"), undefined);
   });
 
+  it("resolves either the local or production product id from verified records", async () => {
+    const remote = {
+      parent: { state: "present", id: "618623", sku: "KE20", quantity: 20, price: 26500, visibility: "hidden" },
+      variants: [
+        { normalized: true, id: "164306", sku: "KE20-BLUE", price: 26500, quantity: 10 },
+        { normalized: true, id: "164307", sku: "KE20-BLACK", price: 26500, quantity: 10 },
+      ],
+    };
+    for (const productId of [OWNER_PRODUCT, PRODUCTION_PRODUCT]) {
+      const preview = await previewKe20PricePatch({
+        env: {},
+        host: "merchant.gini.iq",
+        remote,
+        operation: journal(),
+        skipConnection: true,
+        ...records({ owner: { productId } }),
+      });
+      assert.equal(preview.ownership.ok, true);
+      assert.equal(preview.ownership.productId, productId);
+      assert.equal(preview.ownership.blue.sourceVariantId, "blue-source");
+      assert.equal(preview.ownership.blue.sourceSizeId, "blue-size");
+      assert.equal(preview.ownership.black.confirmedGiniVariantId, "164307");
+      assert.equal(preview.approval.ok, true);
+      assert.equal(preview.writesEnabled, false);
+      assert.equal(preview.readyForConfirmation, false);
+      assert.equal(preview.sent, false);
+    }
+  });
+
+  it("rejects a development identity, a duplicate SKU, and a stale approval on the production owner", async () => {
+    const jsonCalls = [];
+    const send = async () => { jsonCalls.push("patch"); return { status: 200 }; };
+    const shared = {
+      stage: "blue",
+      confirm: true,
+      env: OPEN,
+      host: "merchant.gini.iq",
+      performJson: send,
+      operation: journal(),
+    };
+    const wrongProduct = await runKe20PricePatch({
+      ...shared,
+      ...records({
+        owner: { productId: PRODUCTION_PRODUCT },
+        identities: [
+          identity("KE20-BLUE", "164306", OWNER_PRODUCT, "blue-source", "blue-size"),
+          identity("KE20-BLACK", "164307", OWNER_PRODUCT, "black-source", "black-size"),
+        ],
+      }),
+    });
+    assert.equal(wrongProduct.blockers.includes("owner_mismatch"), false);
+    assert.equal(wrongProduct.blockers.includes("blue_identity_mismatch"), true);
+    assert.equal(wrongProduct.blockers.includes("black_identity_mismatch"), true);
+    const duplicate = await runKe20PricePatch({
+      ...shared,
+      operation: journal(),
+      ...records({
+        owner: { productId: PRODUCTION_PRODUCT },
+        identities: [
+          identity("KE20-BLUE", "164306", PRODUCTION_PRODUCT, "blue-source", "blue-size"),
+          identity("KE20-BLUE", "999", "other-product", "other-source", "other-size"),
+          identity("KE20-BLACK", "164307", PRODUCTION_PRODUCT, "black-source", "black-size"),
+        ],
+      }),
+    });
+    assert.equal(duplicate.blockers.includes("blue_identity_mismatch"), true);
+    const missingSource = await runKe20PricePatch({
+      ...shared,
+      operation: journal(),
+      ...records({
+        owner: { productId: PRODUCTION_PRODUCT },
+        identities: [
+          identity("KE20-BLUE", "164306", PRODUCTION_PRODUCT, "blue-source", ""),
+          identity("KE20-BLACK", "164307", PRODUCTION_PRODUCT, "black-source", "black-size"),
+        ],
+      }),
+    });
+    assert.equal(missingSource.blockers.includes("blue_identity_mismatch"), true);
+    const staleApproval = await runKe20PricePatch({
+      ...shared,
+      operation: journal(),
+      ...records({
+        owner: { productId: PRODUCTION_PRODUCT },
+        approvals: [
+          approved(164306, KE20_BLUE_PRICE_PATCH_RAW_BODY, OWNER_PRODUCT),
+          approved(164307, KE20_BLACK_PRICE_PATCH_RAW_BODY, OWNER_PRODUCT),
+        ],
+      }),
+    });
+    assert.equal(staleApproval.code, "approval_blocked");
+    assert.equal(staleApproval.blockers.includes("owner_mismatch"), false);
+    assert.equal(staleApproval.blockers.includes("blue_approval_missing"), true);
+    assert.equal(staleApproval.blockers.includes("black_approval_missing"), true);
+    const preserved = await runKe20PricePatch({
+      ...shared,
+      operation: journal(),
+      performGet: remoteGets([parent(), variants(), parent(), variants({ bluePrice: 28000 })]).perform,
+      ...records({ owner: { productId: PRODUCTION_PRODUCT } }),
+    });
+    assert.equal(preserved.verified, true);
+    assert.equal(jsonCalls.length, 1);
+    assert.equal(jsonCalls[0], "patch");
+  });
+
   it("does not expose a batch sender or another marketplace", () => {
     const route = fs.readFileSync(new URL("./routes/giniConnection.js", import.meta.url), "utf8");
     const service = fs.readFileSync(new URL("./services/giniVariantPricePatch.js", import.meta.url), "utf8");
+    const plan = fs.readFileSync(new URL("./utils/giniVariantPricePatchPlan.js", import.meta.url), "utf8");
     const panel = fs.readFileSync(new URL("../../client/src/components/admin/platform/GiniKe20PricePatchPanel.jsx", import.meta.url), "utf8");
+    assert.equal(plan.includes("6adc7938b3764a909f6929d6"), false);
+    assert.equal(plan.includes("6aae476f023c0be610d48093"), false);
     assert.equal(route.includes("variant-sync/price-pilot/send"), false);
     assert.equal(route.includes("variant-sync/ke20-price-patch"), true);
     assert.equal(service.includes("EI-8888"), false);

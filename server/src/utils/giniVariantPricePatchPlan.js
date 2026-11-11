@@ -12,7 +12,6 @@ export const KE20_BLACK_PRICE_PATCH_RAW_BODY = "{\"variant_id\":164307,\"price\"
 export const KE20_PRICE_PILOT = Object.freeze({
   parentSku: "KE20",
   giniProductId: KE20_STOCK_PILOT.giniProductId,
-  ownerProductId: KE20_STOCK_PILOT.ownerProductId,
   visibility: "hidden",
   parentQuantity: 20,
   baselinePrice: 26500,
@@ -93,25 +92,72 @@ export function assessKe20PriceState(parent, variants, stage, phase) {
   return { ok: blockers.length === 0, blockers, expected };
 }
 
-export function assessKe20PriceOwnership({ owner, identities } = {}) {
-  const blockers = [];
-  const ownerProduct = KE20_PRICE_PILOT.ownerProductId;
-  if (!owner || owner.status !== "verified_remote" || String(owner.giniProductId) !== KE20_PRICE_PILOT.giniProductId || String(owner.productId) !== ownerProduct) {
-    blockers.push("owner_mismatch");
-  }
-  for (const stage of ["blue", "black"]) {
-    const spec = variantSpec(stage);
-    const row = (identities || []).find((item) => giniSkuKey(item.approvedSku) === giniSkuKey(spec.sku));
-    if (!row || String(row.confirmedGiniVariantId) !== spec.id || String(row.productId) !== ownerProduct) blockers.push(`${stage}_identity_mismatch`);
-  }
-  return { ok: blockers.length === 0, blockers };
+function identityView(row) {
+  return {
+    productId: String(row.productId),
+    approvedSku: String(row.approvedSku || ""),
+    confirmedGiniVariantId: String(row.confirmedGiniVariantId),
+    sourceVariantId: String(row.sourceVariantId),
+    sourceSizeId: String(row.sourceSizeId),
+  };
 }
 
-function approvalMatches(row, stage) {
+/**
+ * The BrownStore product id is taken from the verified owner in this database.
+ * Remote KE20 ids stay fixed. A conflicting source, SKU, or remote id is rejected.
+ */
+export function resolveKe20PriceIdentity({ owner, identities } = {}) {
+  const blockers = [];
+  const productId = String(owner?.productId || "");
+  const ownerSku = giniSkuKey(owner?.parentSku || owner?.skuKey || "");
+  if (!owner || owner.status !== "verified_remote" || String(owner.giniProductId) !== KE20_PRICE_PILOT.giniProductId || ownerSku !== giniSkuKey(KE20_PRICE_PILOT.parentSku) || !productId) {
+    blockers.push("owner_mismatch");
+  }
+  const resolved = {};
+  for (const stage of ["blue", "black"]) {
+    const spec = variantSpec(stage);
+    const related = (identities || []).filter((row) => giniSkuKey(row?.approvedSku || row?.approvedSkuKey) === giniSkuKey(spec.sku) || String(row?.confirmedGiniVariantId || "") === spec.id);
+    const exact = related.filter((row) => giniSkuKey(row.approvedSku || row.approvedSkuKey) === giniSkuKey(spec.sku)
+      && String(row.confirmedGiniVariantId || "") === spec.id
+      && String(row.productId || "") === productId
+      && productId
+      && giniSkuKey(row.parentSku || row.parentSkuKey) === giniSkuKey(KE20_PRICE_PILOT.parentSku)
+      && row.status === "verified"
+      && String(row.sourceVariantId || "").trim()
+      && String(row.sourceSizeId || "").trim());
+    if (exact.length !== 1 || related.length !== 1) blockers.push(`${stage}_identity_mismatch`);
+    else resolved[stage] = exact[0];
+  }
+  if (resolved.blue && resolved.black) {
+    const sameSource = String(resolved.blue.sourceVariantId) === String(resolved.black.sourceVariantId)
+      && String(resolved.blue.sourceSizeId) === String(resolved.black.sourceSizeId);
+    if (sameSource) blockers.push("blue_identity_mismatch", "black_identity_mismatch");
+  }
+  const ok = blockers.length === 0;
+  return {
+    ok,
+    blockers,
+    productId: ok ? productId : "",
+    blue: ok ? identityView(resolved.blue) : null,
+    black: ok ? identityView(resolved.black) : null,
+  };
+}
+
+export function assessKe20PriceOwnership(input = {}) {
+  return resolveKe20PriceIdentity(input);
+}
+
+function approvalMatches(row, stage, identity) {
   const spec = variantSpec(stage);
+  const verified = identity?.[stage];
   return Boolean(row)
+    && identity?.ok
+    && verified
+    && String(row.productId || "") === String(identity.productId)
+    && String(verified.confirmedGiniVariantId) === spec.id
     && giniSkuKey(row.parentSku) === giniSkuKey(KE20_PRICE_PILOT.parentSku)
     && String(row.variantId) === spec.id
+    && (!row.variantSku || giniSkuKey(row.variantSku) === giniSkuKey(spec.sku))
     && row.status === "approved"
     && Number(row.baselinePrice) === KE20_PRICE_PILOT.baselinePrice
     && Number(row.baselineQuantity) === KE20_PRICE_PILOT.stock
@@ -120,10 +166,11 @@ function approvalMatches(row, stage) {
     && !String(row.rawBody || "").includes("quantity");
 }
 
-export function assessKe20PriceApproval(approvals) {
+export function assessKe20PriceApproval(approvals, identity) {
   const blockers = [];
+  if (!identity?.ok) blockers.push("approval_identity_unverified");
   for (const stage of ["blue", "black"]) {
-    if (!(approvals || []).some((row) => approvalMatches(row, stage))) blockers.push(`${stage}_approval_missing`);
+    if (!(approvals || []).some((row) => approvalMatches(row, stage, identity))) blockers.push(`${stage}_approval_missing`);
   }
   return { ok: blockers.length === 0, blockers };
 }
