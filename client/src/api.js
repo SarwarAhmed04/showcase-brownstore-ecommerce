@@ -298,6 +298,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  giniVariantPilot: () => request("/api/admin/platforms/gini/variant-sync/pilot"),
+  giniVariantChangedPreview: () => request("/api/admin/platforms/gini/variant-sync/changed-preview"),
+  giniVariantStockPatchPreview: () => request("/api/admin/platforms/gini/variant-sync/stock-patch"),
+  giniVariantStockPatch: (body) =>
+    request("/api/admin/platforms/gini/variant-sync/stock-patch", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  giniVariantPilotStage: (body) =>
+    request("/api/admin/platforms/gini/variant-sync/pilot/stage", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   giniVariantReadBack: () => request("/api/admin/platforms/gini/variant-test/read-back"),
   giniVariantTestStageB: (productId, confirm, acceptUnprovenVariantSkuUniqueness) =>
     request("/api/admin/platforms/gini/variant-test/stage-b", {

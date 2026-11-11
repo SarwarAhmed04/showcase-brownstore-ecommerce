@@ -282,6 +282,7 @@ export async function runPreparedVariantStageA({
   env = process.env,
   perform,
   operation,
+  form = null,
 } = {}) {
   const calls = [];
   if (writesEnabled !== true || !giniVariantSyncWritesEnabled(env)) {
@@ -316,7 +317,7 @@ export async function runPreparedVariantStageA({
   if (operation) await operation.update({ status: "parent_in_progress", lastCode: "parent_in_progress" });
   let created;
   try {
-    created = await request("POST", "/api/v2.0/third-party/products");
+    created = await request("POST", "/api/v2.0/third-party/products", form ? { form } : {});
   } catch {
     if (operation) await operation.update({ status: "parent_uncertain", lastCode: "parent_create_uncertain" });
     return { ok: false, sent: true, code: "parent_create_uncertain", writeMethods: calls.filter((method) => method !== "GET"), calls };
@@ -342,6 +343,7 @@ export async function runPreparedVariantStageB({
   env = process.env,
   perform,
   operation,
+  form = null,
 } = {}) {
   const calls = [];
   if (writesEnabled !== true || !giniVariantSyncWritesEnabled(env)) {
@@ -387,7 +389,7 @@ export async function runPreparedVariantStageB({
   }
   if (operation) await operation.update({ status: "variants_in_progress", lastCode: "variants_in_progress" });
   try {
-    const saved = await request("PUT", `${parentPath(sku)}/variants`);
+    const saved = await request("PUT", `${parentPath(sku)}/variants`, form ? { form } : {});
     if (saved?.status !== 200 && saved?.status !== 201) throw new Error("upload");
   } catch {
     if (operation) await operation.update({ status: "variants_uncertain", lastCode: "variants_unverified" });

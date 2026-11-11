@@ -461,13 +461,13 @@ export async function performGiniRequest({
 }
 
 /**
- * Signed JSON PUT. The raw body string is sent unchanged and is included in the HMAC.
+ * Signed JSON PUT or PATCH. The raw body string is sent unchanged and is included in the HMAC.
  * Create uploads stay on performGiniRequest, which signs an empty multipart body.
  */
-export async function performGiniJsonRequest({ method = "PUT", path, rawBody, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+export async function performGiniJsonRequest({ method = "PUT", path, rawBody, timeoutMs = DEFAULT_TIMEOUT_MS, resolvedConfig = null } = {}) {
   const verb = String(method || "").trim().toUpperCase();
-  if (verb !== "PUT") {
-    throw new GiniConnectionError("This GINI helper only sends signed JSON PUT requests.", {
+  if (verb !== "PUT" && verb !== "PATCH") {
+    throw new GiniConnectionError("This GINI helper only sends signed JSON PUT or PATCH requests.", {
       status: 500,
       code: "update_method_rejected",
     });
@@ -479,7 +479,7 @@ export async function performGiniJsonRequest({ method = "PUT", path, rawBody, ti
       code: "update_body_rejected",
     });
   }
-  const config = await resolveGiniConfig();
+  const config = resolvedConfig || await resolveGiniConfig();
   if (config.secretUnreadable) {
     throw new GiniConnectionError(GINI_SECRET_UNREADABLE_MESSAGE, { status: 409, code: "secret_unreadable" });
   }
@@ -487,7 +487,7 @@ export async function performGiniJsonRequest({ method = "PUT", path, rawBody, ti
     throw new GiniConnectionError("Connect GINI API first", { status: 409, code: "connection_required" });
   }
   const signed = signGiniRequest({
-    method: "PUT",
+    method: verb,
     path,
     body,
     timestamp: giniTimestampSeconds(),
@@ -505,7 +505,7 @@ export async function performGiniJsonRequest({ method = "PUT", path, rawBody, ti
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetchImpl(`${config.baseUrl}${signed.path}`, {
-      method: "PUT",
+      method: verb,
       headers,
       body,
       redirect: "manual",

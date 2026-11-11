@@ -30,6 +30,9 @@ import { getLatestGiniResyncJob, reconcileGiniResync, runGiniResyncPreview, star
 import { previewGiniSkuCreate, sendGiniSkuCreate } from "../services/giniSkuCreate.js";
 import { loadVariantTestImageBytes, mongoVariantTestOperation, previewGiniVariantTest, runGiniVariantTestStage } from "../services/giniVariantTest.js";
 import { approveParentOwner, approveVariantSkus, variantCatalogPage } from "../services/giniVariantSync.js";
+import { previewGiniVariantPilot, runGiniVariantPilotStage } from "../services/giniVariantPilot.js";
+import { previewVariantChangedSync } from "../services/giniVariantChangedSync.js";
+import { previewKe20StockPatch, runAuthorizedKe20StockPatch } from "../services/giniVariantStockPatch.js";
 import { verifyXiaomiVariantReadBack } from "../services/giniVariantReadBack.js";
 
 export const giniConnectionRouter = Router();
@@ -394,6 +397,55 @@ giniConnectionRouter.get("/platforms/gini/variant-sync", async (req, res) => {
     res.json(assertNoSecretLeak(page, ""));
   } catch (err) {
     fail(res, err, "Failed to preview GINI variants");
+  }
+});
+
+giniConnectionRouter.get("/platforms/gini/variant-sync/changed-preview", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await previewVariantChangedSync(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to preview GINI variant changes");
+  }
+});
+
+giniConnectionRouter.get("/platforms/gini/variant-sync/stock-patch", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await previewKe20StockPatch(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to preview the KE20 stock PATCH");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-sync/stock-patch", async (req, res) => {
+  try {
+    const direction = req.body?.direction === "restore" ? "restore" : "apply";
+    res.json(assertNoSecretLeak(await runAuthorizedKe20StockPatch({
+      direction,
+      confirm: req.body?.confirm === true,
+    }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to run the KE20 stock PATCH");
+  }
+});
+
+giniConnectionRouter.get("/platforms/gini/variant-sync/pilot", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await previewGiniVariantPilot(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to preview the GINI variant pilot");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-sync/pilot/stage", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(assertNoSecretLeak(await runGiniVariantPilotStage({
+      productId: body.productId,
+      stage: body.stage,
+      confirm: body.confirm === true,
+    }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to run the GINI variant pilot stage");
   }
 });
 

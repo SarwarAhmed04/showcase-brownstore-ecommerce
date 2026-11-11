@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../../../api";
-import { canSendGiniVariantSync, variantSyncStatusLabel } from "./giniVariantSyncDisplay";
+import { canSendGiniVariantSync, canSendVariantChangedSync, variantSyncStatusLabel } from "./giniVariantSyncDisplay";
+import GiniVariantPilotPanel from "./GiniVariantPilotPanel";
+import GiniVariantStockPatchPanel from "./GiniVariantStockPatchPanel";
 
 const FILTERS = [
   ["", "All"],
@@ -27,6 +29,7 @@ export default function GiniVariantSyncPanel() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [dryRun, setDryRun] = useState(null);
 
   async function load(next = status) {
     setBusy(true);
@@ -58,6 +61,92 @@ export default function GiniVariantSyncPanel() {
           Send is off
         </button>
       </div>
+      <div className="mt-5 rounded-2xl bg-cream/50 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold text-brown">Changed sync dry run</h3>
+            <p className="mt-1 max-w-2xl text-sm text-brown/70">
+              Reads the six reconciled parents and compares them with BrownStore. It does not send creates, updates, or deletions.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            className="rounded-full bg-brown px-4 py-2 text-sm font-semibold text-cream disabled:bg-brown/30"
+            onClick={async () => {
+              setBusy(true);
+              setError("");
+              try {
+                setDryRun(await api.giniVariantChangedPreview());
+              } catch (err) {
+                setError(err.message || "Dry run failed");
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Run dry-run preview
+          </button>
+        </div>
+        {dryRun ? (
+          <div className="mt-4 space-y-3 text-sm text-brown/80">
+            <p>
+              Sending is {canSendVariantChangedSync() || dryRun.canSend ? "on" : "off"}. Bulk variant writes are {dryRun.bulkSyncEnabled ? "on" : "off"}.
+            </p>
+            <p>
+              New {dryRun.summary?.new || 0} · Changed {dryRun.summary?.changed || 0} · Unchanged {dryRun.summary?.unchanged || 0} · Blocked {dryRun.summary?.blocked || 0} · Uncertain {dryRun.summary?.uncertain || 0}
+            </p>
+            <p>
+              Duplicate parents {dryRun.summary?.duplicateParent || 0} · Missing color or size {dryRun.summary?.missingColorOrSize || 0} · Missing ownership {dryRun.summary?.missingOwnership || 0} · Missing SKU approval {dryRun.summary?.missingSkuApproval || 0}
+            </p>
+            <p>{dryRun.futureBulk?.note}</p>
+            <p>
+              Simple sync stays on its existing workflow
+              {dryRun.overview?.simple?.available
+                ? `: ready ${dryRun.overview.simple.readyCreate}, existing ${dryRun.overview.simple.alreadyExists}, changed ${dryRun.overview.simple.changed}, unchanged ${dryRun.overview.simple.unchanged}, blocked ${dryRun.overview.simple.blocked}.`
+                : ". A stored simple preview was not found."}
+            </p>
+            <p>
+              Color attribute {dryRun.colorAttribute?.id || "unread"} {dryRun.colorAttribute?.state}. Returned values: {dryRun.colorAttribute?.valueCount || 0}.
+            </p>
+            {dryRun.missingColors?.length ? (
+              <p>Missing colors, with no invented ids: {dryRun.missingColors.map((row) => `${row.color} (${row.productCount})`).join(", ")}</p>
+            ) : null}
+            <ul className="space-y-2">
+              {(dryRun.unsupported || []).map((item) => (
+                <li key={item.operation}>{item.operation}: {item.status}</li>
+              ))}
+            </ul>
+            {(dryRun.pilots || []).map((pilot) => (
+              <article key={pilot.parentSku} className="rounded-xl bg-white p-3">
+                <p className="font-semibold text-brown">{pilot.label} · {pilot.parentSku} · {pilot.disposition}</p>
+                <p>
+                  Remote {pilot.remote?.id || "—"} · {pilot.remote?.state} · {pilot.remote?.visibility || "visibility unverified"} · quantity {pilot.remote?.quantity ?? "—"} · variants {pilot.remote?.variantCount ?? "—"}
+                  {pilot.remote?.categoryId ? ` · category ${pilot.remote.categoryId}/${pilot.remote.subcategoryId || "—"}` : ""}
+                </p>
+                {pilot.remote?.variants?.length ? (
+                  <ul className="mt-1">
+                    {pilot.remote.variants.map((row) => (
+                      <li key={row.sku}>
+                        {row.sku} · {row.color || "color unverified"} · {row.price ?? "—"} · qty {row.quantity ?? "—"} · attribute {row.attributeId || "not returned"} · images {row.images?.state === "present" ? row.images.urls.length : "not returned"}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {pilot.blockers?.length ? <p className="text-red-800">{pilot.blockers.join(", ")}</p> : null}
+                {pilot.differences?.length ? (
+                  <ul>{pilot.differences.map((row, index) => <li key={`${row.code}-${row.sku}-${index}`}>{row.detail}</li>)}</ul>
+                ) : <p>No price, quantity, color, or category differences.</p>}
+                {pilot.imageNotes?.length ? (
+                  <p>Image note: {pilot.imageNotes.map((row) => `${row.sku} has ${row.localImages} local images and ${row.remoteImages} remote variant image`).join("; ")}. No image write is proposed.</p>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <GiniVariantStockPatchPanel />
+      <GiniVariantPilotPanel />
       {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
       {notice ? <p className="mt-4 text-sm font-semibold text-brown">{notice}</p> : null}
       <div className="mt-5 grid gap-3 sm:grid-cols-3 lg:grid-cols-4">

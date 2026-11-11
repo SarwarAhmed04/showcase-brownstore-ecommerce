@@ -167,6 +167,7 @@ export function proposalConflicts(products) {
   const seen = new Map();
   const conflicts = [];
   for (const product of products || []) {
+    if ((product.blockers || []).includes("other_vendor_owns_parent")) continue;
     for (const row of product.combinations || []) {
       const key = giniSkuKey(row.proposedSku);
       if (!key) continue;
