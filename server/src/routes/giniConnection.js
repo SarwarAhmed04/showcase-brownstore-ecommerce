@@ -33,6 +33,7 @@ import { approveParentOwner, approveVariantSkus, variantCatalogPage } from "../s
 import { previewGiniVariantPilot, runGiniVariantPilotStage } from "../services/giniVariantPilot.js";
 import { previewVariantChangedSync } from "../services/giniVariantChangedSync.js";
 import { approveVariantPricePilot } from "../services/giniVariantPricePilot.js";
+import { previewKe20PricePatch, runAuthorizedKe20PricePatch } from "../services/giniVariantPricePatch.js";
 import { previewKe20StockPatch, runAuthorizedKe20StockPatch } from "../services/giniVariantStockPatch.js";
 import { verifyXiaomiVariantReadBack } from "../services/giniVariantReadBack.js";
 
@@ -417,6 +418,25 @@ giniConnectionRouter.post("/platforms/gini/variant-sync/price-pilot/approve", as
     }), ""));
   } catch (err) {
     fail(res, err, "Failed to record the GINI price pilot approval");
+  }
+});
+
+giniConnectionRouter.get("/platforms/gini/variant-sync/ke20-price-patch", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await previewKe20PricePatch(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to preview the KE20 price PATCH");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-sync/ke20-price-patch", async (req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await runAuthorizedKe20PricePatch({
+      stage: req.body?.stage,
+      confirm: req.body?.confirm === true,
+    }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to run the KE20 price PATCH");
   }
 });
 

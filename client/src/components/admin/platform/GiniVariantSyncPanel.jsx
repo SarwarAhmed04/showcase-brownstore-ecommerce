@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../../api";
 import { canSendGiniVariantSync, canSendVariantChangedSync, variantSyncStatusLabel } from "./giniVariantSyncDisplay";
 import GiniVariantPilotPanel from "./GiniVariantPilotPanel";
+import GiniKe20PricePatchPanel from "./GiniKe20PricePatchPanel";
 import GiniVariantStockPatchPanel from "./GiniVariantStockPatchPanel";
 
 const FILTERS = [
@@ -204,6 +205,7 @@ export default function GiniVariantSyncPanel() {
           </div>
         ) : null}
       </div>
+      <GiniKe20PricePatchPanel />
       <GiniVariantStockPatchPanel />
       <GiniVariantPilotPanel />
       {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
