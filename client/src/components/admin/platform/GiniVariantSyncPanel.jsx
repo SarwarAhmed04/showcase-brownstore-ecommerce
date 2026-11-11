@@ -23,6 +23,12 @@ function Count({ label, value }) {
   );
 }
 
+function commissionText(rule) {
+  if (!rule) return "no saved commission rule";
+  const name = rule.targetName ? ` · ${rule.targetName}` : "";
+  return `${rule.percentage}% ${rule.scope || "rule"}${name}`;
+}
+
 export default function GiniVariantSyncPanel() {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("");
@@ -100,6 +106,47 @@ export default function GiniVariantSyncPanel() {
               Duplicate parents {dryRun.summary?.duplicateParent || 0} · Missing color or size {dryRun.summary?.missingColorOrSize || 0} · Missing ownership {dryRun.summary?.missingOwnership || 0} · Missing SKU approval {dryRun.summary?.missingSkuApproval || 0}
             </p>
             <p>{dryRun.futureBulk?.note}</p>
+            {dryRun.pricePilot ? (
+              <article className="rounded-xl bg-white p-3">
+                <p className="font-semibold text-brown">
+                  One-product price pilot: {dryRun.pricePilot.ready ? `${dryRun.pricePilot.label} · ${dryRun.pricePilot.parentSku}` : "not ready"}
+                </p>
+                <p>
+                  Approval is {dryRun.pricePilot.approved ? "recorded locally" : "still required"}. Sending is off. Batch execution is {dryRun.pricePilot.batchEnabled ? "on" : "off"}.
+                </p>
+                {dryRun.pricePilot.ready && !dryRun.pricePilot.approved ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="mt-2 rounded-full bg-brown px-3 py-1.5 text-xs font-semibold text-cream disabled:bg-brown/30"
+                    onClick={async () => {
+                      setBusy(true);
+                      setNotice("");
+                      setError("");
+                      try {
+                        const saved = await api.giniVariantPricePilotApprove({ parentSku: dryRun.pricePilot.parentSku, confirm: true });
+                        setNotice(saved.sentToGini === 0 ? `Local approval saved for ${saved.parentSku || dryRun.pricePilot.parentSku}. No price was sent.` : "Unexpected send");
+                        setDryRun(await api.giniVariantChangedPreview());
+                      } catch (err) {
+                        setError(err.message || "Pilot approval failed");
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    Record pilot approval locally
+                  </button>
+                ) : null}
+                {(dryRun.pricePilot.variants || []).map((row) => (
+                  <p key={`${row.sku}-pilot`}>
+                    {row.sku}: {row.oldPrice} → {row.newPrice} IQD. Stock {row.oldStock} → {row.newStock}. {commissionText(row.commission)}
+                  </p>
+                ))}
+                {(dryRun.pricePilot.preserved || []).length ? (
+                  <p>Left unchanged: {dryRun.pricePilot.preserved.map((row) => `${row.sku} ${row.oldPrice} / qty ${row.oldStock}`).join(", ")}.</p>
+                ) : null}
+              </article>
+            ) : null}
             <p>
               Simple sync stays on its existing workflow
               {dryRun.overview?.simple?.available
@@ -134,6 +181,18 @@ export default function GiniVariantSyncPanel() {
                   </ul>
                 ) : null}
                 {pilot.blockers?.length ? <p className="text-red-800">{pilot.blockers.join(", ")}</p> : null}
+                {pilot.priceRows?.length ? (
+                  <ul className="mt-1 space-y-1">
+                    {pilot.priceRows.map((row) => (
+                      <li key={`${row.sku}-price`}>
+                        {row.sku}: price {row.oldPrice ?? "—"} → {row.newPrice ?? "—"} · stock {row.oldStock ?? "—"} → {row.newStock ?? "—"} · {commissionText(row.commission)}
+                        {row.preserved ? " · preserved" : ""}
+                        {row.withheldReason ? ` · withheld ${row.withheldReason}` : ""}
+                        {row.patch?.rawBody ? <span className="block font-mono text-xs">{row.patch.method} {row.patch.path} {row.patch.rawBody}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 {pilot.differences?.length ? (
                   <ul>{pilot.differences.map((row, index) => <li key={`${row.code}-${row.sku}-${index}`}>{row.detail}</li>)}</ul>
                 ) : <p>No price, quantity, color, or category differences.</p>}

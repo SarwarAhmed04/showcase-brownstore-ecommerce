@@ -1,9 +1,13 @@
+import { Commission } from "../models/Commission.js";
 import { GiniSyncJob } from "../models/GiniSyncJob.js";
+import { GiniVariantChangedOperation } from "../models/GiniVariantChangedOperation.js";
 import { GiniVariantIdentity } from "../models/GiniVariantIdentity.js";
 import { GiniVariantOperation } from "../models/GiniVariantOperation.js";
+import { GiniVariantParentOwner } from "../models/GiniVariantParentOwner.js";
 import { performGiniRequest } from "./giniConnection.js";
 import { loadVariantCatalog } from "./giniVariantSync.js";
 import { giniSkuKey } from "../utils/giniSyncOnePlan.js";
+import { applyCatalogVariantPrices } from "../utils/giniVariantPricing.js";
 import { GINI_VARIANT_UPDATE_CAPABILITIES, unsupportedVariantOperations } from "../utils/giniVariantUpdateContract.js";
 import {
   KNOWN_GINI_VARIANT_PARENTS,
@@ -16,6 +20,7 @@ import {
   readRemoteParent,
   readRemoteVariantRows,
   routeGiniOverview,
+  selectPricePilot,
   summarizeVariantPlans,
 } from "../utils/giniVariantChangedPlan.js";
 
@@ -65,6 +70,8 @@ function publicPlan(plan) {
     differences: plan.differences,
     imageNotes: plan.imageNotes,
     colorPreview: plan.colorPreview,
+    priceRows: plan.priceRows,
+    proposedPatches: plan.proposedPatches,
     local: plan.local,
   };
 }
@@ -81,12 +88,20 @@ export async function previewVariantChangedSync(deps = {}) {
   const catalog = await (deps.loadCatalog || loadVariantCatalog)({ force: true });
   let identities = deps.identities || [];
   let operations = deps.operations || [];
+  let owners = deps.owners || [];
+  let changedOperations = deps.changedOperations || [];
+  let commissionRules = deps.commissionRules === undefined ? null : deps.commissionRules;
   let simpleJob = deps.simpleJob === undefined ? null : deps.simpleJob;
   if (deps.skipDatabase !== true) {
-    [identities, operations] = await Promise.all([
+    [identities, operations, owners, changedOperations] = await Promise.all([
       deps.identities ? Promise.resolve(deps.identities) : GiniVariantIdentity.find({}).lean(),
       deps.operations ? Promise.resolve(deps.operations) : GiniVariantOperation.find({}).select("productId status").lean(),
+      deps.owners !== undefined ? Promise.resolve(deps.owners) : GiniVariantParentOwner.find({}).lean(),
+      deps.changedOperations !== undefined ? Promise.resolve(deps.changedOperations) : GiniVariantChangedOperation.find({}).lean(),
     ]);
+    if (commissionRules == null) {
+      commissionRules = await Commission.find({ partner: "gini", isActive: { $ne: false } }).lean();
+    }
     if (deps.simpleJob === undefined) {
       try {
         simpleJob = await GiniSyncJob.findOne({ partner: "gini", mode: "preview" })
@@ -116,6 +131,7 @@ export async function previewVariantChangedSync(deps = {}) {
       reads.push({ method: "GET", parentSku: parent.parentSku, state: remote.state, status: remote.status || 0 });
     }
   }
+  if (!Array.isArray(commissionRules)) commissionRules = [];
   const operationByProduct = new Map((operations || []).map((row) => [String(row.productId), row.status || ""]));
   const identityByProduct = new Map();
   for (const row of identities || []) {
@@ -123,24 +139,37 @@ export async function previewVariantChangedSync(deps = {}) {
     if (!identityByProduct.has(key)) identityByProduct.set(key, []);
     identityByProduct.get(key).push(row);
   }
-  const plans = (catalog.products || []).map((product) => planVariantChange({
-    productId: product.productId,
-    parentSku: product.parentSku,
-    vendorId: product.vendorId,
-    categoryId: product.categoryId,
-    subcategoryId: product.subcategoryId,
-    combinations: product.combinations || [],
-    identities: identityByProduct.get(String(product.productId)) || [],
-    remote: remoteFor(product.parentSku, remoteBySku),
-    colorLabels: color.labels,
-    colorAttributeId: color.id,
-    catalogBlockers: product.blockers || [],
-    multipleSizes: product.multipleSizes === true,
-    operationStatus: operationByProduct.get(String(product.productId)) || "",
-    environment,
-    identityOrigin: "local",
-    variantSkuConflict: (product.blockers || []).includes("variant_sku_conflict"),
-  }));
+  const changedByProduct = new Map();
+  for (const row of changedOperations || []) {
+    const key = String(row.productId || "");
+    if (!changedByProduct.has(key)) changedByProduct.set(key, []);
+    changedByProduct.get(key).push(row);
+  }
+  const plans = (catalog.products || []).map((product) => {
+    const priced = applyCatalogVariantPrices(product, commissionRules);
+    const owner = (owners || []).find((row) => giniSkuKey(row.parentSku || row.skuKey) === giniSkuKey(priced.parentSku) && String(row.productId || "") === String(priced.productId || "")) || null;
+    return planVariantChange({
+      productId: priced.productId,
+      parentSku: priced.parentSku,
+      vendorId: priced.vendorId,
+      categoryId: priced.categoryId,
+      subcategoryId: priced.subcategoryId,
+      combinations: priced.combinations || [],
+      identities: identityByProduct.get(String(priced.productId)) || [],
+      remote: remoteFor(priced.parentSku, remoteBySku),
+      colorLabels: color.labels,
+      colorAttributeId: color.id,
+      catalogBlockers: priced.blockers || [],
+      multipleSizes: priced.multipleSizes === true,
+      operationStatus: operationByProduct.get(String(priced.productId)) || "",
+      environment,
+      identityOrigin: "local",
+      variantSkuConflict: (priced.blockers || []).includes("variant_sku_conflict"),
+      ownership: "required",
+      owner,
+      variantOperations: changedByProduct.get(String(priced.productId)) || [],
+    });
+  });
   const { summary, blockerCounts } = summarizeVariantPlans(plans);
   const pilots = KNOWN_GINI_VARIANT_PARENTS.map((parent) => {
     const related = plans.filter((plan) => giniSkuKey(plan.parentSku) === giniSkuKey(parent.parentSku));
@@ -159,6 +188,9 @@ export async function previewVariantChangedSync(deps = {}) {
       imageNotes: selected?.imageNotes || [],
       changes: selected?.changes || [],
       manualReview: selected?.manualReview || [],
+      priceRows: selected?.priceRows || [],
+      proposedPatches: selected?.proposedPatches || [],
+      baselineKey: selected?.baselineKey || "",
       local: selected?.local || [],
       candidates: related.map((plan) => ({
         productId: plan.productId,
@@ -190,6 +222,7 @@ export async function previewVariantChangedSync(deps = {}) {
     blockerCounts,
     overview: routeGiniOverview({ variantSummary: summary, simpleJob }),
     futureBulk: futureBulkPreview(summary),
+    pricePilot: selectPricePilot(pilots, changedOperations),
     pilots,
     changed: plans.filter((plan) => plan.disposition === "CHANGED").slice(0, 30).map(publicPlan),
     newProducts: plans.filter((plan) => plan.disposition === "NEW").slice(0, 30).map(publicPlan),

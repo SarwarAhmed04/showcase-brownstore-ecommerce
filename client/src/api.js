@@ -300,6 +300,11 @@ export const api = {
     }),
   giniVariantPilot: () => request("/api/admin/platforms/gini/variant-sync/pilot"),
   giniVariantChangedPreview: () => request("/api/admin/platforms/gini/variant-sync/changed-preview"),
+  giniVariantPricePilotApprove: (body) =>
+    request("/api/admin/platforms/gini/variant-sync/price-pilot/approve", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   giniVariantStockPatchPreview: () => request("/api/admin/platforms/gini/variant-sync/stock-patch"),
   giniVariantStockPatch: (body) =>
     request("/api/admin/platforms/gini/variant-sync/stock-patch", {

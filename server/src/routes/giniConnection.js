@@ -32,6 +32,7 @@ import { loadVariantTestImageBytes, mongoVariantTestOperation, previewGiniVarian
 import { approveParentOwner, approveVariantSkus, variantCatalogPage } from "../services/giniVariantSync.js";
 import { previewGiniVariantPilot, runGiniVariantPilotStage } from "../services/giniVariantPilot.js";
 import { previewVariantChangedSync } from "../services/giniVariantChangedSync.js";
+import { approveVariantPricePilot } from "../services/giniVariantPricePilot.js";
 import { previewKe20StockPatch, runAuthorizedKe20StockPatch } from "../services/giniVariantStockPatch.js";
 import { verifyXiaomiVariantReadBack } from "../services/giniVariantReadBack.js";
 
@@ -405,6 +406,17 @@ giniConnectionRouter.get("/platforms/gini/variant-sync/changed-preview", async (
     res.json(assertNoSecretLeak(await previewVariantChangedSync(), ""));
   } catch (err) {
     fail(res, err, "Failed to preview GINI variant changes");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-sync/price-pilot/approve", async (req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await approveVariantPricePilot({
+      parentSku: req.body?.parentSku,
+      confirm: req.body?.confirm === true,
+    }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to record the GINI price pilot approval");
   }
 });
 

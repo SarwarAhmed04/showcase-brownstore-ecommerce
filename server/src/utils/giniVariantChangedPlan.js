@@ -1,6 +1,7 @@
 import { giniSkuKey } from "./giniSyncOnePlan.js";
 import { explicitRemoteAttributeId } from "./giniVariantTestContract.js";
 import { giniColorValueLabels } from "./giniVariantPilot.js";
+import { buildSingleVariantStockPatch } from "./giniVariantUpdateContract.js";
 
 export const KNOWN_GINI_VARIANT_PARENTS = Object.freeze([
   Object.freeze({ parentSku: "KE20", label: "HOT PLATES" }),
@@ -38,6 +39,8 @@ const HARD_BLOCKS = new Set([
   "color_mismatch",
   "duplicate_remote_variant_sku",
   "attribute_id_unverified",
+  "ownership_unverified",
+  "variant_baseline_conflict",
 ]);
 
 const UNCERTAIN_BLOCKS = new Set([
@@ -45,6 +48,8 @@ const UNCERTAIN_BLOCKS = new Set([
   "known_parent_not_reconciled",
   "color_attribute_unread",
   "parent_sku_mismatch",
+  "variant_patch_uncertain",
+  "variant_patch_in_progress",
   ...OPERATION_UNCERTAIN,
 ]);
 
@@ -215,12 +220,16 @@ export function planVariantChange({
   environment = "local",
   identityOrigin = "local",
   variantSkuConflict = false,
+  ownership = "",
+  owner = null,
+  variantOperations = [],
 } = {}) {
   const blockers = [];
   const changes = [];
   const manualReview = [];
   const differences = [];
   const imageNotes = [];
+  const priceRows = [];
   const reviewNotes = ["Local identity rows are not copied to another database."];
   const known = isKnownVariantParent(parentSku);
   const colorPreview = colorMappingPreview(combinations, colorLabels, colorAttributeId);
@@ -239,6 +248,11 @@ export function planVariantChange({
   if (colorPreview.some((row) => row.status === "missing")) blockers.push("missing_color_mapping");
   if (colorPreview.some((row) => row.status === "attribute_unread")) blockers.push("color_attribute_unread");
   if (OPERATION_UNCERTAIN.has(operationStatus)) blockers.push(operationStatus);
+  if (ownership === "required") {
+    const sameProduct = owner && String(owner.productId || "") === String(productId || "");
+    const verified = owner?.status === "verified_remote";
+    if (!sameProduct || !verified) blockers.push("ownership_unverified");
+  }
   const localVerified = (identities || []).some((row) => row.status === "verified" || row.confirmedGiniVariantId);
   if (environment === "production" && identityOrigin === "local" && (localVerified || known)) {
     reviewNotes.push("Production must reconcile this parent by GET. Local rows are not production state.");
@@ -251,8 +265,9 @@ export function planVariantChange({
   } else if (remoteState === "present") {
     const rows = Array.isArray(remote.variants) ? remote.variants.map(presentRemoteVariant) : null;
     if (!rows || rows.some((row) => row.incomplete)) blockers.push("incomplete_api_response");
-    else comparePresent({ rows, combinations, identities, colorPreview, remote, categoryId, subcategoryId, blockers, changes, manualReview, differences, imageNotes });
+    else comparePresent({ rows, combinations, identities, colorPreview, remote, categoryId, subcategoryId, blockers, changes, manualReview, differences, imageNotes, priceRows });
   }
+  applyVariantOperationGuards({ variantOperations, priceRows, blockers });
   const unique = [...new Set(blockers)];
   let disposition = "UNCHANGED";
   if (unique.some((code) => UNCERTAIN_BLOCKS.has(code))) disposition = "UNCERTAIN";
@@ -275,6 +290,9 @@ export function planVariantChange({
     imageNotes,
     reviewNotes,
     colorPreview,
+    priceRows,
+    proposedPatches: priceRows.filter((row) => row.patch).map((row) => row.patch),
+    baselineKey: variantBaselineKey(priceRows),
     local: combinations.map((combo) => ({
       sku: combo.proposedSku,
       color: combo.color,
@@ -285,7 +303,47 @@ export function planVariantChange({
   });
 }
 
-function comparePresent({ rows, combinations, identities, colorPreview, remote, categoryId, subcategoryId, blockers, changes, manualReview, differences, imageNotes }) {
+function quotedPrice(combo) {
+  const quote = combo?.pricing;
+  if (quote && (quote.giniPrice != null || quote.priceReview === true)) {
+    return Number.isInteger(Number(quote.giniPrice)) ? Number(quote.giniPrice) : null;
+  }
+  return Number.isInteger(Number(combo?.price)) ? Number(combo.price) : null;
+}
+
+function publishPatch(patch) {
+  if (!patch?.ok) return null;
+  return {
+    method: patch.method,
+    path: patch.path,
+    rawBody: patch.rawBody,
+    body: patch.body,
+    liveSend: false,
+    sendsOtherVariants: false,
+    replacesVariantSet: false,
+  };
+}
+
+function applyVariantOperationGuards({ variantOperations, priceRows, blockers }) {
+  for (const op of variantOperations || []) {
+    const status = String(op?.status || "");
+    if (status === "in_progress") blockers.push("variant_patch_in_progress");
+    if (status === "uncertain") blockers.push("variant_patch_uncertain");
+    if (status === "conflict") blockers.push("variant_baseline_conflict");
+    const row = (priceRows || []).find((item) => String(item.variantId) === String(op?.variantId || ""));
+    if (!row || !["approved", "pending_approval", "verified"].includes(status)) continue;
+    const same = Number(op.baselinePrice) === Number(row.oldPrice)
+      && Number(op.baselineQuantity) === Number(row.oldStock)
+      && String(op.rawBody || "") === String(row.patch?.rawBody || "");
+    if (!same) blockers.push("variant_baseline_conflict");
+  }
+}
+
+export function variantBaselineKey(rows) {
+  return (rows || []).map((row) => `${row.variantId}:${row.oldPrice}:${row.oldStock}`).join("|");
+}
+
+function comparePresent({ rows, combinations, identities, colorPreview, remote, categoryId, subcategoryId, blockers, changes, manualReview, differences, imageNotes, priceRows }) {
   const remoteBySku = new Map();
   for (const row of rows) {
     const key = giniSkuKey(row.sku);
@@ -309,9 +367,12 @@ function comparePresent({ rows, combinations, identities, colorPreview, remote, 
       differences.push({ code: "removed_color", sku: row.sku, detail: "This color is on GINI and is missing locally. It was not deleted." });
       continue;
     }
-    if (saved?.confirmedGiniVariantId && row.id && String(saved.confirmedGiniVariantId) !== String(row.id)) {
+    const savedId = String(saved?.confirmedGiniVariantId || "");
+    const remoteId = String(row.id || "");
+    const identityConflict = Boolean(savedId && remoteId && savedId !== remoteId);
+    if (identityConflict) {
       blockers.push("conflicting_identity");
-      differences.push({ code: "conflicting_identity", sku: row.sku, detail: `Local variant id ${saved.confirmedGiniVariantId} does not match remote id ${row.id}.` });
+      differences.push({ code: "conflicting_identity", sku: row.sku, detail: `Local variant id ${savedId} does not match remote id ${remoteId}.` });
     }
     const mapped = colorPreview.find((item) => item.color.toLowerCase() === String(combo.color || "").toLowerCase());
     const expectedAttributeId = mapped?.attributeId || "";
@@ -321,40 +382,79 @@ function comparePresent({ rows, combinations, identities, colorPreview, remote, 
       blockers.push("color_mismatch");
       differences.push({ code: "color_mismatch", sku: row.sku, detail: `Remote color ${row.color} does not match ${mapped.giniValue}.` });
     }
-    if (Number.isInteger(Number(combo.price)) && row.price !== Number(combo.price)) {
+    const nextPrice = quotedPrice(combo);
+    const nextStock = Number.isInteger(Number(combo.stock)) ? Number(combo.stock) : null;
+    const priceChanged = nextPrice != null && row.price !== nextPrice;
+    const stockChanged = nextStock != null && row.quantity !== nextStock;
+    const zero = stockChanged && nextStock === 0;
+    if (priceChanged) {
       changes.push({
         kind: "price",
         sku: row.sku,
         field: "price",
         from: row.price,
-        to: Number(combo.price),
-        variantId: saved?.confirmedGiniVariantId || "",
-        action: saved?.confirmedGiniVariantId ? "documented_not_sent" : "blocked_missing_variant_id",
+        to: nextPrice,
+        variantId: savedId,
+        action: savedId ? "documented_not_sent" : "blocked_missing_variant_id",
+        commission: combo.pricing?.commission || null,
       });
-      differences.push({ code: "price_change", sku: row.sku, detail: `Price ${row.price} would become ${combo.price}. The documented call is one PATCH by remote variant id, and it has not been sent.` });
+      const rule = combo.pricing?.commission;
+      const ruleText = rule ? ` Saved ${rule.percentage}% ${rule.scope} commission was applied to base ${combo.pricing?.basePrice}.` : "";
+      differences.push({ code: "price_change", sku: row.sku, detail: `Price ${row.price} would become ${nextPrice}.${ruleText} The documented call is one PATCH by remote variant id, and it has not been sent.` });
     }
     if (row.images?.state === "present" && Number.isInteger(Number(combo.images)) && row.images.urls.length !== Number(combo.images)) {
       imageNotes.push({ sku: row.sku, remoteImages: row.images.urls.length, localImages: Number(combo.images) });
     }
-    if (Number.isInteger(Number(combo.stock)) && row.quantity !== Number(combo.stock)) {
-      const zero = Number(combo.stock) === 0;
+    if (stockChanged) {
       changes.push({
         kind: zero ? "quantity_zero" : "quantity",
         sku: row.sku,
         field: "quantity",
         from: row.quantity,
-        to: Number(combo.stock),
-        variantId: saved?.confirmedGiniVariantId || "",
-        action: zero ? "quantity_zero_not_stated" : saved?.confirmedGiniVariantId ? "documented_not_sent" : "blocked_missing_variant_id",
+        to: nextStock,
+        variantId: savedId,
+        action: zero ? "quantity_zero_not_stated" : savedId ? "documented_not_sent" : "blocked_missing_variant_id",
       });
       differences.push({
         code: zero ? "quantity_zero" : "quantity_change",
         sku: row.sku,
         detail: zero
           ? `Quantity ${row.quantity} would become 0. Update Variant Stock does not state that 0 is accepted, so it was not sent.`
-          : `Quantity ${row.quantity} would become ${combo.stock}. The documented call is one PATCH by remote variant id, and it has not been sent.`,
+          : `Quantity ${row.quantity} would become ${nextStock}. The documented call is one PATCH by remote variant id, and it has not been sent.`,
       });
     }
+    let withheldReason = "";
+    let patch = null;
+    if (priceChanged || stockChanged) {
+      if (zero) withheldReason = "quantity_zero_not_stated";
+      else if (!identityConflict && savedId && remoteId && savedId === remoteId) {
+        const built = buildSingleVariantStockPatch({
+          parentSku: remote.sku,
+          variantId: savedId,
+          price: priceChanged ? nextPrice : undefined,
+          quantity: stockChanged ? nextStock : undefined,
+        });
+        patch = publishPatch(built);
+        if (!patch) withheldReason = built.code || "patch_not_ready";
+      } else if (identityConflict) withheldReason = "conflicting_identity";
+      else withheldReason = "missing_remote_variant_id";
+    }
+    priceRows.push({
+      sku: row.sku,
+      variantId: savedId || remoteId,
+      color: combo.color || row.color || "",
+      oldPrice: row.price,
+      newPrice: nextPrice,
+      oldStock: row.quantity,
+      newStock: nextStock,
+      basePrice: combo.pricing?.basePrice ?? null,
+      usedOwnPrice: combo.pricing?.usedOwnPrice === true,
+      commission: combo.pricing?.commission || null,
+      changed: priceChanged || stockChanged,
+      preserved: !priceChanged && !stockChanged,
+      patch,
+      withheldReason,
+    });
   }
   for (const combo of combinations) {
     const key = giniSkuKey(combo.proposedSku);
@@ -451,7 +551,73 @@ export function futureBulkPreview(summary) {
     blockedParents: summary?.blocked || 0,
     uncertainParents: summary?.uncertain || 0,
     knownParentsSkippedAsCreate: KNOWN_GINI_VARIANT_PARENTS.length,
-    note: "Bulk variant writes stay disabled. Price, quantity, and new-color writes stay blocked. A removed color stays for manual review. The six reconciled parents are not created again.",
+    note: "Bulk variant writes stay disabled. A changed variant can show one stock PATCH for its own price, positive quantity, or both, and that PATCH is not sent. Quantity 0, new colors, and full variant replacement stay blocked. A removed color stays for manual review. The six reconciled parents are not created again.",
+  };
+}
+
+function priceOnlyPatch(row) {
+  const body = row?.patch?.body;
+  return Boolean(row?.patch?.rawBody)
+    && body
+    && Object.prototype.hasOwnProperty.call(body, "price")
+    && !Object.prototype.hasOwnProperty.call(body, "quantity")
+    && row.patch.liveSend === false
+    && row.patch.replacesVariantSet === false
+    && row.patch.sendsOtherVariants === false;
+}
+
+export function pricePilotBlockReason(pilot) {
+  if (!pilot?.productId) return "product_not_in_catalog";
+  if (pilot.disposition !== "CHANGED") return "not_changed";
+  if ((pilot.blockers || []).length) return "blocked";
+  const changes = pilot.changes || [];
+  if (!changes.length || changes.some((change) => change.kind !== "price" || change.action !== "documented_not_sent")) return "not_price_only";
+  const rows = pilot.priceRows || [];
+  const changed = rows.filter((row) => row.changed);
+  if (!changed.length || changed.some((row) => row.oldStock !== row.newStock || row.withheldReason || !priceOnlyPatch(row))) return "price_patch_not_ready";
+  if (rows.some((row) => row.patch && !row.changed)) return "unchanged_variant_in_patch";
+  return "";
+}
+
+function pilotApproved(pilot, operations) {
+  const changed = (pilot?.priceRows || []).filter((row) => row.changed);
+  if (!changed.length) return false;
+  return changed.every((row) => (operations || []).some((op) => String(op.variantId) === String(row.variantId)
+    && giniSkuKey(op.parentSku) === giniSkuKey(pilot.parentSku)
+    && op.status === "approved"
+    && Number(op.baselinePrice) === Number(row.oldPrice)
+    && Number(op.baselineQuantity) === Number(row.oldStock)
+    && String(op.rawBody || "") === String(row.patch?.rawBody || "")));
+}
+
+export function selectPricePilot(pilots, operations = []) {
+  const withheld = [];
+  let selected = null;
+  for (const pilot of pilots || []) {
+    const reason = pricePilotBlockReason(pilot);
+    if (!reason) {
+      if (!selected) selected = pilot;
+      else withheld.push({ parentSku: pilot.parentSku, reason: "waiting_behind_one_product_pilot" });
+      continue;
+    }
+    withheld.push({ parentSku: pilot.parentSku, reason });
+  }
+  const changed = (selected?.priceRows || []).filter((row) => row.changed);
+  return {
+    ready: Boolean(selected),
+    canSend: false,
+    batchEnabled: false,
+    liveSend: false,
+    writesEnabled: false,
+    mode: "one_product_price_only",
+    parentSku: selected?.parentSku || "",
+    label: selected?.label || "",
+    productId: selected?.productId || "",
+    approvalRequired: true,
+    approved: selected ? pilotApproved(selected, operations) : false,
+    variants: changed,
+    preserved: (selected?.priceRows || []).filter((row) => !row.changed),
+    withheld,
   };
 }
 

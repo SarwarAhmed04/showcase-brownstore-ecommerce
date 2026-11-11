@@ -114,6 +114,15 @@ export async function loadVariantCatalog({ force = false } = {}) {
     classified.ownerCount = (skuOwners.get(key) || []).length;
     classified.mappingLiveStatus = "unknown";
     classified.canSend = false;
+    classified.priceScope = {
+      storePrice: priced.priceReview ? null : priced.storePrice,
+      priceReview: priced.priceReview === true,
+      vendorId: ids.vendor,
+      brandId: ids.brand,
+      categoryId: ids.category,
+      subCategoryId: ids.subcategory,
+      collectionId: ids.collection,
+    };
     rows.push(classified);
   }
   const conflicts = proposalConflicts(rows);
