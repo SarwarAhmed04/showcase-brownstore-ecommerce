@@ -20,6 +20,7 @@ import { isGiniHistoricalHoldSku } from "./giniHistoricalHold.js";
 
 const BLOCKER_TEXT = {
   duplicate_brownstore_sku: "More than one BrownStore product uses this SKU.",
+  variant_parent_protected: "This SKU is a verified GINI variant parent. Simple sync will not overwrite it.",
   existing_gini_product: "This SKU already exists on GINI. A future action would be UPDATE.",
   missing_sku: "This product has no itemCode SKU.",
   missing_mapping: "This collection has no saved GINI category mapping.",
@@ -191,6 +192,7 @@ export function buildGiniPlanFromParts({
   duplicateProductIds = [],
   mapping,
   existing = null,
+  protectedVariantSku = false,
 }) {
   const sku = normalizeGiniItemCode(doc?.itemCode);
   const text = giniCatalogText(resolved);
@@ -203,6 +205,7 @@ export function buildGiniPlanFromParts({
   const plannedImages = imageUrls.slice(0, GINI_IMAGE_LIMIT);
   const blockers = [];
   const owners = Array.isArray(duplicateProductIds) ? duplicateProductIds.map(String) : [];
+  if (protectedVariantSku === true) blockers.push("variant_parent_protected");
   if (!sku) blockers.push("missing_sku");
   if (sku && (owners.length !== 1 || !owners.includes(String(doc?._id)))) {
     blockers.push("duplicate_brownstore_sku");

@@ -18,6 +18,7 @@ import { seedAdmin } from "./seedAdmin.js";
 import { seedPartners } from "./seedPartners.js";
 import { Product } from "./models/Product.js";
 import { Category } from "./models/Category.js";
+import { startIbsherAutoSync } from "./utils/ibsherAutoSync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -142,12 +143,7 @@ async function start() {
     console.log(`Loaded ${count} products from MongoDB`);
   }
 
-  const refreshCatalog = () => {
-    syncFromIbsher().catch((err) => console.error("Catalog sync failed:", err.message));
-  };
-
-  refreshCatalog();
-  setInterval(refreshCatalog, 60 * 60 * 1000);
+  startIbsherAutoSync({ sync: syncFromIbsher });
 }
 
 process.on("unhandledRejection", (err) => {

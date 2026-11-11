@@ -24,6 +24,7 @@ import {
   mappingFromTree,
 } from "../utils/giniSyncEvaluate.js";
 import { GINI_PRODUCTS_PATH, giniSkuKey, normalizeGiniItemCode } from "../utils/giniSyncOnePlan.js";
+import { loadProtectedVariantSkuKeys } from "../utils/giniVariantGuard.js";
 import {
   assessGiniImageChange,
   explainGiniPriceQuantityChange,
@@ -788,6 +789,7 @@ export function assessGiniPreviewProduct(doc, shared) {
     duplicateProductIds: owners,
     mapping,
     existing: null,
+    protectedVariantSku: shared.protectedVariantSkuKeys?.has(skuKey) === true,
   });
   const isActive = resolved.isActive !== false;
   const inactiveCodes = inactivePreviewCodes(isActive, eligibility);
@@ -892,6 +894,7 @@ async function evaluateCatalogProduct(doc, shared, options = {}) {
     duplicateProductIds: owners,
     mapping,
     existing: found,
+    protectedVariantSku: shared.protectedVariantSkuKeys?.has(skuKey) === true,
   });
   return stampPreviewEvidence(
     withIdentity(doc, classifyGiniBulk({ plan, isActive: true, eligibility: null, localSend: null })),
@@ -1804,14 +1807,16 @@ async function updateStoredResult(jobId, evaluation) {
 }
 
 async function refreshPreviewShared(shared, categories) {
-  const [rules, eligibility, skuOwners] = await Promise.all([
+  const [rules, eligibility, skuOwners, protectedVariantSkuKeys] = await Promise.all([
     Commission.find({ partner: "gini", isActive: { $ne: false } }).lean(),
     loadEligibilityContext("gini"),
     buildSkuOwnerIndex(),
+    loadProtectedVariantSkuKeys(),
   ]);
   shared.rules = rules;
   shared.eligibility = eligibility;
   shared.skuOwners = skuOwners;
+  shared.protectedVariantSkuKeys = protectedVariantSkuKeys;
   shared.mappingCache = new Map();
   shared.categories = categories;
   shared.policySignature = await policySignature(categories);
@@ -2292,6 +2297,7 @@ export async function rebuildGiniChangedPayload(productId) {
   const skuKey = giniSkuKey(doc.itemCode);
   const owners = skuKey ? skuOwners.get(skuKey) || [] : [];
   const mapping = mappingFromTree(taxonomyValuesForProduct(doc, eligibility), live.categories);
+  const protectedKeys = await loadProtectedVariantSkuKeys();
   const plan = buildGiniPlanFromParts({
     doc,
     resolved,
@@ -2299,6 +2305,7 @@ export async function rebuildGiniChangedPayload(productId) {
     duplicateProductIds: owners,
     mapping,
     existing: null,
+    protectedVariantSku: protectedKeys.has(skuKey),
   });
   return {
     doc,
@@ -2334,11 +2341,12 @@ export async function runGiniChangedPreview() {
   if (live.connectionRequired) {
     throw new GiniBulkError("Connect GINI API first.", { status: 409, code: "connection_required" });
   }
-  const [rules, eligibility, skuOwners, snapshots] = await Promise.all([
+  const [rules, eligibility, skuOwners, snapshots, protectedVariantSkuKeys] = await Promise.all([
     Commission.find({ partner: "gini", isActive: { $ne: false } }).lean(),
     loadEligibilityContext("gini"),
     buildSkuOwnerIndex(),
     loadConfirmedFieldSnapshots(sends),
+    loadProtectedVariantSkuKeys(),
   ]);
   const productIds = sends.map((row) => String(row.productId || "")).filter((id) => mongoose.isValidObjectId(id));
   const products = productIds.length ? await Product.find({ _id: { $in: productIds } }).lean() : [];
@@ -2379,6 +2387,7 @@ export async function runGiniChangedPreview() {
         duplicateProductIds: owners,
         mapping,
         existing: null,
+        protectedVariantSku: protectedVariantSkuKeys.has(giniSkuKey(doc.itemCode)),
       });
       const decision = evaluatePlatformEligibility(doc, eligibility);
       const reasons = (decision.reasons || []).filter((reason) => reason.code !== "taxonomy_config_missing");

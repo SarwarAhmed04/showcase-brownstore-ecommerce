@@ -58,6 +58,7 @@ export function platformSectionsFor(partnerSlug, elryanSections = null) {
     return [
       ["connection", "giniApiConnection"],
       ["syncOne", "giniSyncOneTitle"],
+      ["variantSync", "giniVariantSyncTitle"],
       ["syncAll", "giniSyncAllTitle"],
       ...PLATFORM_SECTIONS,
     ];

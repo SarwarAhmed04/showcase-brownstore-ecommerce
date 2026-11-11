@@ -274,6 +274,40 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  giniVariantTestPreview: (productId) =>
+    request("/api/admin/platforms/gini/variant-test/preview", {
+      method: "POST",
+      body: JSON.stringify({ productId }),
+    }),
+  giniVariantTestStageA: (productId, confirm) =>
+    request("/api/admin/platforms/gini/variant-test/stage-a", {
+      method: "POST",
+      body: JSON.stringify({ productId, confirm: confirm === true }),
+    }),
+  giniVariantSync: (status = "", page = 1) => {
+    const qs = new URLSearchParams({ status, page: String(page) });
+    return request(`/api/admin/platforms/gini/variant-sync?${qs}`);
+  },
+  giniVariantApproveSkus: (body) =>
+    request("/api/admin/platforms/gini/variant-sync/approve-skus", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  giniVariantApproveOwner: (body) =>
+    request("/api/admin/platforms/gini/variant-sync/approve-owner", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  giniVariantReadBack: () => request("/api/admin/platforms/gini/variant-test/read-back"),
+  giniVariantTestStageB: (productId, confirm, acceptUnprovenVariantSkuUniqueness) =>
+    request("/api/admin/platforms/gini/variant-test/stage-b", {
+      method: "POST",
+      body: JSON.stringify({
+        productId,
+        confirm: confirm === true,
+        acceptUnprovenVariantSkuUniqueness: acceptUnprovenVariantSkuUniqueness === true,
+      }),
+    }),
   giniSyncAllStatus: () => request("/api/admin/platforms/gini/sync-all"),
   giniSyncAllPreview: () =>
     request("/api/admin/platforms/gini/sync-all/preview", {

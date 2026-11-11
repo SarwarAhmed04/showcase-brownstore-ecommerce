@@ -65,6 +65,7 @@ export default function PlatformOverview({ partnerSlug, partner, t, onOpen, onPa
     ...(partnerSlug === "miswag" ? [["connection", t.miswagApiConnection]] : []),
     ...(partnerSlug === "gini" ? [["connection", t.giniApiConnection]] : []),
     ...(partnerSlug === "gini" ? [["syncOne", t.giniSyncOneTitle]] : []),
+    ...(partnerSlug === "gini" ? [["variantSync", t.giniVariantSyncTitle]] : []),
     ...(partnerSlug === "gini" ? [["syncAll", t.giniSyncAllTitle]] : []),
     ...(partnerSlug === "miswag"
       ? [["mappingCategories", t.miswagMappingCategories]]

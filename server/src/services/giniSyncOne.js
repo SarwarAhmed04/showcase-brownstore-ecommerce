@@ -20,6 +20,7 @@ import {
 import { fetchGiniCategoryTree, performGiniRequest, sanitizeGiniText } from "./giniConnection.js";
 import { findExistingGiniProduct } from "./giniSkuLookup.js";
 import { isGiniHistoricalHoldSku } from "../utils/giniHistoricalHold.js";
+import { loadProtectedVariantSkuKeys } from "../utils/giniVariantGuard.js";
 import { giniSyncOneWritesEnabled } from "../utils/giniSkuCreateGates.js";
 import { attemptIndexesEnforced } from "../utils/giniSkuCreateIndexes.js";
 
@@ -96,7 +97,16 @@ export async function buildGiniSyncPlan(productId) {
       existing = { error: true };
     }
   }
-  return buildGiniPlanFromParts({ doc, resolved, priced, duplicateProductIds, mapping, existing });
+  const protectedKeys = await loadProtectedVariantSkuKeys();
+  return buildGiniPlanFromParts({
+    doc,
+    resolved,
+    priced,
+    duplicateProductIds,
+    mapping,
+    existing,
+    protectedVariantSku: protectedKeys.has(giniSkuKey(sku)),
+  });
 }
 
 function publicPreview(plan, previewToken = "") {

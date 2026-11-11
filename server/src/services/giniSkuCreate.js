@@ -19,6 +19,7 @@ import {
   mappingFromTree,
 } from "../utils/giniSyncEvaluate.js";
 import { GINI_PRODUCTS_PATH, giniSkuKey, normalizeGiniItemCode } from "../utils/giniSyncOnePlan.js";
+import { loadProtectedVariantSkuKeys } from "../utils/giniVariantGuard.js";
 import { fetchGiniCategoryTree, performGiniRequest, resolveGiniConfig } from "./giniConnection.js";
 import { findExistingGiniProduct } from "./giniSkuLookup.js";
 import { buildGiniCreateForm, downloadGiniProductImage } from "./giniSyncOne.js";
@@ -179,6 +180,7 @@ async function inspectCandidate(productId, requestedSku) {
   const mapping = await readLiveMapping(doc);
   const eligibility = evaluatePlatformEligibility(doc, await loadEligibilityContext("gini"));
   const found = await findExistingGiniProduct(sku);
+  const protectedKeys = await loadProtectedVariantSkuKeys();
   const plan = buildGiniPlanFromParts({
     doc,
     resolved,
@@ -186,6 +188,7 @@ async function inspectCandidate(productId, requestedSku) {
     duplicateProductIds: owners,
     mapping,
     existing: found,
+    protectedVariantSku: protectedKeys.has(skuKey),
   });
   const remote = remoteDecision(found);
   const inactive =

@@ -17,6 +17,8 @@ import GiniSyncAll from "../../components/admin/platform/GiniSyncAll";
 import GiniResyncDeleted from "../../components/admin/platform/GiniResyncDeleted";
 import GiniSyncOneProduct from "../../components/admin/platform/GiniSyncOneProduct";
 import GiniSkuCreatePanel from "../../components/admin/platform/GiniSkuCreatePanel";
+import GiniVariantTestPanel from "../../components/admin/platform/GiniVariantTestPanel";
+import GiniVariantSyncPanel from "../../components/admin/platform/GiniVariantSyncPanel";
 import MiswagApiConnection from "../../components/admin/platform/MiswagApiConnection";
 import { ElryanModuleLoadNotice } from "../../components/admin/platform/ElryanPanelErrorBoundary";
 
@@ -2148,10 +2150,13 @@ function PartnerCommission({ partnerSlug, t, lang }) {
 
       {tab === "connection" && partnerSlug === "gini" ? <GiniApiConnection t={t} /> : null}
 
+      {tab === "variantSync" && partnerSlug === "gini" ? <GiniVariantSyncPanel /> : null}
+
       {tab === "syncOne" && partnerSlug === "gini" ? (
         <>
           <GiniSyncOneProduct t={t} lang={lang} />
           <GiniSkuCreatePanel t={t} />
+          <GiniVariantTestPanel />
         </>
       ) : null}
 

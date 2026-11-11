@@ -13,6 +13,7 @@ import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platf
 import { toResolvedProduct } from "../utils/productView.js";
 import { buildGiniPlanFromParts, isUnresolvedHistoricalGiniSku, mappingFromTree } from "../utils/giniSyncEvaluate.js";
 import { giniSkuKey, normalizeGiniItemCode } from "../utils/giniSyncOnePlan.js";
+import { loadProtectedVariantSkuKeys } from "../utils/giniVariantGuard.js";
 import { confirmedFieldsForSend } from "../utils/giniConfirmedFields.js";
 import {
   explainGiniPriceQuantityChange,
@@ -280,6 +281,7 @@ async function loadPrepared(job) {
     fail("This product is no longer eligible for GINI. Nothing was updated.", "not_update_eligible", 409);
   }
   const collectionId = productScopeIds(doc).collection || "";
+  const protectedKeys = await loadProtectedVariantSkuKeys();
   const plan = buildGiniPlanFromParts({
     doc,
     resolved,
@@ -287,6 +289,7 @@ async function loadPrepared(job) {
     duplicateProductIds: owners,
     mapping: mappingFromTree(taxonomyValuesForProduct(doc, eligibility), liveTree.categories),
     existing: null,
+    protectedVariantSku: protectedKeys.has(skuKey),
   });
   const blockers = (plan.blockers || []).filter((code) => code && code !== "existing_gini_product");
   if (blockers.length || giniSkuKey(plan.sku) !== skuKey) {

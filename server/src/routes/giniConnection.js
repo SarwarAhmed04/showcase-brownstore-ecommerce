@@ -28,6 +28,9 @@ import {
 import { reconcileGiniImageReplacement, resolveGiniImageReplacement, startGiniImageReplacement } from "../services/giniImageReplacement.js";
 import { getLatestGiniResyncJob, reconcileGiniResync, runGiniResyncPreview, startGiniResync } from "../services/giniResync.js";
 import { previewGiniSkuCreate, sendGiniSkuCreate } from "../services/giniSkuCreate.js";
+import { loadVariantTestImageBytes, mongoVariantTestOperation, previewGiniVariantTest, runGiniVariantTestStage } from "../services/giniVariantTest.js";
+import { approveParentOwner, approveVariantSkus, variantCatalogPage } from "../services/giniVariantSync.js";
+import { verifyXiaomiVariantReadBack } from "../services/giniVariantReadBack.js";
 
 export const giniConnectionRouter = Router();
 
@@ -343,6 +346,80 @@ giniConnectionRouter.post("/platforms/gini/sku-create/preview", async (req, res)
     res.json(assertNoSecretLeak(await previewGiniSkuCreate({ sku: body.sku, productId: body.productId }), ""));
   } catch (err) {
     fail(res, err, "Failed to preview the GINI product");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-test/preview", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(assertNoSecretLeak(await previewGiniVariantTest({ productId: body.productId }, {
+      loadImageBytes: loadVariantTestImageBytes,
+      operation: mongoVariantTestOperation(),
+    }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to preview the GINI variant test");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-test/stage-a", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(assertNoSecretLeak(await runGiniVariantTestStage({
+      stage: "parent",
+      productId: body.productId,
+      confirm: body.confirm === true,
+    }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to run the GINI variant parent stage");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-test/stage-b", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(assertNoSecretLeak(await runGiniVariantTestStage({
+      stage: "variants",
+      productId: body.productId,
+      confirm: body.confirm === true,
+      acceptUnprovenVariantSkuUniqueness: body.acceptUnprovenVariantSkuUniqueness === true,
+    }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to run the GINI variant stage");
+  }
+});
+
+giniConnectionRouter.get("/platforms/gini/variant-sync", async (req, res) => {
+  try {
+    const page = await variantCatalogPage({ status: req.query.status || "", page: req.query.page || 1 });
+    res.json(assertNoSecretLeak(page, ""));
+  } catch (err) {
+    fail(res, err, "Failed to preview GINI variants");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-sync/approve-skus", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(assertNoSecretLeak(await approveVariantSkus({ productId: body.productId, confirm: body.confirm === true, combinations: body.combinations || [] }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to approve variant SKUs");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-sync/approve-owner", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(assertNoSecretLeak(await approveParentOwner({ productId: body.productId, confirm: body.confirm === true }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to approve the parent owner");
+  }
+});
+
+giniConnectionRouter.get("/platforms/gini/variant-test/read-back", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await verifyXiaomiVariantReadBack(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to read the Xiaomi variants");
   }
 });
 

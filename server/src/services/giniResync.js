@@ -17,6 +17,7 @@ import { isGiniHistoricalHoldSku } from "../utils/giniHistoricalHold.js";
 import { buildGiniPlanFromParts, giniPayloadHash, mappingFromTree } from "../utils/giniSyncEvaluate.js";
 import { resyncIndexesEnforced } from "../utils/giniResyncIndexes.js";
 import { GINI_PRODUCTS_PATH, giniCatalogText, giniSkuKey, normalizeGiniItemCode } from "../utils/giniSyncOnePlan.js";
+import { loadProtectedVariantSkuKeys } from "../utils/giniVariantGuard.js";
 import {
   assessGiniResyncRemote,
   classifyGiniResyncRow,
@@ -463,6 +464,7 @@ export async function runGiniResyncPreview() {
         duplicateProductIds: ownerIds,
         mapping,
         existing: null,
+        protectedVariantSku: (await loadProtectedVariantSkuKeys()).has(skuKey),
       });
     } else if (doc && stopCode) {
       plan = null;
@@ -732,6 +734,7 @@ async function currentPlan(doc, owners) {
     duplicateProductIds: ownerIds,
     mapping: mappingFromTree(taxonomyValuesForProduct(doc, eligibility), live.categories),
     existing: null,
+    protectedVariantSku: (await loadProtectedVariantSkuKeys()).has(skuKey),
   });
   const blockers = (plan.blockers || []).filter((code) => code !== "existing_gini_product" && code !== "gini_lookup_failed");
   if (blockers.length || !plan.payloadPreview) return { ok: false, code: blockers[0] || "not_resync_eligible" };
