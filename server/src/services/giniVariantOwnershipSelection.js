@@ -2,6 +2,7 @@ import { GiniVariantOwnershipOperation } from "../models/GiniVariantOwnershipOpe
 import { GiniVariantParentOwner } from "../models/GiniVariantParentOwner.js";
 import { loadVariantCatalog } from "./giniVariantSync.js";
 import { giniSkuKey } from "../utils/giniSyncOnePlan.js";
+import { acceptFreshProductionSnapshot, OWNERSHIP_PILOT_SKU } from "../utils/giniOwnershipProductionContext.js";
 import {
   attemptFutureOwnershipSave,
   auditDuplicateOwnership,
@@ -116,6 +117,7 @@ export async function prepareOwnershipSelection({ parentSku = "", productId = ""
       sourceItemId: selected?.sourceItemId || "",
       confirm: confirm === true,
       confirmOwnershipSave: true,
+      productionSnapshot: deps.productionSnapshot || null,
     }),
   };
 }
@@ -138,6 +140,24 @@ async function commitOwnershipSave(input, deps) {
   if (!ownershipPilotAllows(input.parentSku, input.productId)) {
     return { ...attemptFutureOwnershipSave(input, deps.env), code: "pilot_not_authorized", databaseRechecked: false };
   }
+  if (giniSkuKey(input.parentSku) === giniSkuKey(OWNERSHIP_PILOT_SKU)) {
+    const accepted = acceptFreshProductionSnapshot(input.productionSnapshot, {
+      productIds: input.productionSnapshot?.productIds || [],
+      productId: input.productId,
+    });
+    if (!accepted) {
+      return {
+        ok: false,
+        code: "production_context_unverified",
+        saved: false,
+        sentToGini: 0,
+        canSend: false,
+        writes: [],
+        databaseRechecked: false,
+        publishesToGini: false,
+      };
+    }
+  }
   const audit = await currentAudit(deps);
   const group = audit.groups.find((row) => row.parentSkuKey === giniSkuKey(input.parentSku)) || null;
   const decision = evaluateOwnershipSave({
@@ -153,6 +173,7 @@ async function commitOwnershipSave(input, deps) {
     operations: audit.operations || [],
     expectedFingerprint: input.decisionFingerprint,
     requireFingerprint: true,
+    productionSnapshot: input.productionSnapshot,
   });
   const held = {
     databaseRechecked: true,

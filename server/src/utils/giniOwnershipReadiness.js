@@ -1,8 +1,9 @@
 import { ObjectId } from "mongodb";
 import { assessOwnershipIndexes, OWNERSHIP_OPERATION_COLLECTION, OWNERSHIP_PARENT_COLLECTION } from "./giniOwnershipIndexPlan.js";
 import { OWNERSHIP_SAVE_INDEXES_READY, OWNERSHIP_SAVE_PILOT, OWNERSHIP_SAVE_RELEASED } from "./giniVariantOwnershipAudit.js";
+import { OWNERSHIP_PILOT_SKU, rememberVerifiedSnapshot, verifyOwnershipDatabase } from "./giniOwnershipProductionContext.js";
 
-export const OWNERSHIP_PILOT_SKU = "38104";
+export { OWNERSHIP_PILOT_SKU };
 
 export const LAST_OWNERSHIP_REVIEW = Object.freeze({
   parentSku: OWNERSHIP_PILOT_SKU,
@@ -259,7 +260,35 @@ export function summarizeOwnershipReadiness({
   };
 }
 
-export async function readOwnershipReadiness(db, { sku = OWNERSHIP_PILOT_SKU } = {}) {
+export function stoppedOwnershipReport() {
+  return {
+    readOnly: true,
+    code: "production_context_unverified",
+    stopped: true,
+    saved: false,
+    sentToGini: 0,
+    readyForOwnershipSave: false,
+    operations: [],
+    gates: {
+      released: OWNERSHIP_SAVE_RELEASED === true,
+      indexesReady: OWNERSHIP_SAVE_INDEXES_READY === true,
+      pilotParentSku: OWNERSHIP_SAVE_PILOT.parentSku,
+      pilotProductId: OWNERSHIP_SAVE_PILOT.productId,
+      anyOpen: OWNERSHIP_SAVE_RELEASED === true || OWNERSHIP_SAVE_INDEXES_READY === true || Boolean(OWNERSHIP_SAVE_PILOT.parentSku || OWNERSHIP_SAVE_PILOT.productId),
+    },
+    indexes: null,
+    conflicts: null,
+    conflictCount: null,
+    missing: [],
+    migration: { safeToPrepare: false, executedByThisAudit: false, commands: [] },
+    pilot: null,
+    productionSnapshot: null,
+  };
+}
+
+export async function readOwnershipReadiness(db, { sku = OWNERSHIP_PILOT_SKU, confirmProduction = false, allowLoopback = false, loopback = false } = {}) {
+  const verdict = await verifyOwnershipDatabase(db, { confirmProduction, allowLoopback, loopback });
+  if (!verdict.ok) return stoppedOwnershipReport();
   const listed = await db.listCollections({}, { nameOnly: true }).toArray();
   const names = new Map(listed.map((item) => [String(item.name).toLowerCase(), item.name]));
   const parentName = names.get(OWNERSHIP_PARENT_COLLECTION) || "";
@@ -326,7 +355,7 @@ export async function readOwnershipReadiness(db, { sku = OWNERSHIP_PILOT_SKU } =
   if (namesAfter.has(OWNERSHIP_OPERATION_COLLECTION) !== Boolean(operationName)) {
     throw new Error("Ownership readiness read changed the operation collection.");
   }
-  return summarizeOwnershipReadiness({
+  const report = summarizeOwnershipReadiness({
     parentCollection: parentName,
     parentIndexes,
     ownerStatus,
@@ -343,5 +372,14 @@ export async function readOwnershipReadiness(db, { sku = OWNERSHIP_PILOT_SKU } =
     pilotOwners,
     pilotOperations,
   });
+  return {
+    ...report,
+    code: "verified_production_loopback",
+    stopped: false,
+    productionSnapshot: rememberVerifiedSnapshot({
+      productIds: report.pilot.products.map((row) => row.productId),
+      sourceItemIds: report.pilot.products.map((row) => row.sourceItemId),
+    }),
+  };
 }
 

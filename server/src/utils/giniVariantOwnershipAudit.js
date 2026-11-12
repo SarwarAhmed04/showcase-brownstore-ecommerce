@@ -1,4 +1,5 @@
 import { giniSkuKey } from "./giniSyncOnePlan.js";
+import { acceptFreshProductionSnapshot, OWNERSHIP_PILOT_SKU } from "./giniOwnershipProductionContext.js";
 import { isKnownVariantParent, KNOWN_GINI_VARIANT_PARENTS, publishRemote } from "./giniVariantChangedPlan.js";
 import { resolveOwnershipImageUrls } from "./ownershipImageUrl.js";
 
@@ -269,6 +270,7 @@ export function designFutureOwnershipSave() {
       releaseLock: "OWNERSHIP_SAVE_RELEASED",
     },
     uniquenessChecks: [
+      "Require a fresh snapshot from a verified Hostinger production read in this process. A desktop catalog cannot authorize the ownership pilot.",
       "Re-read both vendor products, their source item ids, and every owner and operation row in one snapshot.",
       "Accept only the one SKU and BrownStore product id named by OWNERSHIP_SAVE_PILOT.",
       "Require the fresh fingerprint to match the reviewed decision.",
@@ -331,7 +333,14 @@ export function evaluateOwnershipSave({
   operations = [],
   expectedFingerprint = "",
   requireFingerprint = false,
+  productionSnapshot = null,
 } = {}) {
+  if (giniSkuKey(parentSku) === giniSkuKey(OWNERSHIP_PILOT_SKU) || giniSkuKey(group?.parentSku) === giniSkuKey(OWNERSHIP_PILOT_SKU)) {
+    const candidateIds = (group?.candidates || []).map((row) => String(row?.productId || ""));
+    if (!acceptFreshProductionSnapshot(productionSnapshot, { productIds: candidateIds, productId })) {
+      return closedSave("production_context_unverified");
+    }
+  }
   if (confirm !== true || confirmOwnershipSave !== true) return closedSave("approval_required");
   const requestedSku = String(parentSku || "").trim();
   const requestedProductId = String(productId || "").trim();
@@ -569,7 +578,35 @@ export function previewOwnershipSaveDocuments({
   sourceItemId = "",
   confirm = false,
   confirmOwnershipSave = false,
+  productionSnapshot = null,
 } = {}) {
+  if (giniSkuKey(parentSku) === giniSkuKey(OWNERSHIP_PILOT_SKU) || giniSkuKey(group?.parentSku) === giniSkuKey(OWNERSHIP_PILOT_SKU)) {
+    const candidateIds = (group?.candidates || []).map((row) => String(row?.productId || ""));
+    if (!acceptFreshProductionSnapshot(productionSnapshot, { productIds: candidateIds, productId })) {
+      return {
+        readOnly: true,
+        stopped: true,
+        code: "production_context_unverified",
+        saved: false,
+        wouldWrite: false,
+        wouldInsert: [],
+        documents: null,
+        fingerprint: "",
+        remainingBlockers: [],
+        nextGate: "",
+        excluded: [],
+        ownerStatus: "",
+        remoteVerification: "not_performed",
+        sendEligible: false,
+        sentToGini: 0,
+        canSend: false,
+        pilot: ownershipPilotAuthorization(),
+        indexesReady: OWNERSHIP_SAVE_INDEXES_READY === true,
+        released: OWNERSHIP_SAVE_RELEASED === true,
+        reread: null,
+      };
+    }
+  }
   const decision = evaluateOwnershipSave({
     group,
     parentSku,
@@ -580,6 +617,7 @@ export function previewOwnershipSaveDocuments({
     confirmOwnershipSave,
     owners,
     operations,
+    productionSnapshot,
   });
   const selected = group?.candidates?.find((row) => String(row.productId) === String(productId || "")) || null;
   const remainingBlockers = (selected?.blockers || []).filter((code) => !OWNERSHIP_BLOCKERS.has(code));

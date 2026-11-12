@@ -2,31 +2,25 @@
 /**
  * Read-only ownership index audit.
  *
- * It lists collections and indexes, then finds owner, operation, and product
- * rows. It does not create a collection, create an index, write a document,
- * or call GINI.
+ * It verifies the Hostinger production context before it lists collections,
+ * indexes, owners, or products. An unverified database returns
+ * production_context_unverified and does not report local product ids or
+ * index state. It does not create a collection, create an index, write a
+ * document, or call GINI.
  *
- *   node src/scripts/giniOwnershipReadinessAudit.js --confirm-production
+ *   node src/scripts/giniOwnershipReadinessAudit.js --confirm-production --allow-verified-production-loopback
  *
- * Loopback databases are refused. Copy the JSON from the terminal. Do not
- * send the shell environment, .env, or any connection string.
+ * Copy the JSON from the terminal. Do not send the shell environment, .env,
+ * or any connection string.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { MongoClient } from "mongodb";
-import { describeMongoTarget, inspectDeployment, maskClientId, sanitizeText } from "./giniProductionReadOnlyAudit.js";
-import { evaluateLoopbackAuthorization, LOOPBACK_FLAG } from "./giniProductionPreflight.js";
-import { readOwnershipReadiness } from "../utils/giniOwnershipReadiness.js";
-
-const REPORTED_PREVIEW = Object.freeze({
-  total: 41415,
-  readyCreate: 38551,
-  alreadyExists: 0,
-  blocked: 661,
-  inactive: 2203,
-});
+import { describeMongoTarget, sanitizeText } from "./giniProductionReadOnlyAudit.js";
+import { LOOPBACK_FLAG } from "./giniProductionPreflight.js";
+import { readOwnershipReadiness, stoppedOwnershipReport } from "../utils/giniOwnershipReadiness.js";
 
 const CONFIRM_FLAG = "--confirm-production";
 const WRITE_FLAG = /^--(create|apply|write|ensure|sync|migrate)(?:-|$)/;
@@ -80,8 +74,9 @@ async function main() {
     process.exitCode = 2;
     return;
   }
-  if (target.loopback && !process.argv.includes(LOOPBACK_FLAG)) {
-    console.error("Refusing loopback database. --confirm-production does not prove this shell is production.");
+  if (!target.loopback || !process.argv.includes(LOOPBACK_FLAG)) {
+    console.error("Refusing database. Production context is not verified. No ownership documents were read.");
+    process.stdout.write(`${JSON.stringify(stoppedOwnershipReport(), null, 2)}\n`);
     process.exitCode = 2;
     return;
   }
@@ -93,42 +88,13 @@ async function main() {
   try {
     await client.connect();
     const db = client.db(target.database);
-    if (target.loopback) {
-      const names = new Map((await db.listCollections({}, { nameOnly: true }).toArray()).map((item) => [String(item.name).toLowerCase(), item.name]));
-      const connectionName = names.get("giniconnections");
-      const jobName = names.get("ginisyncjobs");
-      const connectionDoc = connectionName
-        ? await db.collection(connectionName).findOne({}, { projection: { baseUrl: 1, clientId: 1, hasSecret: 1 } })
-        : null;
-      const preview = jobName
-        ? await db.collection(jobName).find({ mode: "preview", ...REPORTED_PREVIEW }).sort({ createdAt: -1 }).limit(1).next()
-        : null;
-      let host = "";
-      try {
-        host = new URL(String(connectionDoc?.baseUrl || "")).hostname;
-      } catch {
-        host = "";
-      }
-      const clientIdMask = maskClientId(connectionDoc?.clientId);
-      const decision = evaluateLoopbackAuthorization({
-        confirmProduction: true,
-        allowLoopback: true,
-        loopback: true,
-        databaseName: target.database,
-        deployment: inspectDeployment(path.dirname(fileURLToPath(import.meta.url))),
-        merchant: {
-          hostMatches: host === "merchant.gini.iq",
-          clientMaskMatches: clientIdMask === "1423...2bee",
-        },
-        preview: preview ? { found: true, ...REPORTED_PREVIEW } : { found: false },
-      });
-      if (!decision.allowed) {
-        console.error(`Refusing loopback database: ${decision.reason}. No ownership documents were read.`);
-        process.exitCode = 2;
-        return;
-      }
+    const report = await readOwnershipReadiness(db, { confirmProduction: true, allowLoopback: true, loopback: true });
+    if (report.stopped === true) {
+      console.error("Refusing database. Production context is not verified. No product, owner, or index rows were reported.");
+      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      process.exitCode = 2;
+      return;
     }
-    const report = await readOwnershipReadiness(db);
     process.stdout.write(`${JSON.stringify({
       readOnly: true,
       connectionSource: envBefore ? "process environment" : "server .env file",
