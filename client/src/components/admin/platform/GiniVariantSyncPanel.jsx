@@ -74,7 +74,7 @@ export default function GiniVariantSyncPanel() {
           <div>
             <h3 className="font-semibold text-brown">Changed sync dry run</h3>
             <p className="mt-1 max-w-2xl text-sm text-brown/70">
-              Reads the six reconciled parents and compares them with BrownStore. It does not send creates, updates, or deletions.
+              Reads reconciled parents and any other verified single-owner variant parent, then prepares one PATCH per changed variant. Sending stays off.
             </p>
           </div>
           <button
@@ -107,6 +107,28 @@ export default function GiniVariantSyncPanel() {
             <p>
               Duplicate parents {dryRun.summary?.duplicateParent || 0} · Missing color or size {dryRun.summary?.missingColorOrSize || 0} · Missing ownership {dryRun.summary?.missingOwnership || 0} · Missing SKU approval {dryRun.summary?.missingSkuApproval || 0}
             </p>
+            {dryRun.blockerAudit ? (
+              <div>
+                <p className="font-semibold text-brown">Blocked products, one primary reason each ({dryRun.blockerAudit.blocked || 0})</p>
+                <p>
+                  Duplicate parent SKU {dryRun.blockerAudit.primary?.duplicate_parent_sku || 0}
+                  {" · "}Missing vendor ownership {dryRun.blockerAudit.primary?.missing_vendor_ownership || 0}
+                  {" · "}Missing approved variant SKUs {dryRun.blockerAudit.primary?.missing_approved_variant_skus || 0}
+                  {" · "}Unmapped colors {dryRun.blockerAudit.primary?.unmapped_colors || 0}
+                  {" · "}Missing Size attribute {dryRun.blockerAudit.primary?.missing_size_attribute || 0}
+                  {" · "}Other {dryRun.blockerAudit.primary?.other || 0}
+                </p>
+                <p>
+                  A product with more than one gate is counted under the first match: duplicate parent, another vendor owns it, unverified Size, unmapped color, missing SKU approval, then missing verified ownership.
+                </p>
+              </div>
+            ) : null}
+            {dryRun.generic ? (
+              <p>
+                Generic workflow: sending {dryRun.generic.sending}. Eligible products {dryRun.generic.eligibleCount || 0}. Prepared PATCH requests {dryRun.generic.preparedRequestCount || 0}. Unchanged variants skipped {dryRun.generic.skippedUnchangedVariants || 0}. Journals written: {dryRun.generic.journalsWritten ? "yes" : "no"}.
+                {" "}Next one-variant test: {dryRun.generic.nextTest?.ready ? `${dryRun.generic.nextTest.request?.parentSku} ${dryRun.generic.nextTest.request?.variantSku} (${dryRun.generic.nextTest.kind})` : "none until one verified variant differs"}.
+              </p>
+            ) : null}
             <p>{dryRun.futureBulk?.note}</p>
             {dryRun.pricePilot ? (
               <article className="rounded-xl bg-white p-3">

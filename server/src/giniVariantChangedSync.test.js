@@ -3,7 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 import { GINI_PUT_DOCUMENTED_FIELDS } from "./utils/giniProductUpdateContract.js";
 import { GINI_VARIANT_UPDATE_CAPABILITIES, buildSingleVariantStockPatch, ke20BlackQuantityPilotPatch } from "./utils/giniVariantUpdateContract.js";
-import { planVariantChange } from "./utils/giniVariantChangedPlan.js";
+import { auditBlockedProducts, buildGenericChangedPreview, planVariantChange, selectPricePilot } from "./utils/giniVariantChangedPlan.js";
 import { previewVariantChangedSync } from "./services/giniVariantChangedSync.js";
 import { canSendVariantChangedSync } from "../../client/src/components/admin/platform/giniVariantSyncDisplay.js";
 
@@ -365,4 +365,218 @@ test("the dry run only reads and keeps bulk variant writes off", async () => {
   assert.equal(routes.includes("variant-sync/changed-preview"), true);
   assert.equal(routes.includes("variant-sync/bulk"), false);
   assert.equal(routes.includes("variant-sync/changed-preview/send"), false);
+  assert.equal(result.generic.sending, "off");
+  assert.equal(result.generic.journalsWritten, false);
+  assert.equal(result.generic.liveSend, false);
+  assert.equal(result.generic.nextTest.ready, false);
+  assert.equal(result.blockerAudit.primaryTotal, result.summary.blocked);
+  assert.equal(source.includes("PATCH"), false);
+  assert.equal(source.includes("Commission"), true);
+});
+
+test("blocked products get one primary reason and the counts add up", () => {
+  const plans = [
+    { disposition: "BLOCKED", parentSku: "DUP-1", blockers: ["duplicate_parent_sku", "missing_variant_sku_approval", "missing_color_mapping"] },
+    { disposition: "BLOCKED", parentSku: "OWN-1", blockers: ["other_vendor_owns_parent", "missing_variant_sku_approval"] },
+    { disposition: "BLOCKED", parentSku: "SIZE-1", blockers: ["size_attribute_unverified", "missing_color_mapping", "missing_variant_sku_approval"] },
+    { disposition: "BLOCKED", parentSku: "COLOR-1", blockers: ["missing_color_mapping", "missing_variant_sku_approval", "ownership_unverified"] },
+    { disposition: "BLOCKED", parentSku: "SKU-1", blockers: ["missing_variant_sku_approval", "ownership_unverified", "remote_absence_unconfirmed"] },
+    { disposition: "BLOCKED", parentSku: "OWNER-1", blockers: ["ownership_unverified"] },
+    { disposition: "BLOCKED", parentSku: "OTHER-1", blockers: ["remote_absence_unconfirmed", "missing_mapping"] },
+    { disposition: "UNCHANGED", parentSku: "KE20", blockers: [] },
+  ];
+  const audit = auditBlockedProducts(plans);
+  assert.equal(audit.blocked, 7);
+  assert.equal(audit.primaryTotal, 7);
+  assert.equal(audit.primary.duplicate_parent_sku, 1);
+  assert.equal(audit.primary.missing_vendor_ownership, 2);
+  assert.equal(audit.primary.missing_size_attribute, 1);
+  assert.equal(audit.primary.unmapped_colors, 1);
+  assert.equal(audit.primary.missing_approved_variant_skus, 1);
+  assert.equal(audit.primary.other, 1);
+  assert.equal(audit.overlapping.missing_approved_variant_skus, 5);
+  assert.equal(audit.overlapping.unmapped_colors, 3);
+  assert.equal(audit.otherCodes.remote_absence_unconfirmed, 2);
+  assert.equal(audit.otherCodes.missing_mapping, 1);
+});
+
+test("a generic verified parent prepares one price PATCH and skips the unchanged color", () => {
+  const plan = planVariantChange(base({
+    parentSku: "FRESH-9",
+    productId: "fresh-9",
+    ownership: "required",
+    owner: { productId: "fresh-9", parentSku: "FRESH-9", status: "verified_remote", giniProductId: "700" },
+    identities: [
+      approved("FRESH-9-BLUE", "a", "b", "501"),
+      approved("FRESH-9-BLACK", "c", "d", "502"),
+    ],
+    combinations: [
+      { ...combo("FRESH-9-BLUE", "Blue", 4, 28000, "a", "b"), pricing: { giniPrice: 28000, basePrice: 26500, commission: { percentage: 5.5, scope: "filter" } } },
+      { ...combo("FRESH-9-BLACK", "Black", 4, 26500, "c", "d"), pricing: { giniPrice: 26500, basePrice: 26500, commission: { percentage: 5.5, scope: "filter" } } },
+    ],
+    remote: {
+      ...matchedRemote([
+        remoteRow("FRESH-9-BLUE", "Blue", 4, 26500, "501"),
+        remoteRow("FRESH-9-BLACK", "Black", 4, 26500, "502"),
+      ], 8),
+      sku: "FRESH-9",
+      id: "700",
+    },
+  }));
+  assert.equal(plan.disposition, "CHANGED");
+  const preview = buildGenericChangedPreview([plan], [
+    { parentSku: "KE20", variantId: "164306", status: "verified" },
+    { parentSku: "KE20", variantId: "164307", status: "verified" },
+    { parentSku: "EI-8888", variantId: "164312", status: "verified" },
+    { parentSku: "EI-8888", variantId: "164313", status: "verified" },
+  ]);
+  assert.equal(preview.sending, "off");
+  assert.equal(preview.journalsWritten, false);
+  assert.equal(preview.preparedRequestCount, 1);
+  assert.equal(preview.preparedRequests[0].rawBody, "{\"variant_id\":501,\"price\":28000}");
+  assert.equal(preview.preparedRequests[0].rawBody.includes("502"), false);
+  assert.equal(preview.preparedRequests[0].liveSend, false);
+  assert.equal(preview.preparedRequests[0].journalAction, "not_written");
+  assert.equal(preview.skippedUnchangedVariants, 1);
+  assert.equal(preview.nextTest.ready, true);
+  assert.equal(preview.nextTest.kind, "price");
+  assert.equal(preview.nextTest.request.variantSku, "FRESH-9-BLUE");
+  assert.equal(preview.nextTest.liveSend, false);
+  assert.equal(preview.preservedPilotJournals.every((row) => row.preserved === true && row.rewritten === false), true);
+  assert.equal(preview.deletionAllowed, false);
+  const unpriced = planVariantChange(base({
+    parentSku: "FRESH-9",
+    combinations: [
+      combo("FRESH-9-BLUE", "Blue", 4, 28000, "a", "b"),
+      combo("FRESH-9-BLACK", "Black", 4, 26500, "c", "d"),
+    ],
+    identities: [
+      approved("FRESH-9-BLUE", "a", "b", "501"),
+      approved("FRESH-9-BLACK", "c", "d", "502"),
+    ],
+    remote: {
+      ...matchedRemote([
+        remoteRow("FRESH-9-BLUE", "Blue", 4, 26500, "501"),
+        remoteRow("FRESH-9-BLACK", "Black", 4, 26500, "502"),
+      ], 8),
+      sku: "FRESH-9",
+      id: "700",
+    },
+  }));
+  assert.equal(buildGenericChangedPreview([unpriced]).preparedRequestCount, 0);
+  assert.equal(selectPricePilot([{
+    parentSku: "FRESH-9",
+    productId: "fresh-9",
+    disposition: "CHANGED",
+    blockers: [],
+    changes: [{ kind: "price", action: "documented_not_sent" }],
+    priceRows: unpriced.priceRows,
+  }]).ready, false);
+});
+
+test("stock zero, new colors, removed colors, and duplicate parents stay out of the generic queue", () => {
+  const zero = planVariantChange(base({
+    combinations: [
+      combo("KE20-BLUE", "Blue", 0, 27000, "a", "b"),
+      combo("KE20-BLACK", "Black", 4, 26500, "c", "d"),
+    ],
+  }));
+  const added = planVariantChange(base({
+    combinations: [
+      combo("KE20-BLUE", "Blue", 10, 27000, "a", "b"),
+      combo("KE20-BLACK", "Black", 4, 26500, "c", "d"),
+      combo("KE20-PURPLE", "Purple", 2, 26500, "e", "f"),
+    ],
+    identities: [
+      approved("KE20-BLUE", "a", "b", "11"),
+      approved("KE20-BLACK", "c", "d", "12"),
+      approved("KE20-PURPLE", "e", "f", "", "approved"),
+    ],
+  }));
+  const removed = planVariantChange(base({
+    identities: [
+      approved("KE20-BLUE", "a", "b", "11"),
+      approved("KE20-BLACK", "c", "d", "12"),
+      approved("KE20-PURPLE", "e", "f", "13"),
+    ],
+    remote: matchedRemote([
+      remoteRow("KE20-BLUE", "Blue", 10, 26500, "11"),
+      remoteRow("KE20-BLACK", "Black", 4, 26500, "12"),
+      remoteRow("KE20-PURPLE", "Purple", 2, 26500, "13"),
+    ], 16),
+  }));
+  const duplicate = planVariantChange(base({ parentSku: "SHARED-1", catalogBlockers: ["duplicate_parent_sku"] }));
+  const sized = planVariantChange(base({ multipleSizes: true }));
+  const preview = buildGenericChangedPreview([zero, added, removed, duplicate, sized]);
+  assert.equal(preview.eligibleCount, 0);
+  assert.equal(preview.preparedRequestCount, 0);
+  assert.equal(preview.nextTest.ready, false);
+  assert.equal(removed.changes.some((change) => change.action === "delete"), false);
+  assert.equal(removed.noDeletion, true);
+  assert.equal(sized.blockers.includes("size_attribute_unverified"), true);
+  const shared = buildGenericChangedPreview([
+    planVariantChange(base({
+      parentSku: "SHARED-2",
+      combinations: [
+        combo("SHARED-2-BLUE", "Blue", 4, 28000, "a", "b"),
+        combo("SHARED-2-BLACK", "Black", 4, 26500, "c", "d"),
+      ],
+      identities: [
+        approved("SHARED-2-BLUE", "a", "b", "801"),
+        approved("SHARED-2-BLACK", "c", "d", "802"),
+      ],
+      remote: {
+        ...matchedRemote([
+          remoteRow("SHARED-2-BLUE", "Blue", 4, 26500, "801"),
+          remoteRow("SHARED-2-BLACK", "Black", 4, 26500, "802"),
+        ], 8),
+        sku: "SHARED-2",
+      },
+    })),
+  ], [], { sharedParentKeys: new Set(["shared-2"]) });
+  assert.equal(shared.eligibleCount, 0);
+  assert.equal(shared.preparedRequestCount, 0);
+});
+
+test("only a verified single-owner parent is added to the fresh read list", async () => {
+  const { variantReadCandidates } = await import("./utils/giniVariantChangedPlan.js");
+  const ready = {
+    productId: "fresh-9",
+    parentSku: "FRESH-9",
+    multipleSizes: false,
+    blockers: [],
+    combinations: [
+      combo("FRESH-9-BLUE", "Blue", 4, 26500, "a", "b"),
+      combo("FRESH-9-BLACK", "Black", 4, 26500, "c", "d"),
+    ],
+  };
+  const duplicate = { ...ready, productId: "copy", parentSku: "FRESH-9", blockers: ["duplicate_parent_sku"] };
+  const identities = new Map([
+    ["fresh-9", [
+      approved("FRESH-9-BLUE", "a", "b", "501"),
+      approved("FRESH-9-BLACK", "c", "d", "502"),
+    ]],
+  ]);
+  const owners = [{ parentSku: "FRESH-9", productId: "fresh-9", status: "verified_remote", giniProductId: "700" }];
+  assert.deepEqual(variantReadCandidates({
+    products: [ready],
+    identitiesByProduct: identities,
+    owners,
+    colorLabels: LABELS,
+    colorAttributeId: "3696",
+  }), ["FRESH-9"]);
+  assert.deepEqual(variantReadCandidates({
+    products: [ready, duplicate],
+    identitiesByProduct: identities,
+    owners,
+    colorLabels: LABELS,
+    colorAttributeId: "3696",
+  }), []);
+  assert.deepEqual(variantReadCandidates({
+    products: [{ ...ready, parentSku: "KE20" }],
+    identitiesByProduct: identities,
+    owners,
+    colorLabels: LABELS,
+    colorAttributeId: "3696",
+  }), []);
 });

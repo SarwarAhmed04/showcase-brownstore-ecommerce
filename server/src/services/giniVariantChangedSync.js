@@ -12,6 +12,8 @@ import { applyCatalogVariantPrices } from "../utils/giniVariantPricing.js";
 import { GINI_VARIANT_UPDATE_CAPABILITIES, unsupportedVariantOperations } from "../utils/giniVariantUpdateContract.js";
 import {
   KNOWN_GINI_VARIANT_PARENTS,
+  auditBlockedProducts,
+  buildGenericChangedPreview,
   collectMissingColors,
   futureBulkPreview,
   interpretColorAttribute,
@@ -23,6 +25,7 @@ import {
   routeGiniOverview,
   selectPricePilot,
   summarizeVariantPlans,
+  variantReadCandidates,
 } from "../utils/giniVariantChangedPlan.js";
 
 function parentPath(sku) {
@@ -129,14 +132,6 @@ export async function previewVariantChangedSync(deps = {}) {
   const color = interpretColorAttribute(attributeResponse);
   const remoteBySku = { ...(deps.remoteBySku || {}) };
   const reads = [];
-  if (!deps.remoteBySku && deps.skipRemote !== true) {
-    for (const parent of KNOWN_GINI_VARIANT_PARENTS) {
-      const remote = await readParentAndVariants(perform, parent.parentSku);
-      remoteBySku[parent.parentSku] = remote;
-      reads.push({ method: "GET", parentSku: parent.parentSku, state: remote.state, status: remote.status || 0 });
-    }
-  }
-  if (!Array.isArray(commissionRules)) commissionRules = [];
   const operationByProduct = new Map((operations || []).map((row) => [String(row.productId), row.status || ""]));
   const identityByProduct = new Map();
   for (const row of identities || []) {
@@ -144,6 +139,36 @@ export async function previewVariantChangedSync(deps = {}) {
     if (!identityByProduct.has(key)) identityByProduct.set(key, []);
     identityByProduct.get(key).push(row);
   }
+  const parentCounts = new Map();
+  for (const product of catalog.products || []) {
+    const key = giniSkuKey(product.parentSku);
+    if (!key) continue;
+    parentCounts.set(key, (parentCounts.get(key) || 0) + 1);
+  }
+  const sharedParentKeys = new Set([...parentCounts].filter(([, count]) => count > 1).map(([key]) => key));
+  if (!deps.remoteBySku && deps.skipRemote !== true) {
+    const extra = variantReadCandidates({
+      products: catalog.products || [],
+      identitiesByProduct: identityByProduct,
+      owners,
+      colorLabels: color.labels,
+      colorAttributeId: color.id,
+    });
+    const seen = new Set();
+    const skus = [];
+    for (const sku of [...KNOWN_GINI_VARIANT_PARENTS.map((parent) => parent.parentSku), ...extra]) {
+      const key = giniSkuKey(sku);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      skus.push(sku);
+    }
+    for (const sku of skus) {
+      const remote = await readParentAndVariants(perform, sku);
+      remoteBySku[sku] = remote;
+      reads.push({ method: "GET", parentSku: sku, state: remote.state, status: remote.status || 0 });
+    }
+  }
+  if (!Array.isArray(commissionRules)) commissionRules = [];
   const changedByProduct = new Map();
   for (const row of changedOperations || []) {
     const key = String(row.productId || "");
@@ -226,6 +251,8 @@ export async function previewVariantChangedSync(deps = {}) {
     missingColors: missingColors.slice(0, 50),
     summary,
     blockerCounts,
+    blockerAudit: auditBlockedProducts(plans),
+    generic: buildGenericChangedPreview(plans, pricePatchJournals, { sharedParentKeys }),
     overview: routeGiniOverview({ variantSummary: summary, simpleJob }),
     futureBulk: futureBulkPreview(summary),
     pricePilot: selectPricePilot(pilots, changedOperations),

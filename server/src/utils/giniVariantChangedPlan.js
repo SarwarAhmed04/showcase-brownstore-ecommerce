@@ -544,6 +544,249 @@ function comparePresent({ rows, combinations, identities, colorPreview, remote, 
   }
 }
 
+const PRIMARY_BLOCKER_GATES = Object.freeze([
+  Object.freeze({ id: "duplicate_parent_sku", test: (codes) => codes.has("duplicate_parent_sku") }),
+  Object.freeze({ id: "missing_vendor_ownership", test: (codes) => codes.has("other_vendor_owns_parent") }),
+  Object.freeze({ id: "missing_size_attribute", test: (codes) => codes.has("size_attribute_unverified") }),
+  Object.freeze({ id: "unmapped_colors", test: (codes) => codes.has("missing_color_mapping") }),
+  Object.freeze({ id: "missing_approved_variant_skus", test: (codes) => codes.has("missing_variant_sku_approval") }),
+  Object.freeze({ id: "missing_vendor_ownership", test: (codes) => codes.has("ownership_unverified") }),
+]);
+
+const NAMED_BLOCKER_CODES = new Set([
+  "duplicate_parent_sku",
+  "other_vendor_owns_parent",
+  "ownership_unverified",
+  "missing_variant_sku_approval",
+  "missing_color_mapping",
+  "size_attribute_unverified",
+]);
+
+const STRUCTURAL_CHANGE_KINDS = new Set([
+  "new_color",
+  "removed_color",
+  "quantity_zero",
+  "category",
+  "subcategory",
+  "parent_quantity",
+]);
+
+function emptyBlockerBuckets() {
+  return {
+    duplicate_parent_sku: 0,
+    missing_vendor_ownership: 0,
+    missing_approved_variant_skus: 0,
+    unmapped_colors: 0,
+    missing_size_attribute: 0,
+    other: 0,
+  };
+}
+
+export function primaryBlockerCategory(blockers = []) {
+  const codes = new Set(blockers || []);
+  for (const gate of PRIMARY_BLOCKER_GATES) {
+    if (gate.test(codes)) return gate.id;
+  }
+  return "other";
+}
+
+export function auditBlockedProducts(plans = []) {
+  const blocked = (plans || []).filter((plan) => plan.disposition === "BLOCKED");
+  const primary = emptyBlockerBuckets();
+  const overlapping = emptyBlockerBuckets();
+  const otherCodes = {};
+  const samples = emptyBlockerBuckets();
+  for (const key of Object.keys(samples)) samples[key] = [];
+  for (const plan of blocked) {
+    const codes = new Set(plan.blockers || []);
+    const category = primaryBlockerCategory(plan.blockers);
+    primary[category] += 1;
+    if (samples[category].length < 8 && plan.parentSku) samples[category].push(plan.parentSku);
+    if (codes.has("duplicate_parent_sku")) overlapping.duplicate_parent_sku += 1;
+    if (codes.has("other_vendor_owns_parent") || codes.has("ownership_unverified")) overlapping.missing_vendor_ownership += 1;
+    if (codes.has("missing_variant_sku_approval")) overlapping.missing_approved_variant_skus += 1;
+    if (codes.has("missing_color_mapping")) overlapping.unmapped_colors += 1;
+    if (codes.has("size_attribute_unverified")) overlapping.missing_size_attribute += 1;
+    const extras = [...codes].filter((code) => !NAMED_BLOCKER_CODES.has(code));
+    if (extras.length) overlapping.other += 1;
+    for (const code of extras) otherCodes[code] = (otherCodes[code] || 0) + 1;
+  }
+  return {
+    blocked: blocked.length,
+    exclusive: true,
+    primary,
+    primaryTotal: Object.values(primary).reduce((sum, count) => sum + count, 0),
+    overlapping,
+    otherCodes,
+    samples,
+    precedence: [
+      "duplicate_parent_sku",
+      "other_vendor_owns_parent",
+      "size_attribute_unverified",
+      "missing_color_mapping",
+      "missing_variant_sku_approval",
+      "ownership_unverified",
+      "other",
+    ],
+  };
+}
+
+function sharedParentKeySet(products = []) {
+  const counts = new Map();
+  for (const product of products || []) {
+    const key = giniSkuKey(product?.parentSku);
+    if (!key) continue;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return new Set([...counts].filter(([, count]) => count > 1).map(([key]) => key));
+}
+
+export function variantReadCandidates({ products = [], identitiesByProduct = new Map(), owners = [], colorLabels = null, colorAttributeId = "" } = {}) {
+  if (!Array.isArray(colorLabels) || colorAttributeId !== "3696") return [];
+  const shared = sharedParentKeySet(products);
+  const skus = [];
+  for (const product of products || []) {
+    const parentSku = String(product?.parentSku || "");
+    const key = giniSkuKey(parentSku);
+    if (!key || isKnownVariantParent(parentSku) || shared.has(key)) continue;
+    if (product?.multipleSizes === true) continue;
+    const catalogBlockers = product?.blockers || [];
+    if (["duplicate_parent_sku", "other_vendor_owns_parent", "variant_sku_conflict", "not_multi_variant"].some((code) => catalogBlockers.includes(code))) continue;
+    const combinations = product?.combinations || [];
+    if (combinations.length < 2) continue;
+    const owner = (owners || []).find((row) => giniSkuKey(row.parentSku || row.skuKey) === key && String(row.productId || "") === String(product.productId || ""));
+    if (!owner || owner.status !== "verified_remote" || !String(owner.giniProductId || "")) continue;
+    const identities = identitiesByProduct.get(String(product.productId || "")) || [];
+    const colors = colorMappingPreview(combinations, colorLabels, colorAttributeId);
+    if (colors.some((row) => row.status !== "mapped")) continue;
+    const verified = combinations.every((combo) => {
+      const saved = identityFor(identities, combo);
+      return Boolean(saved)
+        && saved.status === "verified"
+        && String(saved.confirmedGiniVariantId || "")
+        && giniSkuKey(saved.approvedSku) === giniSkuKey(combo.proposedSku);
+    });
+    if (verified) skus.push(parentSku);
+  }
+  return skus;
+}
+
+function structuralChanges(plan) {
+  return (plan?.changes || []).filter((change) => STRUCTURAL_CHANGE_KINDS.has(change.kind)
+    || change.action === "blocked_unsupported"
+    || change.action === "manual_review"
+    || change.action === "quantity_zero_not_stated");
+}
+
+function requestFromRow(plan, row) {
+  const priceChanged = Number(row.oldPrice) !== Number(row.newPrice);
+  const stockChanged = Number(row.oldStock) !== Number(row.newStock);
+  return {
+    method: row.patch.method,
+    path: row.patch.path,
+    rawBody: row.patch.rawBody,
+    body: row.patch.body,
+    parentSku: plan.parentSku,
+    productId: plan.productId,
+    variantId: String(row.variantId || ""),
+    variantSku: row.sku || "",
+    priceChanged,
+    stockChanged,
+    oldPrice: row.oldPrice,
+    newPrice: row.newPrice,
+    oldStock: row.oldStock,
+    newStock: row.newStock,
+    liveSend: false,
+    sendsOtherVariants: false,
+    replacesVariantSet: false,
+    journalKey: `${giniSkuKey(plan.parentSku)}:${row.variantId}`,
+    journalAction: "not_written",
+  };
+}
+
+export function genericVariantRequests(plan, { sharedParent = false } = {}) {
+  const structural = structuralChanges(plan);
+  const skippedUnchanged = (plan?.priceRows || []).filter((row) => row.preserved === true).length;
+  const clean = (plan?.priceRows || []).filter((row) => {
+    if (!row?.changed || !row.patch || row.withheldReason) return false;
+    const priceChanged = Number(row.oldPrice) !== Number(row.newPrice);
+    const stockChanged = Number(row.oldStock) !== Number(row.newStock);
+    if (!priceChanged && !stockChanged) return false;
+    if (priceChanged && !row.commission) return false;
+    if (stockChanged && !(Number.isInteger(Number(row.newStock)) && Number(row.newStock) > 0)) return false;
+    return row.patch.liveSend === false && row.patch.replacesVariantSet === false && row.patch.sendsOtherVariants === false;
+  });
+  const eligible = sharedParent !== true
+    && plan?.disposition === "CHANGED"
+    && (plan?.blockers || []).length === 0
+    && structural.length === 0
+    && clean.length > 0
+    && plan?.canSend === false
+    && plan?.createAllowed === false;
+  return {
+    parentSku: plan?.parentSku || "",
+    productId: plan?.productId || "",
+    eligible,
+    sharedParent: sharedParent === true,
+    requests: eligible ? clean.map((row) => requestFromRow(plan, row)) : [],
+    structural: structural.map((change) => ({ kind: change.kind, sku: change.sku || "", action: change.action || "" })),
+    skippedUnchanged,
+  };
+}
+
+const PILOT_JOURNAL_VARIANTS = Object.freeze([
+  Object.freeze({ parentSku: "KE20", variantIds: Object.freeze(["164306", "164307"]) }),
+  Object.freeze({ parentSku: "EI-8888", variantIds: Object.freeze(["164312", "164313"]) }),
+]);
+
+export function preservedPilotJournals(journals = []) {
+  return PILOT_JOURNAL_VARIANTS.map((spec) => ({
+    parentSku: spec.parentSku,
+    variantIds: [...spec.variantIds],
+    preserved: spec.variantIds.every((variantId) => (journals || []).some((row) => String(row?.variantId || "") === variantId
+      && giniSkuKey(row?.parentSku) === giniSkuKey(spec.parentSku)
+      && row?.status === "verified")),
+    rewritten: false,
+  }));
+}
+
+export function selectNextVariantTest(rows = []) {
+  const singles = (rows || []).filter((row) => row.eligible && row.requests.length === 1).map((row) => row.requests[0]);
+  const chosen = singles.find((row) => row.priceChanged && !row.stockChanged)
+    || singles.find((row) => row.stockChanged && !row.priceChanged)
+    || singles.find((row) => row.priceChanged && row.stockChanged)
+    || null;
+  return {
+    ready: Boolean(chosen),
+    liveSend: false,
+    writesEnabled: false,
+    kind: !chosen ? "" : chosen.priceChanged && chosen.stockChanged ? "price_and_positive_stock" : chosen.priceChanged ? "price" : "positive_stock",
+    request: chosen,
+    reason: chosen ? "one_verified_variant_difference" : "no_eligible_single_variant",
+  };
+}
+
+export function buildGenericChangedPreview(plans = [], pricePatchJournals = [], { sharedParentKeys = new Set() } = {}) {
+  const rows = (plans || []).map((plan) => genericVariantRequests(plan, { sharedParent: sharedParentKeys.has(giniSkuKey(plan.parentSku)) && !isKnownVariantParent(plan.parentSku) }));
+  const preparedRequests = rows.flatMap((row) => row.requests);
+  return {
+    workflow: "gini_variant_changed_sync",
+    sending: "off",
+    writesEnabled: false,
+    liveSend: false,
+    bulkExecution: false,
+    journalsWritten: false,
+    createAllowed: false,
+    deletionAllowed: false,
+    preservedPilotJournals: preservedPilotJournals(pricePatchJournals),
+    eligibleCount: rows.filter((row) => row.eligible).length,
+    preparedRequestCount: preparedRequests.length,
+    skippedUnchangedVariants: rows.reduce((sum, row) => sum + row.skippedUnchanged, 0),
+    preparedRequests: preparedRequests.slice(0, 30),
+    nextTest: selectNextVariantTest(rows),
+  };
+}
+
 export function collectMissingColors(plans) {
   const missingSeen = new Map();
   for (const plan of plans || []) {
@@ -607,7 +850,7 @@ export function futureBulkPreview(summary) {
     blockedParents: summary?.blocked || 0,
     uncertainParents: summary?.uncertain || 0,
     knownParentsSkippedAsCreate: KNOWN_GINI_VARIANT_PARENTS.length,
-    note: "Bulk variant writes stay disabled. A changed variant can show one stock PATCH for its own price, positive quantity, or both, and that PATCH is not sent. Quantity 0, new colors, and full variant replacement stay blocked. A removed color stays for manual review. The six reconciled parents are not created again.",
+    note: "Bulk variant writes stay disabled. One saved-rule price or positive-stock difference can be prepared as its own PATCH, and that PATCH is not sent. Quantity 0, new colors, deleted colors, and unverified sizes stay blocked. A removed color stays for manual review. Duplicate vendor products are not combined, and an existing parent is not created again.",
   };
 }
 
@@ -631,6 +874,7 @@ export function pricePilotBlockReason(pilot) {
   const rows = pilot.priceRows || [];
   const changed = rows.filter((row) => row.changed);
   if (!changed.length || changed.some((row) => row.oldStock !== row.newStock || row.withheldReason || !priceOnlyPatch(row))) return "price_patch_not_ready";
+  if (changed.some((row) => !row.commission)) return "missing_commission_rule";
   if (rows.some((row) => row.patch && !row.changed)) return "unchanged_variant_in_patch";
   return "";
 }
