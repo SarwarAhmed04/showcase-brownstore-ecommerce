@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MongoClient } from "mongodb";
@@ -8,6 +9,14 @@ import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import test from "node:test";
 import { GiniVariantOwnershipOperation } from "./models/GiniVariantOwnershipOperation.js";
+import {
+  backupDirectoryAllowed,
+  dumpBrownstoreDatabase,
+  exactOwnershipIndexes,
+  OWNERSHIP_INDEX_MIGRATION_ONE_SHOT,
+  runOneShotOwnershipIndexMigration,
+  runProductionOwnershipIndexMigration,
+} from "./utils/giniOwnershipIndexMigrationRun.js";
 import { OWNERSHIP_SAVE_INDEXES_READY, OWNERSHIP_SAVE_PILOT, OWNERSHIP_SAVE_RELEASED } from "./utils/giniVariantOwnershipAudit.js";
 import {
   applyOwnershipIndexMigration,
@@ -288,4 +297,128 @@ test("the ownership index migration stays disabled and the mock migration is ide
   assert.equal(printed.result.code, "ownership_index_migration_disabled");
   assert.equal(printed.result.executed, false);
   assert.equal(mongoose.connection.readyState, 0);
+});
+
+test("the one-shot production migration refuses this desktop and preserves documents", async () => {
+  let connected = 0;
+  const desktop = await runProductionOwnershipIndexMigration({
+    argv: ["--execute", "--confirm-production", "--allow-verified-production-loopback", "--confirm-ownership-index-migration", "--backup-dir", "/var/backups/ownership"],
+    env: { OWNERSHIP_INDEX_MIGRATION_ONE_SHOT },
+    platform: "win32",
+    connect: async () => {
+      connected += 1;
+    },
+  });
+  assert.equal(desktop.code, "desktop_execution_refused");
+  assert.equal(desktop.connected, false);
+  assert.equal(desktop.releasedAfter, false);
+  assert.equal(desktop.gates.released, false);
+  assert.equal(desktop.gates.indexesReady, false);
+  assert.equal(desktop.gates.pilotParentSku, "");
+  assert.equal(desktop.gates.pilotProductId, "");
+  assert.equal(connected, 0);
+  const missingToken = await runProductionOwnershipIndexMigration({
+    argv: ["--execute", "--confirm-production", "--allow-verified-production-loopback", "--confirm-ownership-index-migration", "--backup-dir", "/var/backups/ownership"],
+    env: {},
+    platform: "linux",
+    connect: async () => {
+      connected += 1;
+    },
+  });
+  assert.equal(missingToken.code, "ownership_index_migration_disabled");
+  assert.equal(connected, 0);
+  assert.equal(backupDirectoryAllowed(path.join(os.tmpdir(), "ownership-index"), path.resolve(".")), true);
+  assert.equal(backupDirectoryAllowed(path.resolve("backups"), path.resolve(".")), false);
+  assert.equal(backupDirectoryAllowed("backups", path.resolve(".")), false);
+
+  const memory = await MongoMemoryServer.create();
+  const client = new MongoClient(memory.getUri());
+  await client.connect();
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "ownership-backup-"));
+  try {
+    const db = client.db("brownstore");
+    const parent = db.collection("ginivariantparentowners");
+    await parent.createIndex({ skuKey: 1 }, { unique: true, name: "skuKey_1" });
+    await parent.insertMany(["ke20", "efr-575d-1adf", "ei-8888", "71868", "69392", "75244"].map((skuKey) => ({ skuKey, status: "verified_remote" })));
+    await db.collection("products").insertOne({ itemCode: "38104" });
+    await db.collection("ginivariantidentities").insertOne({ sku: "keep" });
+    const readState = async () => ({ ...(await readSkuKeyIndexState(db)), identity: VERIFIED_IDENTITY });
+    const operations = () => db.collection(OWNERSHIP_OPERATION_COLLECTION);
+    let backups = 0;
+    const migration = {
+      oneShotRelease: true,
+      readState,
+      readCounts: async () => {
+        const counts = {};
+        const names = (await db.listCollections({}, { nameOnly: true }).toArray()).map((item) => item.name);
+        for (const name of names) {
+          if (name === OWNERSHIP_OPERATION_COLLECTION) continue;
+          counts[name] = await db.collection(name).countDocuments();
+        }
+        return counts;
+      },
+      backup: async () => {
+        backups += 1;
+        return { ok: true, directory: temp };
+      },
+      createCollection: (name) => db.createCollection(name),
+      createOperationKeyIndex: (keys, options) => operations().createIndex(keys, options),
+      createSkuKeyIndex: (keys, options) => operations().createIndex(keys, options),
+      listOperationIndexes: () => operations().listIndexes().toArray(),
+    };
+    const preview = await runOneShotOwnershipIndexMigration({ ...migration, dryRun: true, confirm: true });
+    assert.equal(preview.code, "ready_to_create");
+    assert.equal(preview.executed, false);
+    assert.equal(backups, 0);
+    assert.equal((await db.listCollections({ name: OWNERSHIP_OPERATION_COLLECTION }).toArray()).length, 0);
+    const failedBackup = await runOneShotOwnershipIndexMigration({
+      ...migration,
+      dryRun: false,
+      confirm: true,
+      backup: async () => ({ ok: false, code: "backup_failed" }),
+    });
+    assert.equal(failedBackup.code, "backup_failed");
+    assert.equal(failedBackup.executed, false);
+    assert.equal((await db.listCollections({ name: OWNERSHIP_OPERATION_COLLECTION }).toArray()).length, 0);
+    const created = await runOneShotOwnershipIndexMigration({ ...migration, dryRun: false, confirm: true });
+    assert.equal(created.code, "ownership_indexes_created");
+    assert.equal(created.releasedAfter, false);
+    assert.equal(created.authorizesOwnershipSave, false);
+    assert.equal(created.indexesReady, true);
+    assert.equal(created.countsUnchanged, true);
+    assert.equal(exactOwnershipIndexes(await operations().listIndexes().toArray()), true);
+    assert.equal(await operations().countDocuments(), 0);
+    assert.equal(await parent.countDocuments(), 6);
+    assert.equal(await db.collection("products").countDocuments(), 1);
+    assert.equal(backups, 1);
+    const repeated = await runOneShotOwnershipIndexMigration({ ...migration, dryRun: false, confirm: true });
+    assert.equal(repeated.code, "already_ready");
+    assert.equal(repeated.executed, false);
+    assert.equal(backups, 1);
+    const dumpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ownership-dump-"));
+    const dumped = await dumpBrownstoreDatabase({
+      uri: "mongodb://127.0.0.1:1/brownstore",
+      directory: dumpDir,
+      databaseName: "brownstore",
+      spawnImpl: async () => {
+        fs.mkdirSync(path.join(dumpDir, "brownstore"), { recursive: true });
+        fs.writeFileSync(path.join(dumpDir, "brownstore", "ginivariantparentowners.metadata.json"), "{}");
+        fs.writeFileSync(path.join(dumpDir, "brownstore", "ginivariantparentowners.bson"), "parent-owners");
+        return { code: 0 };
+      },
+    });
+    assert.equal(dumped.ok, true);
+    const incomplete = await dumpBrownstoreDatabase({
+      uri: "mongodb://127.0.0.1:1/brownstore",
+      directory: temp,
+      databaseName: "brownstore",
+      spawnImpl: async () => ({ code: 0 }),
+    });
+    assert.equal(incomplete.code, "backup_incomplete");
+    fs.rmSync(dumpDir, { recursive: true, force: true });
+  } finally {
+    await client.close();
+    await memory.stop();
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
 });
