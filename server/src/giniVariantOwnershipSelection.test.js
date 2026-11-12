@@ -2,19 +2,26 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import express from "express";
 import mongoose from "mongoose";
+import { MongoMemoryServer } from "mongodb-memory-server";
 import test from "node:test";
 import { GiniVariantIdentity } from "./models/GiniVariantIdentity.js";
 import { GiniVariantParentOwner } from "./models/GiniVariantParentOwner.js";
 import { giniConnectionRouter } from "./routes/giniConnection.js";
 import { approveParentOwner } from "./services/giniVariantSync.js";
 import { classifyVariantProduct } from "./utils/giniVariantCatalog.js";
+import { GiniVariantOwnershipOperation } from "./models/GiniVariantOwnershipOperation.js";
+import { resolveOwnershipImageUrl } from "./utils/ownershipImageUrl.js";
 import {
   attemptFutureOwnershipSave,
   auditDuplicateOwnership,
+  evaluateOwnershipSave,
+  OWNERSHIP_SAVE_RELEASED,
   pageOwnershipGroups,
   planOwnershipSelection,
+  protectedReconciledParentSkus,
 } from "./utils/giniVariantOwnershipAudit.js";
-import { listOwnershipGroups, prepareOwnershipSelection } from "./services/giniVariantOwnershipSelection.js";
+import { listOwnershipGroups, prepareOwnershipSelection, saveOwnershipSelection } from "./services/giniVariantOwnershipSelection.js";
+import { OWNERSHIP_IMAGE_FALLBACK, ownershipImageSrc } from "../../client/src/components/admin/platform/ownershipImage.js";
 
 const COLOR = { attributeId: "3696", name: "Color", values: ["Blue", "Black", "Green"] };
 
@@ -157,7 +164,7 @@ test("grouping keeps both vendor products and records their identity", () => {
   assert.equal(it.vendor, "IT Lobby");
   assert.equal(it.name, "F8 Cover");
   assert.equal(it.sourceItemId, "71868-it");
-  assert.deepEqual(it.imageUrls, ["/lobby-blue.webp", "/lobby-black.webp"]);
+  assert.deepEqual(it.imageUrls, ["/api/media/lobby-blue.webp", "/api/media/lobby-black.webp"]);
   assert.deepEqual(it.colors, ["Blue", "Black"]);
   assert.deepEqual(it.variantSkus, ["SHARE-9-BLUE", "SHARE-9-BLACK"]);
   assert.equal(it.stock[0].stock, 2);
@@ -291,9 +298,13 @@ test("selection preparation rechecks the database and does not save or send", as
   assert.equal(prepared.excluded[0].productId, "p2");
   assert.equal(prepared.excluded[0].disposition, "excluded_from_gini_ownership");
   assert.equal(prepared.excluded[0].deletedFromBrownStore, false);
-  assert.equal(prepared.futureSave.implemented, false);
+  assert.equal(prepared.futureSave.implemented, true);
+  assert.equal(prepared.futureSave.available, false);
+  assert.equal(prepared.futureSave.authorization.enabled, false);
   assert.equal(prepared.futureSave.authorization.enabledByDefault, false);
+  assert.equal(prepared.futureSave.authorization.released, false);
   assert.equal(prepared.save.code, "ownership_save_disabled");
+  assert.equal(prepared.save.authorizationEnabled, false);
   const outsider = await prepareOwnershipSelection({ parentSku: "SHARE-9", productId: "not-in-group", confirm: true }, deps);
   assert.equal(outsider.code, "candidate_not_in_group");
   assert.equal(outsider.saved, false);
@@ -306,7 +317,8 @@ test("selection preparation rechecks the database and does not save or send", as
   assert.equal(listed.total, 1);
   assert.equal(listed.groups[0].selectionOpen, false);
   assert.equal(listed.groups[0].verifiedOwner.productId, "p2");
-  assert.equal(listed.futureSave.routeExposed, false);
+  assert.equal(listed.futureSave.routeExposed, true);
+  assert.equal(listed.futureSave.available, false);
   const disabled = attemptFutureOwnershipSave({ confirm: true }, {
     GINI_VARIANT_OWNERSHIP_SAVE_ENABLED: "true",
     GINI_ALLOW_OWNERSHIP_SAVE: "true",
@@ -320,7 +332,8 @@ test("selection preparation rechecks the database and does not save or send", as
   assert.equal(service.includes(".save("), false);
   const routes = fs.readFileSync(new URL("./routes/giniConnection.js", import.meta.url), "utf8");
   assert.equal(routes.includes("/platforms/gini/variant-sync/ownership/preview"), true);
-  assert.equal(routes.includes("variant-sync/ownership/save"), false);
+  assert.equal(routes.includes("/platforms/gini/variant-sync/ownership/save"), true);
+  assert.equal(routes.includes("variant-sync/approve-owner"), true);
   const panel = fs.readFileSync(new URL("../../client/src/components/admin/platform/GiniOwnershipSelectionPanel.jsx", import.meta.url), "utf8");
   const syncPanel = fs.readFileSync(new URL("../../client/src/components/admin/platform/GiniVariantSyncPanel.jsx", import.meta.url), "utf8");
   assert.equal(panel.includes("Review selection"), true);
@@ -384,4 +397,341 @@ test("the legacy approve-owner route returns 410 and performs no MongoDB writes"
     for (const [model, name, original] of originals) model[name] = original;
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+function openShareGroup() {
+  const products = [
+    member("SHARE-9", { productId: "p1", vendor: "IT Lobby", vendorId: "it-lobby", sourceItemId: "item-a", stock: 2 }),
+    member("SHARE-9", { productId: "p2", vendor: "Jawal Flex", vendorId: "jawal", sourceItemId: "item-b", stock: 40 }),
+  ];
+  return auditDuplicateOwnership({ products, plans: products }).groups[0];
+}
+
+function explicitSave(overrides = {}) {
+  return {
+    group: openShareGroup(),
+    parentSku: "SHARE-9",
+    productId: "p1",
+    vendorId: "it-lobby",
+    sourceItemId: "item-a",
+    confirm: true,
+    confirmOwnershipSave: true,
+    ...overrides,
+  };
+}
+
+test("ownership cards resolve working, relative, and missing images", () => {
+  const resolved = classifyVariantProduct({
+    doc: {
+      _id: "img-1",
+      itemCode: "IMG-1",
+      name: { en: "Image case" },
+      variants: [{
+        _id: "v",
+        color: { en: "Blue" },
+        images: [
+          { url: "https://cdn.ibsher.com/uploads/products/working.webp", isMain: true },
+          { url: "uploads/products/relative.webp" },
+          { url: "/media/uploads/products/from-media.webp" },
+          { url: "/api/media/uploads/products/ready.webp" },
+          { url: "https://images.example.com/photo.webp" },
+          { url: "https://user:pass@cdn.ibsher.com/uploads/products/secret.webp" },
+          { url: "javascript:alert(1)" },
+        ],
+        sizes: [{ _id: "s", size: "large", stockQuantity: 1 }],
+      }],
+    },
+    giniPrice: 1000,
+    mappingOk: true,
+    colorContract: COLOR,
+  });
+  assert.deepEqual(resolved.imageUrls, [
+    "/api/media/uploads/products/working.webp",
+    "/api/media/uploads/products/relative.webp",
+    "/api/media/uploads/products/from-media.webp",
+    "/api/media/uploads/products/ready.webp",
+    "https://images.example.com/photo.webp",
+  ]);
+  const missing = classifyVariantProduct({
+    doc: {
+      _id: "img-0",
+      itemCode: "IMG-0",
+      variants: [{ _id: "v0", color: { en: "Blue" }, images: [], sizes: [{ _id: "s0", size: "large", stockQuantity: 1 }] }],
+    },
+  });
+  assert.deepEqual(missing.imageUrls, []);
+  assert.equal(resolveOwnershipImageUrl(""), "");
+  const products = [
+    member("IMG-2", { productId: "a", vendor: "IT Lobby", vendorId: "it", sourceItemId: "sa", stock: 1, imageUrls: ["uploads/products/card.webp"] }),
+    member("IMG-2", { productId: "b", vendor: "Jawal Flex", vendorId: "jf", sourceItemId: "sb", stock: 1, imageUrls: [] }),
+  ];
+  const audit = auditDuplicateOwnership({ products, plans: products });
+  assert.deepEqual(audit.groups[0].candidates[0].imageUrls, ["/api/media/uploads/products/card.webp"]);
+  assert.deepEqual(audit.groups[0].candidates[1].imageUrls, []);
+  assert.equal(ownershipImageSrc(""), OWNERSHIP_IMAGE_FALLBACK);
+  assert.equal(ownershipImageSrc("/api/media/uploads/products/card.webp", { failed: true }), OWNERSHIP_IMAGE_FALLBACK);
+  assert.equal(ownershipImageSrc("/api/media/uploads/products/card.webp"), "/api/media/uploads/products/card.webp");
+  const panel = fs.readFileSync(new URL("../../client/src/components/admin/platform/GiniOwnershipSelectionPanel.jsx", import.meta.url), "utf8");
+  assert.equal(panel.includes("ownershipImageSrc"), true);
+  assert.equal(panel.includes("imgUrl"), true);
+  assert.equal(panel.includes("onError"), true);
+  assert.equal(panel.includes("OWNERSHIP_IMAGE_FALLBACK"), true);
+  assert.equal(OWNERSHIP_IMAGE_FALLBACK, "/logo.png");
+});
+
+test("a reviewed selection stays read-only and does not prefer a vendor", async () => {
+  const group = openShareGroup();
+  const deps = { loadCatalog: async () => ({ products: [] }), loadOwners: async () => [] };
+  const products = [
+    member("SHARE-9", { productId: "p1", vendor: "IT Lobby", vendorId: "it-lobby", name: "F8 Cover", sourceItemId: "item-a", stock: 2 }),
+    member("SHARE-9", { productId: "p2", vendor: "Jawal Flex", vendorId: "jawal", name: "F8 Cover Flex", sourceItemId: "item-b", stock: 40 }),
+  ];
+  deps.loadCatalog = async () => ({ products });
+  const prepared = await prepareOwnershipSelection({ parentSku: "SHARE-9", productId: "p2", confirm: true }, deps);
+  assert.equal(prepared.code, "selection_prepared_not_saved");
+  assert.equal(prepared.saved, false);
+  assert.equal(prepared.sentToGini, 0);
+  assert.equal(prepared.databaseRechecked, true);
+  assert.equal(prepared.proposal.productId, "p2");
+  const manual = evaluateOwnershipSave(explicitSave({
+    group,
+    productId: "p2",
+    vendorId: "jawal",
+    sourceItemId: "item-b",
+  }));
+  assert.equal(manual.ok, true);
+  assert.equal(manual.code, "ownership_save_ready");
+  assert.equal(manual.saved, false);
+  assert.equal(manual.record.productId, "p2");
+  assert.equal(manual.automaticVendorSelection, false);
+  assert.equal(manual.publishesToGini, false);
+  const omitted = evaluateOwnershipSave(explicitSave({ group, productId: "" }));
+  assert.equal(omitted.code, "identity_mismatch");
+  assert.equal(omitted.automaticVendorSelection, false);
+  assert.equal(omitted.record, undefined);
+  const unconfirmed = evaluateOwnershipSave(explicitSave({ group, confirmOwnershipSave: false }));
+  assert.equal(unconfirmed.code, "approval_required");
+  assert.equal(unconfirmed.saved, false);
+});
+
+test("ownership save rejects duplicate owners, concurrent selections, stale identities, and verified parents", () => {
+  const group = openShareGroup();
+  const duplicate = evaluateOwnershipSave(explicitSave({
+    group,
+    owners: [
+      { parentSku: "SHARE-9", productId: "p1", vendorId: "it-lobby", status: "approved" },
+      { parentSku: "SHARE-9", productId: "p2", vendorId: "jawal", status: "approved" },
+    ],
+  }));
+  assert.equal(duplicate.code, "conflicting_owner");
+  assert.equal(duplicate.saved, false);
+  assert.deepEqual(duplicate.writes, []);
+  assert.equal(duplicate.overwritesOwner, false);
+  const otherApproved = evaluateOwnershipSave(explicitSave({
+    group,
+    owners: [{ parentSku: "SHARE-9", productId: "p2", vendorId: "jawal", status: "approved" }],
+  }));
+  assert.equal(otherApproved.code, "owner_already_approved");
+  assert.equal(otherApproved.saved, false);
+  const concurrent = evaluateOwnershipSave(explicitSave({
+    group,
+    operations: [{
+      skuKey: "share-9",
+      operationKey: "ownership-save:share-9:p2",
+      productId: "p2",
+      vendorId: "jawal",
+      sourceItemId: "item-b",
+      status: "recorded",
+    }],
+  }));
+  assert.equal(concurrent.code, "concurrent_selection");
+  assert.equal(concurrent.saved, false);
+  const changedGroup = evaluateOwnershipSave(explicitSave({ group, seenProductIds: ["p1"] }));
+  assert.equal(changedGroup.code, "concurrent_selection");
+  assert.equal(evaluateOwnershipSave(explicitSave({ group, vendorId: "it-lobby-old" })).code, "stale_identity");
+  assert.equal(evaluateOwnershipSave(explicitSave({ group, sourceItemId: "item-old" })).code, "stale_identity");
+  assert.equal(evaluateOwnershipSave(explicitSave({ group, parentSku: "SHARE-8" })).code, "stale_selection");
+  const verifiedProducts = [
+    member("KEPT-1", { productId: "owner", vendor: "IT Lobby", vendorId: "it", sourceItemId: "io", stock: 1 }),
+    member("KEPT-1", { productId: "copy", vendor: "Jawal Flex", vendorId: "jf", sourceItemId: "ic", stock: 2 }),
+  ];
+  const verifiedAudit = auditDuplicateOwnership({
+    products: verifiedProducts,
+    plans: verifiedProducts,
+    owners: [{ parentSku: "KEPT-1", productId: "owner", vendorId: "it", status: "verified_remote", giniProductId: "618623" }],
+  });
+  const verified = evaluateOwnershipSave({
+    group: verifiedAudit.groups[0],
+    parentSku: "KEPT-1",
+    productId: "copy",
+    vendorId: "jf",
+    sourceItemId: "ic",
+    confirm: true,
+    confirmOwnershipSave: true,
+    owners: [{ parentSku: "KEPT-1", productId: "owner", vendorId: "it", status: "verified_remote" }],
+  });
+  assert.equal(verified.code, "owner_already_verified");
+  assert.equal(verified.overwritesOwner, false);
+  assert.equal(verified.modifiesKe20, false);
+  assert.equal(verified.modifiesEi8888, false);
+  const parents = protectedReconciledParentSkus();
+  assert.equal(parents.length, 6);
+  assert.equal(parents.includes("KE20"), true);
+  assert.equal(parents.includes("EI-8888"), true);
+  for (const parentSku of parents) {
+    const rows = [
+      member(parentSku, { productId: "a", vendor: "IT Lobby", vendorId: "it", sourceItemId: "sa", stock: 1 }),
+      member(parentSku, { productId: "b", vendor: "Jawal Flex", vendorId: "jf", sourceItemId: "sb", stock: 1 }),
+    ];
+    const parentGroup = auditDuplicateOwnership({ products: rows, plans: rows }).groups[0];
+    const blocked = evaluateOwnershipSave({
+      group: parentGroup,
+      parentSku,
+      productId: "a",
+      vendorId: "it",
+      sourceItemId: "sa",
+      confirm: true,
+      confirmOwnershipSave: true,
+    });
+    assert.equal(blocked.code, "reconciled_parent_protected");
+    assert.equal(blocked.saved, false);
+    assert.deepEqual(blocked.writes, []);
+  }
+  const idempotent = evaluateOwnershipSave(explicitSave({
+    group,
+    owners: [{ parentSku: "SHARE-9", skuKey: "share-9", productId: "p1", vendorId: "it-lobby", status: "approved" }],
+    operations: [{
+      operationKey: "ownership-save:share-9:p1",
+      skuKey: "share-9",
+      productId: "p1",
+      vendorId: "it-lobby",
+      sourceItemId: "item-a",
+      status: "recorded",
+    }],
+  }));
+  assert.equal(idempotent.ok, true);
+  assert.equal(idempotent.idempotent, true);
+  assert.equal(idempotent.saved, false);
+  assert.deepEqual(idempotent.writes, []);
+});
+
+test("ownership save authorization stays disabled and writes nothing", async () => {
+  assert.equal(OWNERSHIP_SAVE_RELEASED, false);
+  const touched = [];
+  const models = [GiniVariantParentOwner, GiniVariantOwnershipOperation, GiniVariantIdentity];
+  const originals = [];
+  for (const model of models) {
+    for (const name of ["create", "updateOne", "insertOne", "findOneAndUpdate", "bulkWrite", "save"]) {
+      originals.push([model, name, model[name]]);
+      model[name] = (...args) => {
+        touched.push(`${model.modelName}.${name}`);
+        return originals.find((row) => row[0] === model && row[1] === name)[2].apply(model, args);
+      };
+    }
+  }
+  const app = express();
+  app.use(express.json());
+  app.use(giniConnectionRouter);
+  const server = await new Promise((resolve) => {
+    const running = app.listen(0, "127.0.0.1", () => resolve(running));
+  });
+  try {
+    const enabledEnv = {
+      GINI_VARIANT_OWNERSHIP_SAVE_ENABLED: "true",
+      GINI_ALLOW_OWNERSHIP_SAVE: "true",
+    };
+    const direct = await saveOwnershipSelection({
+      parentSku: "SHARE-9",
+      productId: "p1",
+      vendorId: "it-lobby",
+      sourceItemId: "item-a",
+      confirm: true,
+      confirmOwnershipSave: true,
+      administratorId: "admin-1",
+    }, {
+      env: enabledEnv,
+      loadCatalog: async () => {
+        touched.push("catalog");
+        return { products: [] };
+      },
+      loadOwners: async () => {
+        touched.push("owners");
+        return [];
+      },
+      ownerModel: { create() { touched.push("owner.create"); } },
+      operationModel: { create() { touched.push("operation.create"); } },
+    });
+    assert.equal(direct.code, "ownership_save_disabled");
+    assert.equal(direct.authorizationEnabled, false);
+    assert.equal(direct.saved, false);
+    assert.equal(direct.sentToGini, 0);
+    assert.equal(direct.publishesToGini, false);
+    assert.deepEqual(direct.writes, []);
+    const port = server.address().port;
+    const response = await fetch(`http://127.0.0.1:${port}/platforms/gini/variant-sync/ownership/save`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        parentSku: "SHARE-9",
+        productId: "p1",
+        vendorId: "it-lobby",
+        sourceItemId: "item-a",
+        confirm: true,
+        confirmOwnershipSave: true,
+      }),
+    });
+    assert.equal(response.status, 409);
+    const body = await response.json();
+    assert.equal(body.code, "ownership_save_disabled");
+    assert.equal(body.saved, false);
+    assert.equal(body.sentToGini, 0);
+    assert.deepEqual(body.writes, []);
+    assert.deepEqual(touched, []);
+    assert.equal(mongoose.connection.readyState, 0);
+    const service = fs.readFileSync(new URL("./services/giniVariantOwnershipSelection.js", import.meta.url), "utf8");
+    const saveFn = service.slice(service.indexOf("export async function saveOwnershipSelection"));
+    const commit = service.slice(service.indexOf("async function commitOwnershipSave"), service.indexOf("export async function saveOwnershipSelection"));
+    assert.ok(saveFn.indexOf("OWNERSHIP_SAVE_RELEASED") < saveFn.indexOf("commitOwnershipSave"));
+    assert.ok(commit.indexOf("await currentAudit") !== -1);
+    assert.ok(commit.indexOf("await currentAudit") < commit.indexOf("insertOnce"));
+    assert.equal(commit.includes("updateOne"), false);
+    assert.equal(commit.includes("GiniVariantIdentity"), false);
+    assert.equal(commit.includes("performGiniRequest"), false);
+    assert.equal(commit.includes("fetch("), false);
+    assert.equal(service.includes("performGiniRequest"), false);
+    assert.equal(service.includes("createIndex("), false);
+    assert.equal(service.includes("syncIndexes("), false);
+    assert.equal(service.includes("createCollection("), false);
+    assert.equal(GiniVariantOwnershipOperation.schema.options.autoIndex, false);
+    assert.equal(GiniVariantOwnershipOperation.schema.options.autoCreate, false);
+  } finally {
+    for (const [model, name, original] of originals) model[name] = original;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("production startup does not create the ownership operation collection", async () => {
+  assert.equal(fs.readFileSync(new URL("./index.js", import.meta.url), "utf8").includes("autoIndex"), false);
+  assert.equal(GiniVariantOwnershipOperation.schema.options.autoIndex, false);
+  assert.equal(GiniVariantOwnershipOperation.schema.options.autoCreate, false);
+  const memory = await MongoMemoryServer.create();
+  const conn = mongoose.createConnection();
+  const Operation = conn.model("GiniVariantOwnershipOperation", GiniVariantOwnershipOperation.schema.clone());
+  const Probe = conn.model(
+    "OwnershipStartupProbe",
+    new mongoose.Schema({ marker: { type: String, index: true } }, { autoIndex: true, autoCreate: true })
+  );
+  try {
+    await conn.openUri(memory.getUri("ownership-startup"), { autoIndex: true, autoCreate: true });
+    await Promise.all([Operation.init(), Probe.init()]);
+    const names = (await conn.db.listCollections().toArray()).map((item) => item.name);
+    assert.equal(names.includes(Operation.collection.collectionName), false);
+    assert.equal(names.includes(Probe.collection.collectionName), true);
+    assert.equal(names.includes("ginivariantparentowners"), false);
+    assert.equal(names.includes("ginivariantidentities"), false);
+  } finally {
+    await conn.close();
+    await memory.stop();
+  }
+  assert.equal(mongoose.connection.readyState, 0);
 });

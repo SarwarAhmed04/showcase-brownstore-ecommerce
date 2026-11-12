@@ -1,3 +1,4 @@
+import { resolveOwnershipImageUrls } from "./ownershipImageUrl.js";
 import { giniSkuKey, normalizeGiniItemCode } from "./giniSyncOnePlan.js";
 
 export function giniVariantSyncWritesEnabled(env = process.env) {
@@ -75,18 +76,15 @@ export function variationCombinations(doc) {
 }
 
 function collectImageUrls(doc) {
-  const urls = [];
-  const seen = new Set();
+  const raw = [];
   for (const variant of doc?.variants || []) {
-    for (const image of variant?.images || []) {
-      const url = String(image?.url || "").trim();
-      if (!url || seen.has(url)) continue;
-      seen.add(url);
-      urls.push(url);
-      if (urls.length >= 8) return urls;
-    }
+    const images = Array.isArray(variant?.images) ? variant.images : [];
+    const main = images.find((image) => image?.isMain && image?.url);
+    const ordered = main ? [main, ...images.filter((image) => image !== main)] : images;
+    for (const image of ordered) raw.push(image?.url);
   }
-  return urls;
+  if (doc?.image) raw.push(doc.image);
+  return resolveOwnershipImageUrls(raw);
 }
 
 function contractHas(contract, value) {

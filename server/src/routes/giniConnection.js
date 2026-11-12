@@ -32,7 +32,7 @@ import { loadVariantTestImageBytes, mongoVariantTestOperation, previewGiniVarian
 import { approveParentOwner, approveVariantSkus, variantCatalogPage } from "../services/giniVariantSync.js";
 import { previewGiniVariantPilot, runGiniVariantPilotStage } from "../services/giniVariantPilot.js";
 import { previewVariantChangedSync } from "../services/giniVariantChangedSync.js";
-import { listOwnershipGroups, prepareOwnershipSelection } from "../services/giniVariantOwnershipSelection.js";
+import { listOwnershipGroups, prepareOwnershipSelection, saveOwnershipSelection } from "../services/giniVariantOwnershipSelection.js";
 import { approveVariantPricePilot } from "../services/giniVariantPricePilot.js";
 import { previewEi8888PricePatch, previewKe20PricePatch, refreshEi8888CommissionSnapshot, runAuthorizedEi8888PricePatch, runAuthorizedKe20PricePatch } from "../services/giniVariantPricePatch.js";
 import { previewKe20StockPatch, runAuthorizedKe20StockPatch } from "../services/giniVariantStockPatch.js";
@@ -425,6 +425,26 @@ giniConnectionRouter.post("/platforms/gini/variant-sync/ownership/preview", asyn
     }), ""));
   } catch (err) {
     fail(res, err, "Failed to prepare the ownership selection");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-sync/ownership/save", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await saveOwnershipSelection({
+      parentSku: body.parentSku,
+      productId: body.productId,
+      vendorId: body.vendorId,
+      sourceItemId: body.sourceItemId,
+      confirm: body.confirm === true,
+      confirmOwnershipSave: body.confirmOwnershipSave === true,
+      seenProductIds: Array.isArray(body.seenProductIds) ? body.seenProductIds : null,
+      administratorId: String(req.user?._id || ""),
+    });
+    const status = result.saved === true && result.ok === true ? 200 : 409;
+    res.status(status).json(assertNoSecretLeak(result, ""));
+  } catch (err) {
+    fail(res, err, "Failed to save the ownership selection");
   }
 });
 

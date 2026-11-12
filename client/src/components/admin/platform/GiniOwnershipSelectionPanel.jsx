@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../../api";
+import { imgUrl } from "../../../lib/img";
+import { OWNERSHIP_IMAGE_FALLBACK, ownershipImageSrc } from "./ownershipImage";
 
 const PREVIEW_TEXT = {
   approval_required: "Choose one product, then review that exact choice.",
@@ -12,6 +14,20 @@ const PREVIEW_TEXT = {
   already_owner: "This product is already the recorded owner.",
   selection_prepared_not_saved: "Selection prepared. Nothing was saved or sent.",
 };
+
+function OwnershipImage({ url }) {
+  const [failed, setFailed] = useState(false);
+  const resolved = ownershipImageSrc(url, { failed });
+  const src = resolved === OWNERSHIP_IMAGE_FALLBACK ? OWNERSHIP_IMAGE_FALLBACK : (imgUrl(resolved) || OWNERSHIP_IMAGE_FALLBACK);
+  return (
+    <img
+      src={src}
+      alt=""
+      className="h-16 w-16 rounded-lg bg-cream object-cover ring-1 ring-brown/10"
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 function nextGateLabel(gate) {
   return {
@@ -135,8 +151,8 @@ export default function GiniOwnershipSelectionPanel() {
                         />
                       </div>
                       <div className="mt-2 flex gap-2">
-                        {(candidate.imageUrls || []).slice(0, 3).map((url) => (
-                          <img key={url} src={url} alt="" className="h-16 w-16 rounded-lg object-cover ring-1 ring-brown/10" />
+                        {((candidate.imageUrls || []).slice(0, 3).length ? candidate.imageUrls.slice(0, 3) : [""]).map((url) => (
+                          <OwnershipImage key={url || "fallback"} url={url} />
                         ))}
                         {(candidate.imageUrls || []).length === 0 ? <p className="text-xs text-brown/50">No product image</p> : null}
                       </div>
