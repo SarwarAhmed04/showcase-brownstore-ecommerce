@@ -311,6 +311,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  giniEi8888PricePatchPreview: () => request("/api/admin/platforms/gini/variant-sync/ei8888-price-patch"),
+  giniEi8888PricePatch: (body) =>
+    request("/api/admin/platforms/gini/variant-sync/ei8888-price-patch", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   giniVariantStockPatchPreview: () => request("/api/admin/platforms/gini/variant-sync/stock-patch"),
   giniVariantStockPatch: (body) =>
     request("/api/admin/platforms/gini/variant-sync/stock-patch", {

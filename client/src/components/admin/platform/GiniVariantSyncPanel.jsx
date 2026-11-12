@@ -3,6 +3,7 @@ import { api } from "../../../api";
 import { canSendGiniVariantSync, canSendVariantChangedSync, variantSyncStatusLabel } from "./giniVariantSyncDisplay";
 import GiniVariantPilotPanel from "./GiniVariantPilotPanel";
 import GiniKe20PricePatchPanel from "./GiniKe20PricePatchPanel";
+import GiniEi8888PricePatchPanel from "./GiniEi8888PricePatchPanel";
 import GiniVariantStockPatchPanel from "./GiniVariantStockPatchPanel";
 
 const FILTERS = [
@@ -206,6 +207,7 @@ export default function GiniVariantSyncPanel() {
         ) : null}
       </div>
       <GiniKe20PricePatchPanel />
+      <GiniEi8888PricePatchPanel />
       <GiniVariantStockPatchPanel />
       <GiniVariantPilotPanel />
       {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}

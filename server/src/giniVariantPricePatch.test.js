@@ -2,13 +2,19 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { after, describe, it } from "node:test";
 import { performGiniJsonRequest, setGiniFetch } from "./services/giniConnection.js";
-import { previewKe20PricePatch, runKe20PricePatch } from "./services/giniVariantPricePatch.js";
+import { previewEi8888PricePatch, previewKe20PricePatch, resolvePricePilotCommissionSnapshot, runEi8888PricePatch, runKe20PricePatch } from "./services/giniVariantPricePatch.js";
 import { applyCommissionRate } from "./utils/commission.js";
 import { signGiniRequest } from "./utils/giniSigner.js";
 import {
+  EI8888_BLUE_PRICE_PATCH_RAW_BODY,
+  EI8888_PRICE_PATCH_PATH,
+  EI8888_PRICE_PILOT,
+  EI8888_PURPLE_PRICE_PATCH_RAW_BODY,
   KE20_BLACK_PRICE_PATCH_RAW_BODY,
   KE20_BLUE_PRICE_PATCH_RAW_BODY,
   KE20_PRICE_PATCH_PATH,
+  assessEi8888CommissionSnapshot,
+  ei8888PricePatchWritesEnabled,
   ke20PricePatchWritesEnabled,
 } from "./utils/giniVariantPricePatchPlan.js";
 
@@ -595,5 +601,422 @@ describe("KE20 sequential price PATCH", () => {
     assert.equal(panel.includes("readyForConfirmation === true"), true);
     assert.equal(KE20_BLUE_PRICE_PATCH_RAW_BODY, "{\"variant_id\":164306,\"price\":28000}");
     assert.equal(KE20_BLACK_PRICE_PATCH_RAW_BODY, "{\"variant_id\":164307,\"price\":28000}");
+  });
+});
+
+const EI_OPEN = { GINI_EI8888_PRICE_PATCH_ENABLED: "true", GINI_ALLOW_LIVE_EI8888_PRICE_PATCH: "true" };
+const EI_LOCAL = "local-ei8888-owner";
+const EI_PRODUCTION = "production-ei8888-owner";
+const EI_COMMISSION = { percentage: 5.5, basePrice: 119750, giniPrice: 126500, scope: "filter" };
+
+function eiParent({ price = 119750, quantity = 20, visible = false, id = 618651 } = {}) {
+  return { status: 200, json: { data: { id, sku: "EI-8888", quantity, price, is_visible: visible } } };
+}
+
+function eiVariants({
+  bluePrice = 119750,
+  purplePrice = 119750,
+  blueQty = 10,
+  purpleQty = 10,
+  blueId = 164312,
+  purpleId = 164313,
+} = {}) {
+  return {
+    status: 200,
+    json: {
+      data: [
+        { id: blueId, sku: "EI-8888-BLUE", quantity: blueQty, price: bluePrice },
+        { id: purpleId, sku: "EI-8888-PURPLE", quantity: purpleQty, price: purplePrice },
+      ],
+    },
+  };
+}
+
+function eiApproved(variantId, rawBody, productId) {
+  return {
+    parentSku: "EI-8888",
+    productId,
+    variantId: String(variantId),
+    status: "approved",
+    baselinePrice: 119750,
+    baselineQuantity: 10,
+    proposedPrice: 126500,
+    rawBody,
+  };
+}
+
+function eiIdentity(sku, variantId, productId, sourceVariantId, sourceSizeId) {
+  return {
+    productId,
+    parentSku: "EI-8888",
+    parentSkuKey: "ei-8888",
+    approvedSku: sku,
+    approvedSkuKey: String(sku).toLowerCase(),
+    confirmedGiniVariantId: String(variantId),
+    sourceVariantId,
+    sourceSizeId,
+    status: "verified",
+  };
+}
+
+function eiRecords(productId = EI_LOCAL, overrides = {}) {
+  return {
+    owner: { status: "verified_remote", giniProductId: "618651", parentSku: "EI-8888", skuKey: "ei-8888", productId, ...overrides.owner },
+    identities: overrides.identities || [
+      eiIdentity("EI-8888-BLUE", "164312", productId, "blue-source", "blue-size"),
+      eiIdentity("EI-8888-PURPLE", "164313", productId, "purple-source", "purple-size"),
+    ],
+    approvals: overrides.approvals || [
+      eiApproved(164312, EI8888_BLUE_PRICE_PATCH_RAW_BODY, productId),
+      eiApproved(164313, EI8888_PURPLE_PRICE_PATCH_RAW_BODY, productId),
+    ],
+    commissionSnapshot: overrides.commissionSnapshot === undefined ? EI_COMMISSION : overrides.commissionSnapshot,
+  };
+}
+
+function eiJournal(seed = {}) {
+  const docs = new Map(Object.entries(seed));
+  let chain = Promise.resolve();
+  function exclusive(fn) {
+    const run = chain.then(fn, fn);
+    chain = run.then(() => {}, () => {});
+    return run;
+  }
+  return {
+    docs,
+    async read(key) {
+      return docs.get(key) || null;
+    },
+    claim(key, fields) {
+      return exclusive(async () => {
+        const current = docs.get(key);
+        if (current && BLOCKING.includes(current.status)) return { claimed: false, doc: current };
+        const doc = { ...(current || {}), ...fields, operationKey: key, parentSku: "EI-8888", status: "in_progress", lastCode: "in_progress" };
+        docs.set(key, doc);
+        return { claimed: true, doc };
+      });
+    },
+    save(key, patch) {
+      return exclusive(async () => {
+        const doc = { ...(docs.get(key) || {}), ...patch, operationKey: key };
+        docs.set(key, doc);
+        return doc;
+      });
+    },
+  };
+}
+
+describe("EI-8888 sequential price PATCH", () => {
+  it("keeps both write gates off and prices 119750 at 5.5 percent as 126500", () => {
+    assert.equal(applyCommissionRate(119750, 5.5), 126500);
+    assert.equal(ei8888PricePatchWritesEnabled({}), false);
+    assert.equal(ei8888PricePatchWritesEnabled(process.env), false);
+    assert.equal(ei8888PricePatchWritesEnabled({ GINI_EI8888_PRICE_PATCH_ENABLED: "true" }), false);
+    assert.equal(ei8888PricePatchWritesEnabled({ GINI_ALLOW_LIVE_EI8888_PRICE_PATCH: "true" }), false);
+    const envText = fs.readFileSync(new URL("../.env", import.meta.url), "utf8");
+    assert.equal(/GINI_EI8888_PRICE_PATCH_ENABLED\s*=\s*true/.test(envText), false);
+    assert.equal(/GINI_ALLOW_LIVE_EI8888_PRICE_PATCH\s*=\s*true/.test(envText), false);
+  });
+
+  it("prepares the blue PATCH and does not send while the gates are off", async () => {
+    const jsonCalls = [];
+    const gets = remoteGets([eiParent(), eiVariants()]);
+    const result = await runEi8888PricePatch({
+      stage: "blue",
+      confirm: true,
+      env: {},
+      host: "merchant.gini.iq",
+      performGet: gets.perform,
+      performJson: async (request) => { jsonCalls.push(request); return { status: 200 }; },
+      operation: eiJournal(),
+      ...eiRecords(),
+    });
+    assert.equal(result.code, "ei8888_price_patch_disabled");
+    assert.equal(result.sent, false);
+    assert.equal(result.canSend, false);
+    assert.equal(result.retry, false);
+    assert.equal(jsonCalls.length, 0);
+    assert.equal(gets.calls.length, 0);
+    assert.equal(result.request.rawBody, EI8888_BLUE_PRICE_PATCH_RAW_BODY);
+    assert.equal(result.request.path, EI8888_PRICE_PATCH_PATH);
+  });
+
+  it("verifies blue at 126500 and leaves purple at 119750 with the parent still hidden", async () => {
+    const jsonCalls = [];
+    const gets = remoteGets([
+      eiParent(),
+      eiVariants(),
+      eiParent({ price: 119750 }),
+      eiVariants({ bluePrice: 126500, purplePrice: 119750 }),
+    ]);
+    const operation = eiJournal();
+    const result = await runEi8888PricePatch({
+      stage: "blue",
+      confirm: true,
+      env: EI_OPEN,
+      host: "merchant.gini.iq",
+      performGet: gets.perform,
+      performJson: async (request) => { jsonCalls.push(request); return { status: 200 }; },
+      operation,
+      ...eiRecords(),
+    });
+    assert.equal(result.verified, true);
+    assert.equal(result.nextStage, "purple");
+    assert.equal(jsonCalls.length, 1);
+    assert.equal(jsonCalls[0].method, "PATCH");
+    assert.equal(jsonCalls[0].rawBody, "{\"variant_id\":164312,\"price\":126500}");
+    assert.equal(jsonCalls[0].rawBody.includes("164313"), false);
+    assert.equal(jsonCalls[0].rawBody.includes("quantity"), false);
+    assert.equal(operation.docs.get("ei-8888-price-164312").status, "verified");
+    assert.equal(operation.docs.get("ei-8888-price-164313"), undefined);
+    assert.equal(gets.calls.every((call) => call.method === "GET"), true);
+  });
+
+  it("sends purple only after blue is independently verified", async () => {
+    const jsonCalls = [];
+    const blocked = await runEi8888PricePatch({
+      stage: "purple",
+      confirm: true,
+      env: EI_OPEN,
+      host: "merchant.gini.iq",
+      performGet: remoteGets([eiParent(), eiVariants()]).perform,
+      performJson: async (request) => { jsonCalls.push(request); return { status: 200 }; },
+      operation: eiJournal(),
+      ...eiRecords(),
+    });
+    assert.equal(blocked.code, "stage_not_ready");
+    assert.equal(jsonCalls.length, 0);
+    const staleRemote = await runEi8888PricePatch({
+      stage: "purple",
+      confirm: true,
+      env: EI_OPEN,
+      host: "merchant.gini.iq",
+      performGet: remoteGets([eiParent(), eiVariants()]).perform,
+      performJson: async (request) => { jsonCalls.push(request); return { status: 200 }; },
+      operation: eiJournal({
+        "ei-8888-price-164312": { status: "verified", rawBody: EI8888_BLUE_PRICE_PATCH_RAW_BODY, stage: "blue" },
+      }),
+      ...eiRecords(),
+    });
+    assert.equal(staleRemote.code, "baseline_blocked");
+    assert.equal(staleRemote.blockers.includes("blue_mismatch"), true);
+    assert.equal(jsonCalls.length, 0);
+    const operation = eiJournal({
+      "ei-8888-price-164312": { status: "verified", rawBody: EI8888_BLUE_PRICE_PATCH_RAW_BODY, stage: "blue" },
+    });
+    const result = await runEi8888PricePatch({
+      stage: "purple",
+      confirm: true,
+      env: EI_OPEN,
+      host: "merchant.gini.iq",
+      performGet: remoteGets([
+        eiParent({ price: 119750 }),
+        eiVariants({ bluePrice: 126500, purplePrice: 119750 }),
+        eiParent({ price: 126500 }),
+        eiVariants({ bluePrice: 126500, purplePrice: 126500 }),
+      ]).perform,
+      performJson: async (request) => { jsonCalls.push(request); return { status: 200 }; },
+      operation,
+      ...eiRecords(),
+    });
+    assert.equal(result.verified, true);
+    assert.equal(result.nextStage, "");
+    assert.equal(jsonCalls.length, 1);
+    assert.equal(jsonCalls[0].rawBody, "{\"variant_id\":164313,\"price\":126500}");
+    assert.equal(jsonCalls[0].rawBody.includes("164312"), false);
+    assert.equal(operation.docs.get("ei-8888-price-164312").status, "verified");
+    assert.equal(operation.docs.get("ei-8888-price-164313").status, "verified");
+  });
+
+  it("blocks a baseline conflict and an approval from the other product id", async () => {
+    const jsonCalls = [];
+    const baseline = await runEi8888PricePatch({
+      stage: "blue",
+      confirm: true,
+      env: EI_OPEN,
+      host: "merchant.gini.iq",
+      performGet: remoteGets([eiParent({ visible: true, quantity: 19 }), eiVariants({ blueQty: 9 })]).perform,
+      performJson: async (request) => { jsonCalls.push(request); return { status: 200 }; },
+      operation: eiJournal(),
+      ...eiRecords(),
+    });
+    assert.equal(baseline.code, "baseline_blocked");
+    assert.equal(baseline.blockers.includes("parent_not_hidden"), true);
+    assert.equal(baseline.blockers.includes("parent_quantity_mismatch"), true);
+    assert.equal(baseline.blockers.includes("blue_mismatch"), true);
+    assert.equal(jsonCalls.length, 0);
+    const mismatched = await runEi8888PricePatch({
+      stage: "blue",
+      confirm: true,
+      env: EI_OPEN,
+      host: "merchant.gini.iq",
+      performJson: async (request) => { jsonCalls.push(request); return { status: 200 }; },
+      operation: eiJournal(),
+      ...eiRecords(EI_PRODUCTION, {
+        approvals: [
+          eiApproved(164312, EI8888_BLUE_PRICE_PATCH_RAW_BODY, EI_LOCAL),
+          eiApproved(164313, EI8888_PURPLE_PRICE_PATCH_RAW_BODY, EI_LOCAL),
+        ],
+      }),
+    });
+    assert.equal(mismatched.code, "approval_blocked");
+    assert.equal(mismatched.blockers.includes("blue_approval_missing"), true);
+    assert.equal(mismatched.blockers.includes("purple_approval_missing"), true);
+    assert.equal(jsonCalls.length, 0);
+  });
+
+  it("accepts either the local or production owner id and rejects the other identity", async () => {
+    const remote = {
+      parent: { state: "present", id: "618651", sku: "EI-8888", quantity: 20, price: 119750, visibility: "hidden" },
+      variants: [
+        { normalized: true, id: "164312", sku: "EI-8888-BLUE", price: 119750, quantity: 10 },
+        { normalized: true, id: "164313", sku: "EI-8888-PURPLE", price: 119750, quantity: 10 },
+      ],
+    };
+    for (const productId of [EI_LOCAL, EI_PRODUCTION]) {
+      const preview = await previewEi8888PricePatch({
+        env: {},
+        host: "merchant.gini.iq",
+        remote,
+        operation: eiJournal(),
+        skipConnection: true,
+        ...eiRecords(productId),
+      });
+      assert.equal(preview.ownership.ok, true);
+      assert.equal(preview.ownership.productId, productId);
+      assert.equal(preview.ownership.blue.sourceVariantId, "blue-source");
+      assert.equal(preview.ownership.purple.confirmedGiniVariantId, "164313");
+      assert.equal(preview.approval.ok, true);
+      assert.equal(preview.commission.ok, true);
+      assert.equal(preview.writesEnabled, false);
+      assert.equal(preview.readyForConfirmation, false);
+      assert.equal(preview.sent, false);
+    }
+    const wrong = await runEi8888PricePatch({
+      stage: "blue",
+      confirm: true,
+      env: EI_OPEN,
+      host: "merchant.gini.iq",
+      performJson: async () => ({ status: 200 }),
+      operation: eiJournal(),
+      ...eiRecords(EI_PRODUCTION, {
+        identities: [
+          eiIdentity("EI-8888-BLUE", "164312", EI_LOCAL, "blue-source", "blue-size"),
+          eiIdentity("EI-8888-PURPLE", "164313", EI_LOCAL, "purple-source", "purple-size"),
+        ],
+      }),
+    });
+    assert.equal(wrong.blockers.includes("blue_identity_mismatch"), true);
+    assert.equal(wrong.blockers.includes("purple_identity_mismatch"), true);
+  });
+
+  it("records an uncertain write and does not retry it", async () => {
+    const jsonCalls = [];
+    const operation = eiJournal();
+    const shared = {
+      stage: "blue",
+      confirm: true,
+      env: EI_OPEN,
+      host: "merchant.gini.iq",
+      performGet: async (request) => (String(request.path).endsWith("/variants") ? eiVariants() : eiParent()),
+      performJson: async () => {
+        jsonCalls.push("patch");
+        const err = new Error("timed out");
+        err.code = "update_timeout";
+        err.status = 504;
+        throw err;
+      },
+      operation,
+      ...eiRecords(),
+    };
+    const timedOut = await runEi8888PricePatch(shared);
+    assert.equal(timedOut.code, "patch_uncertain");
+    assert.equal(operation.docs.get("ei-8888-price-164312").status, "uncertain");
+    const again = await runEi8888PricePatch(shared);
+    assert.equal(again.code, "patch_not_retried");
+    assert.equal(jsonCalls.length, 1);
+    const restarted = await runEi8888PricePatch({
+      ...shared,
+      operation: eiJournal({ "ei-8888-price-164312": { status: "in_progress", stage: "blue", rawBody: EI8888_BLUE_PRICE_PATCH_RAW_BODY } }),
+    });
+    assert.equal(restarted.code, "restart_no_retry");
+    assert.equal(jsonCalls.length, 1);
+  });
+
+  it("blocks a commission snapshot that is not the saved 5.5 percent rule", async () => {
+    const jsonCalls = [];
+    const wrongRate = await runEi8888PricePatch({
+      stage: "blue",
+      confirm: true,
+      env: EI_OPEN,
+      host: "merchant.gini.iq",
+      performJson: async () => { jsonCalls.push("patch"); return { status: 200 }; },
+      operation: eiJournal(),
+      ...eiRecords(EI_PRODUCTION, { commissionSnapshot: { percentage: 7, basePrice: 119750, giniPrice: 128250, scope: "filter" } }),
+    });
+    assert.equal(wrongRate.code, "commission_blocked");
+    assert.equal(wrongRate.blockers.includes("commission_rate_mismatch"), true);
+    assert.equal(jsonCalls.length, 0);
+    const product = {
+      _id: EI_PRODUCTION,
+      price: 119750,
+      createdBy: { _id: "vendor-sokany" },
+      brand: { _id: "brand-1" },
+      category: { _id: "category-1" },
+      subCategory: { _id: "sub-1" },
+      collectionName: { _id: "col-1" },
+      variants: [
+        { _id: "blue-source", color: "Blue", sizes: [{ _id: "blue-size", size: "One", stockQuantity: 10, price: 119750 }] },
+        { _id: "purple-source", color: "Purple", sizes: [{ _id: "purple-size", size: "One", stockQuantity: 10, price: 119750 }] },
+      ],
+    };
+    const rules = [{
+      scope: "vendor",
+      percentage: 5.5,
+      isActive: true,
+      targetId: "vendor-sokany",
+      targetName: { en: "Sokany" },
+    }];
+    const snapshot = await resolvePricePilotCommissionSnapshot({
+      pilot: EI8888_PRICE_PILOT,
+      stageOrder: ["blue", "purple"],
+      productId: EI_PRODUCTION,
+      identities: eiRecords(EI_PRODUCTION).identities,
+      product,
+      rules,
+    });
+    assert.equal(snapshot.percentage, 5.5);
+    assert.equal(snapshot.basePrice, 119750);
+    assert.equal(snapshot.giniPrice, 126500);
+    const drifted = await resolvePricePilotCommissionSnapshot({
+      pilot: EI8888_PRICE_PILOT,
+      stageOrder: ["blue", "purple"],
+      productId: EI_LOCAL,
+      identities: eiRecords(EI_LOCAL).identities,
+      product: { ...product, _id: EI_LOCAL },
+      rules: [{ ...rules[0], percentage: 7 }],
+    });
+    assert.equal(assessEi8888CommissionSnapshot(drifted).ok, false);
+  });
+
+  it("keeps the EI-8888 sender on the shared signed PATCH client and off other marketplaces", () => {
+    const route = fs.readFileSync(new URL("./routes/giniConnection.js", import.meta.url), "utf8");
+    const service = fs.readFileSync(new URL("./services/giniVariantPricePatch.js", import.meta.url), "utf8");
+    const plan = fs.readFileSync(new URL("./utils/giniVariantPricePatchPlan.js", import.meta.url), "utf8");
+    const panel = fs.readFileSync(new URL("../../client/src/components/admin/platform/GiniEi8888PricePatchPanel.jsx", import.meta.url), "utf8");
+    assert.equal(route.includes("variant-sync/ei8888-price-patch"), true);
+    assert.equal(route.includes("variant-sync/price-pilot/send"), false);
+    assert.equal(plan.includes("6adc7945b3764a909f6931b1"), false);
+    assert.equal(plan.includes("6aae4770023c0be610d48876"), false);
+    assert.equal(plan.includes("GINI_EI8888_PRICE_PATCH_ENABLED"), true);
+    assert.equal(plan.includes("GINI_ALLOW_LIVE_EI8888_PRICE_PATCH"), true);
+    assert.equal(service.includes("performGiniJsonRequest"), true);
+    assert.equal(service.includes("miswag"), false);
+    assert.equal(service.includes("elryan"), false);
+    assert.equal(service.includes("ibsher"), false);
+    assert.equal(panel.includes("readyForConfirmation === true"), true);
+    assert.equal(panel.includes("GINI_EI8888_PRICE_PATCH_ENABLED=true"), false);
+    assert.equal(EI8888_BLUE_PRICE_PATCH_RAW_BODY, "{\"variant_id\":164312,\"price\":126500}");
+    assert.equal(EI8888_PURPLE_PRICE_PATCH_RAW_BODY, "{\"variant_id\":164313,\"price\":126500}");
   });
 });

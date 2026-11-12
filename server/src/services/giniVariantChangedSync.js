@@ -102,7 +102,7 @@ export async function previewVariantChangedSync(deps = {}) {
       deps.changedOperations !== undefined ? Promise.resolve(deps.changedOperations) : GiniVariantChangedOperation.find({}).lean(),
       deps.pricePatchJournals !== undefined
         ? Promise.resolve(deps.pricePatchJournals)
-        : GiniVariantPricePatch.find({ parentSku: "KE20" }).select("parentSku variantId variantSku stage status rawBody").lean(),
+        : GiniVariantPricePatch.find({ parentSku: { $in: ["KE20", "EI-8888"] } }).select("parentSku variantId variantSku stage status rawBody").lean(),
     ]);
     if (commissionRules == null) {
       commissionRules = await Commission.find({ partner: "gini", isActive: { $ne: false } }).lean();

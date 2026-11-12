@@ -271,12 +271,16 @@ export function planVariantChange({
     else comparePresent({ rows, combinations, identities, colorPreview, remote, categoryId, subcategoryId, blockers, changes, manualReview, differences, imageNotes, priceRows });
   }
   applyVariantOperationGuards({ variantOperations, priceRows, blockers, pricePatchJournals });
-  const settledKe20 = ["164306", "164307"].every((variantId) => settledKe20PriceOperation(
-    (variantOperations || []).find((op) => String(op?.variantId || "") === variantId),
-    priceRows.find((row) => String(row.variantId) === variantId),
-    pricePatchJournals
-  ));
-  if (settledKe20) reviewNotes.push("KE20's verified price PATCH journals match the fresh remote prices. The original 26500 approval baseline was kept.");
+  const settledPricePatch = (variantIds, note) => {
+    const settled = variantIds.every((variantId) => settledVerifiedPriceOperation(
+      (variantOperations || []).find((op) => String(op?.variantId || "") === variantId),
+      priceRows.find((row) => String(row.variantId) === variantId),
+      pricePatchJournals
+    ));
+    if (settled) reviewNotes.push(note);
+  };
+  settledPricePatch(["164306", "164307"], "KE20's verified price PATCH journals match the fresh remote prices. The original 26500 approval baseline was kept.");
+  settledPricePatch(["164312", "164313"], "EI-8888's verified price PATCH journals match the fresh remote prices. The original 119750 approval baseline was kept.");
   const unique = [...new Set(blockers)];
   let disposition = "UNCHANGED";
   if (unique.some((code) => UNCERTAIN_BLOCKS.has(code))) disposition = "UNCERTAIN";
@@ -333,29 +337,46 @@ function publishPatch(patch) {
   };
 }
 
-const KE20_SETTLED_VARIANTS = Object.freeze({
-  "164306": "{\"variant_id\":164306,\"price\":28000}",
-  "164307": "{\"variant_id\":164307,\"price\":28000}",
+const SETTLED_PRICE_PATCHES = Object.freeze({
+  ke20: Object.freeze({
+    baselinePrice: 26500,
+    targetPrice: 28000,
+    quantity: 10,
+    bodies: Object.freeze({
+      "164306": "{\"variant_id\":164306,\"price\":28000}",
+      "164307": "{\"variant_id\":164307,\"price\":28000}",
+    }),
+  }),
+  "ei-8888": Object.freeze({
+    baselinePrice: 119750,
+    targetPrice: 126500,
+    quantity: 10,
+    bodies: Object.freeze({
+      "164312": "{\"variant_id\":164312,\"price\":126500}",
+      "164313": "{\"variant_id\":164313,\"price\":126500}",
+    }),
+  }),
 });
 
-function settledKe20PriceOperation(op, row, journals) {
+function settledVerifiedPriceOperation(op, row, journals) {
+  const contract = SETTLED_PRICE_PATCHES[giniSkuKey(op?.parentSku)];
   const variantId = String(op?.variantId || "");
-  const rawBody = KE20_SETTLED_VARIANTS[variantId];
-  if (!rawBody || giniSkuKey(op?.parentSku) !== "ke20" || op?.status !== "approved" || !row) return false;
-  const journal = (journals || []).find((item) => String(item?.variantId || "") === variantId && giniSkuKey(item?.parentSku) === "ke20");
+  const rawBody = contract?.bodies[variantId];
+  if (!rawBody || op?.status !== "approved" || !row) return false;
+  const journal = (journals || []).find((item) => String(item?.variantId || "") === variantId && giniSkuKey(item?.parentSku) === giniSkuKey(op?.parentSku));
   return Boolean(journal)
     && journal.status === "verified"
     && String(journal.rawBody || "") === rawBody
     && String(op.rawBody || "") === rawBody
-    && Number(op.baselinePrice) === 26500
-    && Number(op.baselineQuantity) === 10
-    && Number(op.proposedPrice) === 28000
+    && Number(op.baselinePrice) === contract.baselinePrice
+    && Number(op.baselineQuantity) === contract.quantity
+    && Number(op.proposedPrice) === contract.targetPrice
     && row.changed !== true
     && !row.patch
-    && Number(row.oldPrice) === 28000
-    && Number(row.newPrice) === 28000
-    && Number(row.oldStock) === 10
-    && Number(row.newStock) === 10;
+    && Number(row.oldPrice) === contract.targetPrice
+    && Number(row.newPrice) === contract.targetPrice
+    && Number(row.oldStock) === contract.quantity
+    && Number(row.newStock) === contract.quantity;
 }
 
 function applyVariantOperationGuards({ variantOperations, priceRows, blockers, pricePatchJournals }) {
@@ -366,7 +387,7 @@ function applyVariantOperationGuards({ variantOperations, priceRows, blockers, p
     if (status === "conflict") blockers.push("variant_baseline_conflict");
     const row = (priceRows || []).find((item) => String(item.variantId) === String(op?.variantId || ""));
     if (!row || !["approved", "pending_approval", "verified"].includes(status)) continue;
-    if (settledKe20PriceOperation(op, row, pricePatchJournals)) continue;
+    if (settledVerifiedPriceOperation(op, row, pricePatchJournals)) continue;
     const same = Number(op.baselinePrice) === Number(row.oldPrice)
       && Number(op.baselineQuantity) === Number(row.oldStock)
       && String(op.rawBody || "") === String(row.patch?.rawBody || "");

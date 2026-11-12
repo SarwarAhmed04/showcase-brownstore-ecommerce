@@ -6,7 +6,7 @@ const giniVariantPricePatchSchema = new mongoose.Schema(
     parentSku: { type: String, required: true },
     variantId: { type: String, required: true },
     variantSku: { type: String, default: "" },
-    stage: { type: String, enum: ["blue", "black"], required: true },
+    stage: { type: String, enum: ["blue", "black", "purple"], required: true },
     status: {
       type: String,
       required: true,
