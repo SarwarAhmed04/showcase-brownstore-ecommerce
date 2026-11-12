@@ -209,8 +209,28 @@ export function planOwnershipSelection({ group = null, productId = "", confirm =
 }
 
 export const OWNERSHIP_SAVE_RELEASED = false;
+export const OWNERSHIP_SAVE_INDEXES_READY = false;
+export const OWNERSHIP_SAVE_PILOT = Object.freeze({ parentSku: "", productId: "" });
 
 const OWNERSHIP_SAVE_GATES = Object.freeze(["GINI_VARIANT_OWNERSHIP_SAVE_ENABLED", "GINI_ALLOW_OWNERSHIP_SAVE"]);
+
+export function ownershipPilotAuthorization(pilot = OWNERSHIP_SAVE_PILOT) {
+  const parentSku = String(pilot?.parentSku || "").trim();
+  const productId = String(pilot?.productId || "").trim();
+  return {
+    authorized: Boolean(parentSku && productId),
+    parentSku,
+    productId,
+    globalSave: false,
+    maxGroups: parentSku && productId ? 1 : 0,
+  };
+}
+
+export function ownershipPilotAllows(parentSku, productId, pilot = OWNERSHIP_SAVE_PILOT) {
+  const gate = ownershipPilotAuthorization(pilot);
+  if (!gate.authorized) return false;
+  return giniSkuKey(parentSku) === giniSkuKey(gate.parentSku) && String(productId || "").trim() === gate.productId;
+}
 
 export function ownershipSaveAuthorization(env = process.env) {
   const explicitGate = env?.GINI_VARIANT_OWNERSHIP_SAVE_ENABLED === "true";
@@ -249,11 +269,13 @@ export function designFutureOwnershipSave() {
       releaseLock: "OWNERSHIP_SAVE_RELEASED",
     },
     uniquenessChecks: [
-      "Re-read the SKU group, owner rows, and ownership operations immediately before a save.",
-      "Accept one manually selected product id, and require that exact vendor id and source item id.",
-      "GiniVariantParentOwner.skuKey stays unique. A duplicate key is an idempotent retry only when the product id matches.",
+      "Re-read both vendor products, their source item ids, and every owner and operation row in one snapshot.",
+      "Accept only the one SKU and BrownStore product id named by OWNERSHIP_SAVE_PILOT.",
+      "Require the fresh fingerprint to match the reviewed decision.",
+      "GiniVariantParentOwner.skuKey stays unique. A duplicate key is an idempotent retry only when the product id matches an approved row.",
+      "GiniVariantOwnershipOperation.operationKey and skuKey are both unique. A different product for that SKU is an index conflict.",
       "Refuse a different existing owner, more than one owner row, a verified owner, or any of the six reconciled parents.",
-      "Record one GiniVariantOwnershipOperation whose operationKey is unique for that SKU and product.",
+      "Insert status approved only. Remote verification is a separate later read.",
     ],
     operationAudit: {
       wouldRecord: ["parentSku", "skuKey", "selectedProductId", "selectedVendorId", "sourceItemId", "excludedProductIds", "administratorId", "confirmedAt", "previousOwnerProductId"],
@@ -307,6 +329,8 @@ export function evaluateOwnershipSave({
   seenProductIds = null,
   owners = [],
   operations = [],
+  expectedFingerprint = "",
+  requireFingerprint = false,
 } = {}) {
   if (confirm !== true || confirmOwnershipSave !== true) return closedSave("approval_required");
   const requestedSku = String(parentSku || "").trim();
@@ -331,6 +355,7 @@ export function evaluateOwnershipSave({
   if (group.verifiedOwner || verified?.status === "verified_remote") {
     return closedSave("owner_already_verified", { verifiedOwner: group.verifiedOwner || { productId: verified.productId } });
   }
+  if (group.candidates.length < 2) return closedSave("competing_product_missing");
   const matches = group.candidates.filter((row) => sameText(row.productId, requestedProductId));
   if (matches.length !== 1) return closedSave(matches.length === 0 ? "candidate_not_in_group" : "candidate_not_unique");
   const candidate = matches[0];
@@ -377,6 +402,8 @@ export function evaluateOwnershipSave({
     previousOwnerProductId: approved ? String(approved.productId) : "",
     status: "recorded",
   };
+  const fingerprint = ownershipDecisionFingerprint({ group, owners, operations });
+  if (requireFingerprint === true && fingerprint !== String(expectedFingerprint || "")) return closedSave("stale_selection");
   const sameApprovedOwner = approved && sameText(approved.productId, requestedProductId) && sameText(approved.vendorId, requestedVendorId);
   const sameOperation = liveOperations.some((row) => sameText(row.operationKey, operationKey) && sameText(row.productId, requestedProductId) && sameText(row.vendorId, requestedVendorId) && sameText(row.sourceItemId, requestedSourceItemId));
   if (sameApprovedOwner && sameOperation) {
@@ -384,15 +411,217 @@ export function evaluateOwnershipSave({
       ...closedSave("ownership_already_recorded"),
       ok: true,
       idempotent: true,
+      fingerprint,
       record,
       operation,
+      documents: ownershipInsertDocuments({ record, operation }),
     };
   }
   return {
     ...closedSave("ownership_save_ready"),
     ok: true,
+    fingerprint,
     record,
     operation,
+    documents: ownershipInsertDocuments({ record, operation }),
+  };
+}
+
+export function ownershipDecisionFingerprint({ group = null, owners = [], operations = [] } = {}) {
+  const skuKey = giniSkuKey(group?.parentSku);
+  const candidates = (group?.candidates || [])
+    .map((row) => ({
+      productId: String(row.productId || ""),
+      vendorId: String(row.vendorId || ""),
+      sourceItemId: String(row.sourceItemId || ""),
+    }))
+    .sort((left, right) => left.productId.localeCompare(right.productId));
+  const ownerRows = ownersForSku(owners, skuKey)
+    .map((row) => ({
+      productId: String(row.productId || ""),
+      vendorId: String(row.vendorId || ""),
+      status: String(row.status || ""),
+    }))
+    .sort((left, right) => left.productId.localeCompare(right.productId));
+  const operationRows = operationsForSku(operations, skuKey)
+    .map((row) => ({
+      operationKey: String(row.operationKey || ""),
+      productId: String(row.productId || ""),
+      sourceItemId: String(row.sourceItemId || ""),
+    }))
+    .sort((left, right) => left.operationKey.localeCompare(right.operationKey));
+  return JSON.stringify({ skuKey, candidates, ownerRows, operationRows });
+}
+
+export function ownershipInsertDocuments(decision) {
+  if (!decision?.record || !decision?.operation) return null;
+  return {
+    owner: {
+      skuKey: decision.record.skuKey,
+      parentSku: decision.record.parentSku,
+      productId: decision.record.productId,
+      vendorId: decision.record.vendorId,
+      status: "approved",
+      giniProductId: "",
+      approvalNote: "Administrator confirmed this parent owner. Nothing was sent to GINI.",
+    },
+    operation: {
+      operationKey: decision.operation.operationKey,
+      skuKey: decision.operation.skuKey,
+      parentSku: decision.operation.parentSku,
+      productId: decision.operation.productId,
+      vendorId: decision.operation.vendorId,
+      sourceItemId: decision.operation.sourceItemId,
+      excludedProductIds: [...(decision.operation.excludedProductIds || [])],
+      previousOwnerProductId: String(decision.operation.previousOwnerProductId || ""),
+      status: "recorded",
+    },
+  };
+}
+
+export function interpretOwnershipIndexConflict({
+  record = null,
+  operation = null,
+  ownerDuplicate = false,
+  operationDuplicate = false,
+  existingOwner = null,
+  existingOperation = null,
+} = {}) {
+  if (ownerDuplicate) {
+    if (!existingOwner || existingOwner.status === "verified_remote") {
+      return { ok: false, code: existingOwner?.status === "verified_remote" ? "owner_already_verified" : "concurrent_selection", overwritesOwner: false };
+    }
+    const sameOwner = sameText(existingOwner.productId, record?.productId)
+      && sameText(existingOwner.vendorId, record?.vendorId)
+      && existingOwner.status === "approved";
+    if (!sameOwner) return { ok: false, code: "index_conflict", overwritesOwner: false };
+  }
+  if (operationDuplicate) {
+    const sameOperation = existingOperation
+      && sameText(existingOperation.productId, operation?.productId)
+      && sameText(existingOperation.vendorId, operation?.vendorId)
+      && sameText(existingOperation.sourceItemId, operation?.sourceItemId)
+      && sameText(existingOperation.skuKey, operation?.skuKey);
+    if (!sameOperation) return { ok: false, code: "index_conflict", overwritesOwner: false };
+  }
+  return { ok: true, code: "ownership_save_ready", overwritesOwner: false };
+}
+
+export function planCommitOutcome({
+  record = null,
+  operation = null,
+  ownerInsert = { inserted: false, duplicate: false },
+  existingOwner = null,
+  operationInsert = { inserted: false, duplicate: false },
+  existingOperation = null,
+} = {}) {
+  const owner = interpretOwnershipIndexConflict({
+    record,
+    operation,
+    ownerDuplicate: ownerInsert.duplicate === true,
+    existingOwner,
+  });
+  if (ownerInsert.duplicate === true && !owner.ok) {
+    return { ...owner, saved: false, writes: [], sentToGini: 0, canSend: false };
+  }
+  const audited = interpretOwnershipIndexConflict({
+    record,
+    operation,
+    operationDuplicate: operationInsert.duplicate === true,
+    existingOperation,
+  });
+  if (operationInsert.duplicate === true && !audited.ok) {
+    return {
+      ok: false,
+      code: ownerInsert.inserted === true ? "audit_incomplete" : audited.code,
+      saved: ownerInsert.inserted === true,
+      writes: ownerInsert.inserted === true ? ["GiniVariantParentOwner.create"] : [],
+      sentToGini: 0,
+      canSend: false,
+      overwritesOwner: false,
+    };
+  }
+  const writes = [];
+  if (ownerInsert.inserted === true) writes.push("GiniVariantParentOwner.create");
+  if (operationInsert.inserted === true) writes.push("GiniVariantOwnershipOperation.create");
+  return {
+    ok: true,
+    code: ownerInsert.inserted === true ? "ownership_recorded" : "ownership_already_recorded",
+    saved: ownerInsert.inserted === true,
+    idempotent: ownerInsert.inserted !== true,
+    writes,
+    sentToGini: 0,
+    canSend: false,
+    overwritesOwner: false,
+    remoteVerification: "not_performed",
+  };
+}
+
+const OWNERSHIP_BLOCKERS = new Set(["duplicate_parent_sku", "other_vendor_owns_parent"]);
+
+export function previewOwnershipSaveDocuments({
+  group = null,
+  owners = [],
+  operations = [],
+  parentSku = "",
+  productId = "",
+  vendorId = "",
+  sourceItemId = "",
+  confirm = false,
+  confirmOwnershipSave = false,
+} = {}) {
+  const decision = evaluateOwnershipSave({
+    group,
+    parentSku,
+    productId,
+    vendorId,
+    sourceItemId,
+    confirm,
+    confirmOwnershipSave,
+    owners,
+    operations,
+  });
+  const selected = group?.candidates?.find((row) => String(row.productId) === String(productId || "")) || null;
+  const remainingBlockers = (selected?.blockers || []).filter((code) => !OWNERSHIP_BLOCKERS.has(code));
+  const documents = decision.documents || null;
+  return {
+    readOnly: true,
+    saved: false,
+    wouldWrite: false,
+    wouldInsert: decision.ok && decision.idempotent !== true && documents ? [documents.owner, documents.operation] : [],
+    documents,
+    code: decision.code,
+    fingerprint: decision.fingerprint || ownershipDecisionFingerprint({ group, owners, operations }),
+    remainingBlockers,
+    nextGate: selected?.nextGate || decision.nextGate || "",
+    excluded: (group?.candidates || [])
+      .filter((row) => String(row.productId) !== String(productId || ""))
+      .map((row) => ({
+        productId: row.productId,
+        vendor: row.vendor,
+        vendorId: row.vendorId,
+        sourceItemId: row.sourceItemId,
+        disposition: "excluded_from_gini_ownership",
+        deletedFromBrownStore: false,
+      })),
+    ownerStatus: "approved",
+    remoteVerification: "not_performed",
+    sendEligible: false,
+    sentToGini: 0,
+    canSend: false,
+    pilot: ownershipPilotAuthorization(),
+    indexesReady: OWNERSHIP_SAVE_INDEXES_READY === true,
+    released: OWNERSHIP_SAVE_RELEASED === true,
+    reread: {
+      candidateCount: group?.candidates?.length || 0,
+      candidates: (group?.candidates || []).map((row) => ({
+        productId: row.productId,
+        vendorId: row.vendorId,
+        sourceItemId: row.sourceItemId,
+      })),
+      ownerCount: ownersForSku(owners, giniSkuKey(group?.parentSku)).length,
+      operationCount: operationsForSku(operations, giniSkuKey(group?.parentSku)).length,
+    },
   };
 }
 

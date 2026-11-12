@@ -15,9 +15,15 @@ import {
   attemptFutureOwnershipSave,
   auditDuplicateOwnership,
   evaluateOwnershipSave,
+  interpretOwnershipIndexConflict,
+  OWNERSHIP_SAVE_INDEXES_READY,
+  OWNERSHIP_SAVE_PILOT,
   OWNERSHIP_SAVE_RELEASED,
+  ownershipPilotAllows,
   pageOwnershipGroups,
+  planCommitOutcome,
   planOwnershipSelection,
+  previewOwnershipSaveDocuments,
   protectedReconciledParentSkus,
 } from "./utils/giniVariantOwnershipAudit.js";
 import { listOwnershipGroups, prepareOwnershipSelection, saveOwnershipSelection } from "./services/giniVariantOwnershipSelection.js";
@@ -275,6 +281,7 @@ test("selection preparation rechecks the database and does not save or send", as
   const deps = {
     loadCatalog: async () => ({ products: openProducts }),
     loadOwners: async () => owners,
+    loadOperations: async () => [],
   };
   const needsChoice = await prepareOwnershipSelection({ parentSku: "SHARE-9", productId: "p1", confirm: false, group: { candidates: [] } }, deps);
   assert.equal(needsChoice.code, "approval_required");
@@ -305,6 +312,20 @@ test("selection preparation rechecks the database and does not save or send", as
   assert.equal(prepared.futureSave.authorization.released, false);
   assert.equal(prepared.save.code, "ownership_save_disabled");
   assert.equal(prepared.save.authorizationEnabled, false);
+  assert.equal(prepared.savePreview.wouldWrite, false);
+  assert.equal(prepared.savePreview.sendEligible, false);
+  assert.equal(prepared.savePreview.remoteVerification, "not_performed");
+  assert.equal(prepared.savePreview.documents.owner.status, "approved");
+  assert.equal(prepared.savePreview.documents.owner.giniProductId, "");
+  assert.equal(prepared.savePreview.documents.owner.productId, "p1");
+  assert.equal(prepared.savePreview.documents.operation.productId, "p1");
+  assert.deepEqual(prepared.savePreview.documents.operation.excludedProductIds, ["p2"]);
+  assert.equal(prepared.savePreview.excluded[0].deletedFromBrownStore, false);
+  assert.deepEqual(prepared.savePreview.remainingBlockers, ["missing_variant_sku_approval"]);
+  assert.equal(prepared.savePreview.wouldInsert.length, 2);
+  assert.equal(prepared.savePreview.pilot.authorized, false);
+  assert.equal(prepared.savePreview.pilot.globalSave, false);
+  assert.equal(prepared.savePreview.reread.candidateCount, 2);
   const outsider = await prepareOwnershipSelection({ parentSku: "SHARE-9", productId: "not-in-group", confirm: true }, deps);
   assert.equal(outsider.code, "candidate_not_in_group");
   assert.equal(outsider.saved, false);
@@ -481,7 +502,7 @@ test("ownership cards resolve working, relative, and missing images", () => {
 
 test("a reviewed selection stays read-only and does not prefer a vendor", async () => {
   const group = openShareGroup();
-  const deps = { loadCatalog: async () => ({ products: [] }), loadOwners: async () => [] };
+  const deps = { loadCatalog: async () => ({ products: [] }), loadOwners: async () => [], loadOperations: async () => [] };
   const products = [
     member("SHARE-9", { productId: "p1", vendor: "IT Lobby", vendorId: "it-lobby", name: "F8 Cover", sourceItemId: "item-a", stock: 2 }),
     member("SHARE-9", { productId: "p2", vendor: "Jawal Flex", vendorId: "jawal", name: "F8 Cover Flex", sourceItemId: "item-b", stock: 40 }),
@@ -734,4 +755,106 @@ test("production startup does not create the ownership operation collection", as
     await memory.stop();
   }
   assert.equal(mongoose.connection.readyState, 0);
+});
+
+test("one-SKU pilot preview rejects conflicts, stale reads, and unverified remote status", () => {
+  const group = openShareGroup();
+  const preview = previewOwnershipSaveDocuments({
+    group,
+    parentSku: "SHARE-9",
+    productId: "p1",
+    vendorId: "it-lobby",
+    sourceItemId: "item-a",
+    confirm: true,
+    confirmOwnershipSave: true,
+  });
+  assert.equal(preview.saved, false);
+  assert.equal(preview.wouldWrite, false);
+  assert.equal(preview.sendEligible, false);
+  assert.equal(preview.documents.owner.status, "approved");
+  assert.equal(Object.hasOwn(preview.documents.owner, "verifiedAt"), false);
+  assert.equal(preview.documents.owner.giniProductId, "");
+  assert.equal(ownershipPilotAllows("SHARE-9", "p1"), false);
+  assert.equal(ownershipPilotAllows("SHARE-9", "p1", { parentSku: "SHARE-9", productId: "p1" }), true);
+  assert.equal(ownershipPilotAllows("SHARE-9", "p2", { parentSku: "SHARE-9", productId: "p1" }), false);
+  assert.equal(ownershipPilotAllows("OTHER-1", "p1", { parentSku: "SHARE-9", productId: "p1" }), false);
+  assert.equal(OWNERSHIP_SAVE_PILOT.parentSku, "");
+  assert.equal(OWNERSHIP_SAVE_PILOT.productId, "");
+  assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
+  const first = evaluateOwnershipSave(explicitSave({ group }));
+  const second = evaluateOwnershipSave(explicitSave({
+    group,
+    operations: [{ skuKey: "share-9", operationKey: "ownership-save:share-9:p2", productId: "p2", vendorId: "jawal", sourceItemId: "item-b", status: "recorded" }],
+  }));
+  assert.equal(second.code, "concurrent_selection");
+  assert.equal(second.saved, false);
+  const raced = evaluateOwnershipSave(explicitSave({
+    group,
+    operations: [first.documents.operation],
+  }));
+  assert.equal(raced.ok, true);
+  assert.equal(raced.idempotent, false);
+  const settled = evaluateOwnershipSave(explicitSave({
+    group,
+    owners: [{ parentSku: "SHARE-9", skuKey: "share-9", productId: "p1", vendorId: "it-lobby", status: "approved" }],
+    operations: [first.documents.operation],
+  }));
+  assert.equal(settled.idempotent, true);
+  assert.equal(settled.saved, false);
+  assert.equal(previewOwnershipSaveDocuments({
+    group,
+    owners: [{ parentSku: "SHARE-9", skuKey: "share-9", productId: "p1", vendorId: "it-lobby", status: "approved" }],
+    operations: [first.documents.operation],
+    parentSku: "SHARE-9",
+    productId: "p1",
+    vendorId: "it-lobby",
+    sourceItemId: "item-a",
+    confirm: true,
+    confirmOwnershipSave: true,
+  }).wouldInsert.length, 0);
+  const stale = evaluateOwnershipSave(explicitSave({
+    group,
+    requireFingerprint: true,
+    expectedFingerprint: `${first.fingerprint}:changed`,
+  }));
+  assert.equal(stale.code, "stale_selection");
+  assert.equal(stale.saved, false);
+  const verifiedConflict = interpretOwnershipIndexConflict({
+    record: first.documents.owner,
+    operation: first.documents.operation,
+    ownerDuplicate: true,
+    existingOwner: { productId: "p1", vendorId: "it-lobby", status: "verified_remote" },
+  });
+  assert.equal(verifiedConflict.code, "owner_already_verified");
+  assert.equal(verifiedConflict.overwritesOwner, false);
+  const otherProduct = interpretOwnershipIndexConflict({
+    record: first.documents.owner,
+    operation: first.documents.operation,
+    ownerDuplicate: true,
+    existingOwner: { productId: "p2", vendorId: "jawal", status: "approved" },
+  });
+  assert.equal(otherProduct.code, "index_conflict");
+  const operationConflict = planCommitOutcome({
+    record: first.documents.owner,
+    operation: first.documents.operation,
+    ownerInsert: { inserted: true, duplicate: false },
+    operationInsert: { inserted: false, duplicate: true },
+    existingOperation: { ...first.documents.operation, productId: "p2", skuKey: "share-9" },
+  });
+  assert.equal(operationConflict.code, "audit_incomplete");
+  assert.equal(operationConflict.canSend, false);
+  assert.equal(operationConflict.sentToGini, 0);
+  assert.equal(operationConflict.overwritesOwner, false);
+  const retry = planCommitOutcome({
+    record: first.documents.owner,
+    operation: first.documents.operation,
+    ownerInsert: { inserted: false, duplicate: true },
+    existingOwner: { productId: "p1", vendorId: "it-lobby", status: "approved" },
+    operationInsert: { inserted: false, duplicate: true },
+    existingOperation: first.documents.operation,
+  });
+  assert.equal(retry.code, "ownership_already_recorded");
+  assert.equal(retry.saved, false);
+  assert.deepEqual(retry.writes, []);
+  assert.equal(retry.remoteVerification, "not_performed");
 });

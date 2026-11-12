@@ -219,6 +219,18 @@ export default function GiniOwnershipSelectionPanel() {
                       {row.vendor} product {row.productId} is excluded from GINI ownership. It is not deleted from BrownStore.
                     </p>
                   ))}
+                  {review.savePreview?.documents?.owner ? (
+                    <div className="mt-2">
+                      <p>
+                        Planned BrownStore owner status: approved. Remote verification: not performed. This does not make the product eligible to send.
+                      </p>
+                      <p className="mt-1">
+                        Would insert owner {review.savePreview.documents.owner.productId} for SKU {review.savePreview.documents.owner.parentSku} and operation {review.savePreview.documents.operation?.operationKey}. This review does not insert them.
+                      </p>
+                      <p className="mt-1">Remaining blockers: {(review.savePreview.remainingBlockers || []).join(", ") || "none returned"}.</p>
+                      <p className="mt-1">Pilot authorization: {review.savePreview.pilot?.authorized ? "one named SKU" : "off"}.</p>
+                    </div>
+                  ) : null}
                   <p className="mt-1">Database rechecked: {review.databaseRechecked ? "yes" : "no"}. Owner save authorization: off.</p>
                 </div>
               ) : null}

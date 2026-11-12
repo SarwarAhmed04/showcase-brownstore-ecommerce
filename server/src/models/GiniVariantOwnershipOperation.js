@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 const giniVariantOwnershipOperationSchema = new mongoose.Schema(
   {
     operationKey: { type: String, required: true, unique: true },
-    skuKey: { type: String, required: true },
+    skuKey: { type: String, required: true, unique: true },
     parentSku: { type: String, required: true },
     productId: { type: String, required: true },
     vendorId: { type: String, required: true },
@@ -14,7 +14,7 @@ const giniVariantOwnershipOperationSchema = new mongoose.Schema(
     previousOwnerProductId: { type: String, default: "" },
     status: { type: String, required: true, enum: ["recorded"] },
   },
-  { timestamps: true, autoIndex: false, autoCreate: false }
+  { timestamps: true, collection: "ginivariantownershipoperations", autoIndex: false, autoCreate: false }
 );
 
 export const GiniVariantOwnershipOperation = mongoose.model(

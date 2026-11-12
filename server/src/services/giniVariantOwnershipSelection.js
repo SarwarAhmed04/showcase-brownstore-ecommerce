@@ -7,10 +7,15 @@ import {
   auditDuplicateOwnership,
   designFutureOwnershipSave,
   evaluateOwnershipSave,
+  interpretOwnershipIndexConflict,
+  OWNERSHIP_SAVE_INDEXES_READY,
   OWNERSHIP_SAVE_RELEASED,
+  ownershipPilotAllows,
   ownershipSaveAuthorization,
   pageOwnershipGroups,
+  planCommitOutcome,
   planOwnershipSelection,
+  previewOwnershipSaveDocuments,
 } from "../utils/giniVariantOwnershipAudit.js";
 
 const OWNERSHIP_CODES = new Set(["duplicate_parent_sku", "other_vendor_owns_parent"]);
@@ -35,15 +40,23 @@ function remoteFromOwners(owners) {
 async function currentAudit(deps = {}) {
   const loadCatalog = deps.loadCatalog || loadVariantCatalog;
   const loadOwners = deps.loadOwners || (() => GiniVariantParentOwner.find({}).lean());
-  const catalog = await loadCatalog({ force: true });
-  const owners = await loadOwners();
+  const loadOperations = deps.loadOperations || (() => GiniVariantOwnershipOperation.find({}).lean());
+  const [catalog, owners, operations] = await Promise.all([
+    loadCatalog({ force: true }),
+    loadOwners(),
+    loadOperations(),
+  ]);
   const products = catalog?.products || [];
-  return auditDuplicateOwnership({
-    products,
+  return {
+    ...auditDuplicateOwnership({
+      products,
+      owners,
+      plans: products,
+      remoteBySku: deps.remoteBySku || remoteFromOwners(owners),
+    }),
     owners,
-    plans: products,
-    remoteBySku: deps.remoteBySku || remoteFromOwners(owners),
-  });
+    operations,
+  };
 }
 
 function excludedCandidates(group, productId) {
@@ -93,13 +106,18 @@ export async function prepareOwnershipSelection({ parentSku = "", productId = ""
     nextBlockers,
     futureSave: designFutureOwnershipSave(),
     save: attemptFutureOwnershipSave(),
+    savePreview: previewOwnershipSaveDocuments({
+      group,
+      owners: audit.owners || [],
+      operations: audit.operations || [],
+      parentSku: group?.parentSku || parentSku,
+      productId,
+      vendorId: selected?.vendorId || "",
+      sourceItemId: selected?.sourceItemId || "",
+      confirm: confirm === true,
+      confirmOwnershipSave: true,
+    }),
   };
-}
-
-function sameOwnerIdentity(existing, record) {
-  return String(existing?.productId || "") === record.productId
-    && String(existing?.vendorId || "") === record.vendorId
-    && existing?.status === "approved";
 }
 
 async function insertOnce(model, doc) {
@@ -114,9 +132,13 @@ async function insertOnce(model, doc) {
 
 async function commitOwnershipSave(input, deps) {
   if (OWNERSHIP_SAVE_RELEASED !== true) return { ...attemptFutureOwnershipSave(input, deps.env), databaseRechecked: false };
+  if (OWNERSHIP_SAVE_INDEXES_READY !== true) {
+    return { ...attemptFutureOwnershipSave(input, deps.env), code: "ownership_indexes_not_ready", databaseRechecked: false };
+  }
+  if (!ownershipPilotAllows(input.parentSku, input.productId)) {
+    return { ...attemptFutureOwnershipSave(input, deps.env), code: "pilot_not_authorized", databaseRechecked: false };
+  }
   const audit = await currentAudit(deps);
-  const owners = await (deps.loadOwners || (() => GiniVariantParentOwner.find({}).lean()))();
-  const operations = await (deps.loadOperations || (() => GiniVariantOwnershipOperation.find({}).lean()))();
   const group = audit.groups.find((row) => row.parentSkuKey === giniSkuKey(input.parentSku)) || null;
   const decision = evaluateOwnershipSave({
     group,
@@ -127,8 +149,10 @@ async function commitOwnershipSave(input, deps) {
     confirm: input.confirm === true,
     confirmOwnershipSave: input.confirmOwnershipSave === true,
     seenProductIds: input.seenProductIds,
-    owners,
-    operations,
+    owners: audit.owners || [],
+    operations: audit.operations || [],
+    expectedFingerprint: input.decisionFingerprint,
+    requireFingerprint: true,
   });
   const held = {
     databaseRechecked: true,
@@ -152,49 +176,41 @@ async function commitOwnershipSave(input, deps) {
   }
   const ownerModel = deps.ownerModel || GiniVariantParentOwner;
   const operationModel = deps.operationModel || GiniVariantOwnershipOperation;
-  const writes = [];
+  const documents = decision.documents;
+  if (!documents || documents.owner.status !== "approved" || documents.owner.giniProductId) {
+    return { ...held, ok: false, code: "remote_verification_missing", saved: false, writes: [] };
+  }
   const ownerInsert = await insertOnce(ownerModel, {
-    skuKey: decision.record.skuKey,
-    parentSku: decision.record.parentSku,
-    productId: decision.record.productId,
-    vendorId: decision.record.vendorId,
-    status: "approved",
+    ...documents.owner,
     approvedAt: new Date(),
-    approvalNote: decision.record.approvalNote,
   });
-  if (ownerInsert.inserted) writes.push("GiniVariantParentOwner.create");
-  if (ownerInsert.duplicate) {
-    const existing = await ownerModel.findOne({ skuKey: decision.record.skuKey }).lean();
-    if (existing?.status === "verified_remote") {
-      return { ...held, ok: false, code: "owner_already_verified", saved: false, writes };
-    }
-    if (!sameOwnerIdentity(existing, decision.record)) {
-      return { ...held, ok: false, code: "concurrent_selection", saved: false, writes };
-    }
+  const existingOwner = ownerInsert.duplicate ? await ownerModel.findOne({ skuKey: documents.owner.skuKey }).lean() : null;
+  const ownerConflict = interpretOwnershipIndexConflict({
+    record: documents.owner,
+    operation: documents.operation,
+    ownerDuplicate: ownerInsert.duplicate === true,
+    existingOwner,
+  });
+  if (ownerInsert.duplicate === true && !ownerConflict.ok) {
+    return { ...held, ...ownerConflict, saved: false, writes: [] };
   }
   const operationInsert = await insertOnce(operationModel, {
-    ...decision.operation,
+    ...documents.operation,
     administratorId,
     confirmedAt: new Date(),
   });
-  if (operationInsert.inserted) writes.push("GiniVariantOwnershipOperation.create");
-  if (operationInsert.duplicate) {
-    const existing = await operationModel.findOne({ operationKey: decision.operation.operationKey }).lean();
-    const same = existing
-      && String(existing.productId || "") === decision.operation.productId
-      && String(existing.vendorId || "") === decision.operation.vendorId
-      && String(existing.sourceItemId || "") === decision.operation.sourceItemId;
-    if (!same) return { ...held, ok: false, code: "concurrent_selection", saved: false, writes };
-  }
-  return {
-    ...held,
-    ok: true,
-    code: ownerInsert.inserted ? "ownership_recorded" : "ownership_already_recorded",
-    saved: ownerInsert.inserted === true,
-    idempotent: ownerInsert.inserted !== true,
-    writes,
-    record: decision.record,
-  };
+  const existingOperation = operationInsert.duplicate
+    ? await operationModel.findOne({ $or: [{ operationKey: documents.operation.operationKey }, { skuKey: documents.operation.skuKey }] }).lean()
+    : null;
+  const outcome = planCommitOutcome({
+    record: documents.owner,
+    operation: documents.operation,
+    ownerInsert,
+    existingOwner,
+    operationInsert,
+    existingOperation,
+  });
+  return { ...held, ...outcome, record: documents.owner, remoteVerification: "not_performed" };
 }
 
 export async function saveOwnershipSelection(input = {}, deps = {}) {
