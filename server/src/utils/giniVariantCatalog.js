@@ -74,6 +74,21 @@ export function variationCombinations(doc) {
   return rows;
 }
 
+function collectImageUrls(doc) {
+  const urls = [];
+  const seen = new Set();
+  for (const variant of doc?.variants || []) {
+    for (const image of variant?.images || []) {
+      const url = String(image?.url || "").trim();
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      urls.push(url);
+      if (urls.length >= 8) return urls;
+    }
+  }
+  return urls;
+}
+
 function contractHas(contract, value) {
   if (!contract?.attributeId || !Array.isArray(contract.values)) return false;
   const wanted = String(value || "").trim().toLowerCase();
@@ -154,6 +169,7 @@ export function classifyVariantProduct({
     parentSku,
     categoryId,
     subcategoryId,
+    imageUrls: collectImageUrls(doc),
     combinations: proposals,
     blockers: [...new Set(blockers)],
     status,

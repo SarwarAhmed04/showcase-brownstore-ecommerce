@@ -293,13 +293,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  giniVariantApproveOwner: (body) =>
-    request("/api/admin/platforms/gini/variant-sync/approve-owner", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
   giniVariantPilot: () => request("/api/admin/platforms/gini/variant-sync/pilot"),
   giniVariantChangedPreview: () => request("/api/admin/platforms/gini/variant-sync/changed-preview"),
+  giniVariantOwnershipGroups: ({ query = "", page = 1, pageSize = 10 } = {}) => {
+    const qs = new URLSearchParams({ query, page: String(page), pageSize: String(pageSize) });
+    return request(`/api/admin/platforms/gini/variant-sync/ownership?${qs}`);
+  },
+  giniVariantOwnershipPreview: (body) =>
+    request("/api/admin/platforms/gini/variant-sync/ownership/preview", {
+      method: "POST",
+      body: JSON.stringify({
+        parentSku: body?.parentSku,
+        productId: body?.productId,
+        confirm: body?.confirm === true,
+      }),
+    }),
   giniVariantPricePilotApprove: (body) =>
     request("/api/admin/platforms/gini/variant-sync/price-pilot/approve", {
       method: "POST",

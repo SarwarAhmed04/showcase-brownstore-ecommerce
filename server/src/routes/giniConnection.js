@@ -32,6 +32,7 @@ import { loadVariantTestImageBytes, mongoVariantTestOperation, previewGiniVarian
 import { approveParentOwner, approveVariantSkus, variantCatalogPage } from "../services/giniVariantSync.js";
 import { previewGiniVariantPilot, runGiniVariantPilotStage } from "../services/giniVariantPilot.js";
 import { previewVariantChangedSync } from "../services/giniVariantChangedSync.js";
+import { listOwnershipGroups, prepareOwnershipSelection } from "../services/giniVariantOwnershipSelection.js";
 import { approveVariantPricePilot } from "../services/giniVariantPricePilot.js";
 import { previewEi8888PricePatch, previewKe20PricePatch, refreshEi8888CommissionSnapshot, runAuthorizedEi8888PricePatch, runAuthorizedKe20PricePatch } from "../services/giniVariantPricePatch.js";
 import { previewKe20StockPatch, runAuthorizedKe20StockPatch } from "../services/giniVariantStockPatch.js";
@@ -402,6 +403,31 @@ giniConnectionRouter.get("/platforms/gini/variant-sync", async (req, res) => {
   }
 });
 
+giniConnectionRouter.get("/platforms/gini/variant-sync/ownership", async (req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await listOwnershipGroups({
+      query: req.query.query || req.query.q || "",
+      page: req.query.page || 1,
+      pageSize: req.query.pageSize || 10,
+    }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to read duplicate SKU ownership groups");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-sync/ownership/preview", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(assertNoSecretLeak(await prepareOwnershipSelection({
+      parentSku: body.parentSku,
+      productId: body.productId,
+      confirm: body.confirm === true,
+    }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to prepare the ownership selection");
+  }
+});
+
 giniConnectionRouter.get("/platforms/gini/variant-sync/changed-preview", async (_req, res) => {
   try {
     res.json(assertNoSecretLeak(await previewVariantChangedSync(), ""));
@@ -519,13 +545,8 @@ giniConnectionRouter.post("/platforms/gini/variant-sync/approve-skus", async (re
   }
 });
 
-giniConnectionRouter.post("/platforms/gini/variant-sync/approve-owner", async (req, res) => {
-  try {
-    const body = req.body || {};
-    res.json(assertNoSecretLeak(await approveParentOwner({ productId: body.productId, confirm: body.confirm === true }), ""));
-  } catch (err) {
-    fail(res, err, "Failed to approve the parent owner");
-  }
+giniConnectionRouter.post("/platforms/gini/variant-sync/approve-owner", async (_req, res) => {
+  res.status(410).json(await approveParentOwner());
 });
 
 giniConnectionRouter.get("/platforms/gini/variant-test/read-back", async (_req, res) => {

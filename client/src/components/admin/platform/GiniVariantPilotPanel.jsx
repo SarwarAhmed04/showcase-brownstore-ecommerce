@@ -47,21 +47,6 @@ export default function GiniVariantPilotPanel() {
     }
   }
 
-  async function chooseOwner(productId) {
-    setBusy(true);
-    setNotice("");
-    setError("");
-    try {
-      const saved = await api.giniVariantApproveOwner({ productId, confirm: true });
-      setNotice(saved.sentToGini === 0 ? "That vendor now owns the parent SKU. The other listing was not merged." : "Unexpected send");
-      await load();
-    } catch (err) {
-      setError(err.message || "Ownership approval failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function runStage(product, stage) {
     setBusy(true);
     setNotice("");
@@ -142,14 +127,7 @@ export default function GiniVariantPilotPanel() {
                 ))}
               </ul>
               {product.ownerRequired ? (
-                <div className="mt-3 space-y-2">
-                  <p className="text-sm text-brown">Choose one vendor. The other listing stays separate.</p>
-                  {(product.candidates || []).map((candidate) => (
-                    <button key={candidate.productId} type="button" className={BUTTON} disabled={busy} onClick={() => chooseOwner(candidate.productId)}>
-                      Choose {candidate.vendor}
-                    </button>
-                  ))}
-                </div>
+                <p className="mt-3 text-sm text-brown/70">Vendor ownership is selected in Vendor ownership selection. Saving an owner is off, and the other listing stays in BrownStore.</p>
               ) : null}
               {product.productId && product.blockers?.includes("missing_variant_sku_approval") ? (
                 <button type="button" className={`${BUTTON} mt-3`} disabled={busy} onClick={() => approveSkus(product)}>

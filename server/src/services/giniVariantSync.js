@@ -232,30 +232,17 @@ export async function approveVariantSkus({ productId, confirm = false, combinati
   return { ok: true, code: "approved_for_future_sync", sentToGini: 0, canSend: false };
 }
 
-export async function approveParentOwner({ productId, confirm = false } = {}) {
-  if (confirm !== true) return { ok: false, code: "approval_required", sentToGini: 0 };
-  const catalog = await loadVariantCatalog({ force: true });
-  const row = catalog.products.find((item) => item.productId === String(productId || ""));
-  if (!row || row.status !== "NEEDS_REVIEW") return { ok: false, code: "ownership_not_reviewable", sentToGini: 0 };
-  const existing = await GiniVariantParentOwner.findOne({ skuKey: giniSkuKey(row.parentSku) }).lean();
-  if (existing && existing.productId !== row.productId) return { ok: false, code: "owner_already_approved", sentToGini: 0 };
-  await ensureIdentityIndexes();
-  await GiniVariantParentOwner.updateOne(
-    { skuKey: giniSkuKey(row.parentSku) },
-    {
-      $set: {
-        parentSku: row.parentSku,
-        productId: row.productId,
-        vendorId: row.vendorId,
-        approvedAt: new Date(),
-        approvalNote: "One BrownStore product was chosen as the GINI parent owner. Other vendor documents were not merged.",
-        status: existing?.status === "verified_remote" ? "verified_remote" : "approved",
-      },
-    },
-    { upsert: true }
-  );
-  clearVariantCatalogCache();
-  return { ok: true, code: "owner_approved", sentToGini: 0, canSend: false };
+export async function approveParentOwner() {
+  return {
+    ok: false,
+    code: "owner_approval_disabled",
+    saved: false,
+    sentToGini: 0,
+    canSend: false,
+    writes: [],
+    overwritesOwner: false,
+    message: "Owner approval is disabled. The ownership review is read-only and does not save, overwrite, or transfer an owner.",
+  };
 }
 
 export function variantPreviewPayload(row) {

@@ -5,6 +5,7 @@ import GiniVariantPilotPanel from "./GiniVariantPilotPanel";
 import GiniKe20PricePatchPanel from "./GiniKe20PricePatchPanel";
 import GiniEi8888PricePatchPanel from "./GiniEi8888PricePatchPanel";
 import GiniVariantStockPatchPanel from "./GiniVariantStockPatchPanel";
+import GiniOwnershipSelectionPanel from "./GiniOwnershipSelectionPanel";
 
 const FILTERS = [
   ["", "All"],
@@ -130,18 +131,8 @@ export default function GiniVariantSyncPanel() {
                   Blocked product rows {dryRun.ownershipAudit.blockedProductRows || 0}. Unique SKU groups {dryRun.ownershipAudit.uniqueDuplicateSkuGroups || 0}. Verified owners {dryRun.ownershipAudit.groupsWithVerifiedOwner || 0}. Groups still awaiting a person {dryRun.ownershipAudit.groupsAwaitingSelection || 0}.
                 </p>
                 <p>
-                  After an explicit choice, {dryRun.ownershipAudit.afterOwnershipApproval?.productsThatCanAdvance || 0} selected products can move to the next validation gate. Send-ready products: {dryRun.ownershipAudit.afterOwnershipApproval?.sendReady || 0}. Copies that stay blocked: {dryRun.ownershipAudit.afterOwnershipApproval?.copiesThatStayBlocked || 0}. This preview does not choose a vendor or save an owner.
+                  After an explicit choice, {dryRun.ownershipAudit.afterOwnershipApproval?.productsThatCanAdvance || 0} selected products can move to the next validation gate. Send-ready products: {dryRun.ownershipAudit.afterOwnershipApproval?.sendReady || 0}. Copies that stay blocked: {dryRun.ownershipAudit.afterOwnershipApproval?.copiesThatStayBlocked || 0}. This preview does not choose a vendor or save an owner. All duplicate groups are listed in Vendor ownership selection, with search and pages.
                 </p>
-                <ul className="space-y-2">
-                  {(dryRun.ownershipAudit.groups || []).slice(0, 8).map((group) => (
-                    <li key={group.parentSku}>
-                      {group.parentSku}: {group.vendors.join(", ") || "vendor name missing"}.
-                      {" "}{group.verifiedOwner ? `Verified owner ${group.verifiedOwner.vendor} ${group.verifiedOwner.productId}.` : "No verified owner."}
-                      {" "}Remote {group.remote?.state || "not_read"} {group.remote?.id || ""}.
-                      {" "}{(group.candidates || []).map((row) => `${row.role} ${row.vendor || row.vendorId} ${row.productId} stock ${row.totalStock}`).join("; ")}
-                    </li>
-                  ))}
-                </ul>
               </div>
             ) : null}
             {dryRun.generic ? (
@@ -249,6 +240,7 @@ export default function GiniVariantSyncPanel() {
           </div>
         ) : null}
       </div>
+      <GiniOwnershipSelectionPanel />
       <GiniKe20PricePatchPanel />
       <GiniEi8888PricePatchPanel />
       <GiniVariantStockPatchPanel />
@@ -333,26 +325,7 @@ export default function GiniVariantSyncPanel() {
                 </button>
               ) : null}
               {product.status === "NEEDS_REVIEW" ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  className="rounded-full bg-brown px-3 py-1.5 text-xs font-semibold text-cream"
-                  onClick={async () => {
-                    setBusy(true);
-                    setNotice("");
-                    try {
-                      const saved = await api.giniVariantApproveOwner({ productId: product.productId, confirm: true });
-                      setNotice(saved.sentToGini === 0 ? "Owner saved locally. The other vendor product was not merged or sent." : "Unexpected send");
-                      await load(status);
-                    } catch (err) {
-                      setError(err.message || "Ownership approval failed");
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                >
-                  Choose this vendor as owner
-                </button>
+                <p className="text-xs text-brown/60">Choose the owner in Vendor ownership selection. Saving an owner is off.</p>
               ) : null}
             </div>
           </article>

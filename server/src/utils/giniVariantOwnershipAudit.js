@@ -39,11 +39,15 @@ function remoteSummary(remote) {
 function candidateView(product, plan, role) {
   const combinations = product?.combinations || [];
   const blockers = plan?.blockers?.length ? plan.blockers : (product?.blockers || []);
+  const imageUrls = Array.isArray(product?.imageUrls) ? product.imageUrls.map((url) => String(url || "").trim()).filter(Boolean).slice(0, 8) : [];
   return {
     productId: String(product?.productId || ""),
+    name: String(product?.name || ""),
+    parentSku: String(product?.parentSku || ""),
     vendor: String(product?.vendor || ""),
     vendorId: String(product?.vendorId || ""),
     sourceItemId: String(product?.sourceItemId || ""),
+    imageUrls,
     colors: uniqueColors(combinations),
     variantSkus: combinations.map((row) => String(row?.proposedSku || "")).filter(Boolean),
     stock: combinations.map((row) => ({
@@ -79,14 +83,17 @@ export function auditDuplicateOwnership({ products = [], owners = [], remoteBySk
   for (const [key, members] of grouped) {
     if (members.length < 2) continue;
     const parentSku = String(members.find((row) => row.parentSku)?.parentSku || key);
-    const owner = (owners || []).find((row) => giniSkuKey(row.parentSku || row.skuKey) === key) || null;
+    const matchingOwners = (owners || []).filter((row) => giniSkuKey(row.parentSku || row.skuKey) === key);
+    const owner = matchingOwners[0] || null;
+    const ownerInGroup = owner ? members.some((product) => String(product.productId || "") === String(owner.productId || "")) : false;
+    const conflictingOwners = matchingOwners.length > 1 || Boolean(owner && !ownerInGroup);
     const remote = remoteBySku[parentSku] || remoteBySku[key] || { state: "not_read" };
     const candidates = members
       .map((product) => candidateView(product, planByProduct.get(String(product.productId)), ownerRole(owner, product.productId)))
       .sort((left, right) => left.vendor.localeCompare(right.vendor) || left.productId.localeCompare(right.productId));
     const verifiedOwner = candidates.find((row) => row.role === "verified_owner") || null;
     const approvedOwner = candidates.find((row) => row.role === "approved_owner") || null;
-    const locked = Boolean(verifiedOwner) || isKnownVariantParent(parentSku);
+    const locked = Boolean(verifiedOwner) || isKnownVariantParent(parentSku) || conflictingOwners;
     groups.push({
       parentSku,
       parentSkuKey: key,
@@ -97,6 +104,9 @@ export function auditDuplicateOwnership({ products = [], owners = [], remoteBySk
       approvedOwner: approvedOwner ? { productId: approvedOwner.productId, vendor: approvedOwner.vendor } : null,
       selectionOpen: !locked && !approvedOwner,
       knownReconciledParent: isKnownVariantParent(parentSku),
+      conflictingOwners,
+      selectedProductId: null,
+      preferredCandidate: null,
       remote: remoteSummary(remote),
       candidates,
     });
@@ -164,6 +174,7 @@ function closed(code, extra = {}) {
 export function planOwnershipSelection({ group = null, productId = "", confirm = false } = {}) {
   if (confirm !== true) return closed("approval_required");
   if (!group || !Array.isArray(group.candidates)) return closed("group_not_found");
+  if (group.conflictingOwners) return closed("conflicting_owner", { overwritesOwner: false });
   const matches = group.candidates.filter((row) => String(row.productId) === String(productId || ""));
   if (matches.length !== 1) return closed(matches.length === 0 ? "candidate_not_in_group" : "candidate_not_unique");
   const candidate = matches[0];
@@ -193,5 +204,86 @@ export function planOwnershipSelection({ group = null, productId = "", confirm =
     },
     nextGate: candidate.nextGate,
     sendReady: false,
+  };
+}
+
+export function designFutureOwnershipSave() {
+  return {
+    phase: "design_only",
+    implemented: false,
+    routeExposed: false,
+    authorization: {
+      enabledByDefault: false,
+      requiresAdministratorConfirmation: true,
+      bothGatesRequired: ["GINI_VARIANT_OWNERSHIP_SAVE_ENABLED", "GINI_ALLOW_OWNERSHIP_SAVE"],
+    },
+    uniquenessChecks: [
+      "Reload the SKU group from the current catalog before any future save.",
+      "The selected product id must be one member of that group.",
+      "GiniVariantParentOwner.skuKey stays unique.",
+      "Refuse when a different product already has approved or verified_remote status for that SKU.",
+      "Refuse when more than one owner record matches the SKU.",
+    ],
+    operationAudit: {
+      wouldRecord: ["parentSku", "skuKey", "selectedProductId", "selectedVendorId", "excludedProductIds", "administratorId", "confirmedAt", "previousOwnerProductId"],
+      writesInThisPhase: false,
+    },
+    forbiddenEffects: ["gini_api_write", "stock_merge", "variant_sku_approval", "color_mapping", "brownstore_delete", "commission_rule_change"],
+  };
+}
+
+export function attemptFutureOwnershipSave() {
+  return {
+    ok: false,
+    code: "ownership_save_disabled",
+    saved: false,
+    sentToGini: 0,
+    canSend: false,
+    writes: [],
+    authorizationEnabled: false,
+    design: designFutureOwnershipSave(),
+  };
+}
+
+function groupSearchText(group) {
+  return [
+    group.parentSku,
+    group.parentSkuKey,
+    ...(group.vendors || []),
+    ...(group.candidates || []).flatMap((row) => [row.name, row.vendor, row.vendorId, row.productId, row.sourceItemId, row.parentSku, ...(row.variantSkus || [])]),
+  ].join("\n").toLowerCase();
+}
+
+export function pageOwnershipGroups(audit, { query = "", page = 1, pageSize = 10 } = {}) {
+  const needle = String(query || "").trim().toLowerCase();
+  const filtered = (audit?.groups || []).filter((group) => !needle || groupSearchText(group).includes(needle));
+  const size = Math.min(20, Math.max(1, Number(pageSize) || 10));
+  const total = filtered.length;
+  const pages = Math.max(1, Math.ceil(total / size) || 1);
+  const current = Math.min(pages, Math.max(1, Number(page) || 1));
+  const start = (current - 1) * size;
+  const groups = filtered.slice(start, start + size);
+  return {
+    readOnly: true,
+    automaticSelection: false,
+    saved: false,
+    canSend: false,
+    mergesStock: false,
+    approvesVariantSkus: false,
+    inventsAttributeMappings: false,
+    preferredCandidate: null,
+    query: String(query || ""),
+    page: current,
+    pageSize: size,
+    total,
+    pages,
+    pageGroupCount: groups.length,
+    unresolvedInResult: filtered.filter((group) => group.selectionOpen).length,
+    groupsAwaitingSelection: audit?.groupsAwaitingSelection || 0,
+    groupsWithVerifiedOwner: audit?.groupsWithVerifiedOwner || 0,
+    uniqueDuplicateSkuGroups: audit?.uniqueDuplicateSkuGroups || 0,
+    blockedProductRows: audit?.blockedProductRows || 0,
+    futureSave: designFutureOwnershipSave(),
+    groups,
   };
 }
