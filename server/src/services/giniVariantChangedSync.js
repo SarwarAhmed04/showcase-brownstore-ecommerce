@@ -4,6 +4,7 @@ import { GiniVariantChangedOperation } from "../models/GiniVariantChangedOperati
 import { GiniVariantIdentity } from "../models/GiniVariantIdentity.js";
 import { GiniVariantOperation } from "../models/GiniVariantOperation.js";
 import { GiniVariantParentOwner } from "../models/GiniVariantParentOwner.js";
+import { GiniVariantPricePatch } from "../models/GiniVariantPricePatch.js";
 import { performGiniRequest } from "./giniConnection.js";
 import { loadVariantCatalog } from "./giniVariantSync.js";
 import { giniSkuKey } from "../utils/giniSyncOnePlan.js";
@@ -90,14 +91,18 @@ export async function previewVariantChangedSync(deps = {}) {
   let operations = deps.operations || [];
   let owners = deps.owners || [];
   let changedOperations = deps.changedOperations || [];
+  let pricePatchJournals = deps.pricePatchJournals || [];
   let commissionRules = deps.commissionRules === undefined ? null : deps.commissionRules;
   let simpleJob = deps.simpleJob === undefined ? null : deps.simpleJob;
   if (deps.skipDatabase !== true) {
-    [identities, operations, owners, changedOperations] = await Promise.all([
+    [identities, operations, owners, changedOperations, pricePatchJournals] = await Promise.all([
       deps.identities ? Promise.resolve(deps.identities) : GiniVariantIdentity.find({}).lean(),
       deps.operations ? Promise.resolve(deps.operations) : GiniVariantOperation.find({}).select("productId status").lean(),
       deps.owners !== undefined ? Promise.resolve(deps.owners) : GiniVariantParentOwner.find({}).lean(),
       deps.changedOperations !== undefined ? Promise.resolve(deps.changedOperations) : GiniVariantChangedOperation.find({}).lean(),
+      deps.pricePatchJournals !== undefined
+        ? Promise.resolve(deps.pricePatchJournals)
+        : GiniVariantPricePatch.find({ parentSku: "KE20" }).select("parentSku variantId variantSku stage status rawBody").lean(),
     ]);
     if (commissionRules == null) {
       commissionRules = await Commission.find({ partner: "gini", isActive: { $ne: false } }).lean();
@@ -168,6 +173,7 @@ export async function previewVariantChangedSync(deps = {}) {
       ownership: "required",
       owner,
       variantOperations: changedByProduct.get(String(priced.productId)) || [],
+      pricePatchJournals,
     });
   });
   const { summary, blockerCounts } = summarizeVariantPlans(plans);

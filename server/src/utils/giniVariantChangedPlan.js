@@ -117,6 +117,7 @@ export function readRemoteParent(response, expectedSku = "") {
     return { state: "uncertain", status: 200, sku: String(data.sku), code: "parent_sku_mismatch", variants: null };
   }
   const quantity = Number(data.quantity);
+  const price = Number(data.price);
   const categoryId = data.category_id ?? data.category?.id;
   const subcategoryId = data.subcategory_id ?? data.subcategory?.id;
   return {
@@ -125,6 +126,7 @@ export function readRemoteParent(response, expectedSku = "") {
     sku: String(data.sku),
     id: presentId(data.id),
     quantity: Number.isFinite(quantity) ? quantity : null,
+    price: Number.isFinite(price) ? price : null,
     visibility: visibilityOf(data.is_visible ?? data.isVisible),
     categoryId: categoryId == null || categoryId === "" ? "" : String(categoryId),
     subcategoryId: subcategoryId == null || subcategoryId === "" ? "" : String(subcategoryId),
@@ -223,6 +225,7 @@ export function planVariantChange({
   ownership = "",
   owner = null,
   variantOperations = [],
+  pricePatchJournals = [],
 } = {}) {
   const blockers = [];
   const changes = [];
@@ -267,7 +270,13 @@ export function planVariantChange({
     if (!rows || rows.some((row) => row.incomplete)) blockers.push("incomplete_api_response");
     else comparePresent({ rows, combinations, identities, colorPreview, remote, categoryId, subcategoryId, blockers, changes, manualReview, differences, imageNotes, priceRows });
   }
-  applyVariantOperationGuards({ variantOperations, priceRows, blockers });
+  applyVariantOperationGuards({ variantOperations, priceRows, blockers, pricePatchJournals });
+  const settledKe20 = ["164306", "164307"].every((variantId) => settledKe20PriceOperation(
+    (variantOperations || []).find((op) => String(op?.variantId || "") === variantId),
+    priceRows.find((row) => String(row.variantId) === variantId),
+    pricePatchJournals
+  ));
+  if (settledKe20) reviewNotes.push("KE20's verified price PATCH journals match the fresh remote prices. The original 26500 approval baseline was kept.");
   const unique = [...new Set(blockers)];
   let disposition = "UNCHANGED";
   if (unique.some((code) => UNCERTAIN_BLOCKS.has(code))) disposition = "UNCERTAIN";
@@ -324,7 +333,32 @@ function publishPatch(patch) {
   };
 }
 
-function applyVariantOperationGuards({ variantOperations, priceRows, blockers }) {
+const KE20_SETTLED_VARIANTS = Object.freeze({
+  "164306": "{\"variant_id\":164306,\"price\":28000}",
+  "164307": "{\"variant_id\":164307,\"price\":28000}",
+});
+
+function settledKe20PriceOperation(op, row, journals) {
+  const variantId = String(op?.variantId || "");
+  const rawBody = KE20_SETTLED_VARIANTS[variantId];
+  if (!rawBody || giniSkuKey(op?.parentSku) !== "ke20" || op?.status !== "approved" || !row) return false;
+  const journal = (journals || []).find((item) => String(item?.variantId || "") === variantId && giniSkuKey(item?.parentSku) === "ke20");
+  return Boolean(journal)
+    && journal.status === "verified"
+    && String(journal.rawBody || "") === rawBody
+    && String(op.rawBody || "") === rawBody
+    && Number(op.baselinePrice) === 26500
+    && Number(op.baselineQuantity) === 10
+    && Number(op.proposedPrice) === 28000
+    && row.changed !== true
+    && !row.patch
+    && Number(row.oldPrice) === 28000
+    && Number(row.newPrice) === 28000
+    && Number(row.oldStock) === 10
+    && Number(row.newStock) === 10;
+}
+
+function applyVariantOperationGuards({ variantOperations, priceRows, blockers, pricePatchJournals }) {
   for (const op of variantOperations || []) {
     const status = String(op?.status || "");
     if (status === "in_progress") blockers.push("variant_patch_in_progress");
@@ -332,6 +366,7 @@ function applyVariantOperationGuards({ variantOperations, priceRows, blockers })
     if (status === "conflict") blockers.push("variant_baseline_conflict");
     const row = (priceRows || []).find((item) => String(item.variantId) === String(op?.variantId || ""));
     if (!row || !["approved", "pending_approval", "verified"].includes(status)) continue;
+    if (settledKe20PriceOperation(op, row, pricePatchJournals)) continue;
     const same = Number(op.baselinePrice) === Number(row.oldPrice)
       && Number(op.baselineQuantity) === Number(row.oldStock)
       && String(op.rawBody || "") === String(row.patch?.rawBody || "");

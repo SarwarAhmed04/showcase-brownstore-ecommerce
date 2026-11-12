@@ -205,3 +205,61 @@ export function ke20PriceNextStage(blueStatus, blackStatus) {
   if (blackStatus !== "verified") return "black";
   return "";
 }
+
+function verifiedKe20Journal(journals, stage) {
+  const spec = KE20_PRICE_PILOT[stage];
+  const rows = (journals || []).filter((row) => String(row?.variantId || "") === spec.id && giniSkuKey(row?.parentSku) === giniSkuKey(KE20_PRICE_PILOT.parentSku));
+  if (rows.length !== 1) return null;
+  const row = rows[0];
+  if (row.status !== "verified" || row.stage !== stage || String(row.rawBody || "") !== spec.rawBody) return null;
+  return row;
+}
+
+/**
+ * Describes the KE20 observation update after both verified price PATCHes.
+ * It does not write. The original approval baseline stays in the returned history.
+ */
+export function planKe20PostPatchReconciliation({ parent, variants, owner, identities, approvals, journals } = {}) {
+  const identity = resolveKe20PriceIdentity({ owner, identities });
+  const approval = assessKe20PriceApproval(approvals, identity);
+  const remote = assessKe20PriceState(parent, variants, "black", "after");
+  const blueJournal = verifiedKe20Journal(journals, "blue");
+  const blackJournal = verifiedKe20Journal(journals, "black");
+  const blockers = [
+    ...(identity.ok ? [] : identity.blockers),
+    ...(approval.ok ? [] : approval.blockers),
+    ...(remote.ok ? [] : remote.blockers),
+  ];
+  if (!blueJournal || !blackJournal) blockers.push("verified_journal_mismatch");
+  const history = (approvals || []).filter((row) => giniSkuKey(row?.parentSku) === "ke20").map((row) => ({
+    variantId: String(row.variantId || ""),
+    status: row.status || "",
+    baselinePrice: row.baselinePrice ?? null,
+    baselineQuantity: row.baselineQuantity ?? null,
+    proposedPrice: row.proposedPrice ?? null,
+    rawBody: row.rawBody || "",
+  }));
+  const ready = blockers.length === 0;
+  const observation = (stage) => ({
+    collection: "ginivariantidentities",
+    action: "set_verified_observation",
+    filter: {
+      productId: identity.productId,
+      approvedSku: KE20_PRICE_PILOT[stage].sku,
+      confirmedGiniVariantId: KE20_PRICE_PILOT[stage].id,
+    },
+    set: { lastVerifiedPrice: KE20_PRICE_PILOT.targetPrice, lastVerifiedQuantity: KE20_PRICE_PILOT.stock },
+    preserve: ["productId", "sourceVariantId", "sourceSizeId", "approvedSku", "confirmedGiniVariantId", "status"],
+  });
+  return {
+    ok: ready,
+    canApply: false,
+    writesEnabled: false,
+    applied: false,
+    parentSku: KE20_PRICE_PILOT.parentSku,
+    blockers,
+    historyPreserved: true,
+    history,
+    updates: ready ? [observation("blue"), observation("black")] : [],
+  };
+}
