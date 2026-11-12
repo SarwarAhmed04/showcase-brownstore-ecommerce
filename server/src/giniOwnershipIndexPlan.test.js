@@ -10,13 +10,17 @@ import test from "node:test";
 import { GiniVariantOwnershipOperation } from "./models/GiniVariantOwnershipOperation.js";
 import { OWNERSHIP_SAVE_INDEXES_READY, OWNERSHIP_SAVE_PILOT, OWNERSHIP_SAVE_RELEASED } from "./utils/giniVariantOwnershipAudit.js";
 import {
+  applyOwnershipIndexMigration,
   assessOwnershipIndexes,
+  decideOwnershipIndexMigration,
   decideSkuKeyIndexMigration,
   executeOwnershipIndexMigration,
+  OWNERSHIP_MIGRATION_COMMANDS,
   OWNERSHIP_OPERATION_COLLECTION,
   OWNERSHIP_SKUKEY_INDEX_MIGRATION_RELEASED,
   ownershipIndexMigrationPlan,
   readSkuKeyIndexState,
+  runOwnershipIndexMigration,
   runSkuKeyIndexMigration,
   SKUKEY_INDEX_COMMAND,
 } from "./utils/giniOwnershipIndexPlan.js";
@@ -85,79 +89,100 @@ test("ownership index migration is idempotent and does not run", () => {
 
 const PARENT_UNIQUE = [{ key: { skuKey: 1 }, unique: true, name: "skuKey_1" }];
 const OPERATION_KEY = [{ key: { operationKey: 1 }, unique: true, name: "operationKey_1" }];
+const VERIFIED_IDENTITY = {
+  databaseName: "brownstore",
+  loopback: true,
+  merchantHostMatches: true,
+  clientMaskMatches: true,
+  previewFingerprintMatches: true,
+};
 
-test("the skuKey index migration refuses duplicates and incompatible indexes", () => {
+function observed(extra = {}) {
+  return {
+    identity: VERIFIED_IDENTITY,
+    databaseName: "brownstore",
+    parentCollectionExists: true,
+    collectionExists: true,
+    operationIndexes: OPERATION_KEY,
+    parentOwnerIndexes: PARENT_UNIQUE,
+    documentCount: 0,
+    parentDocumentCount: 6,
+    ...extra,
+  };
+}
+
+test("the ownership index migration refuses duplicates, conflicts, and the wrong database", () => {
   assert.equal(OWNERSHIP_SKUKEY_INDEX_MIGRATION_RELEASED, false);
   assert.equal(OWNERSHIP_SAVE_RELEASED, false);
   assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
   assert.equal(OWNERSHIP_SAVE_PILOT.parentSku, "");
   assert.equal(OWNERSHIP_SAVE_PILOT.productId, "");
-  const readyToCreate = decideSkuKeyIndexMigration({
-    collectionExists: true,
-    operationIndexes: OPERATION_KEY,
-    parentOwnerIndexes: PARENT_UNIQUE,
+  const missingCollection = decideOwnershipIndexMigration(observed({
+    collectionExists: false,
+    operationIndexes: [],
     documentCount: 0,
-  });
+  }));
+  assert.equal(missingCollection.code, "ready_to_create");
+  assert.deepEqual(missingCollection.commands, [...OWNERSHIP_MIGRATION_COMMANDS]);
+  assert.deepEqual(missingCollection.actions, { createCollection: true, operationKey: true, skuKey: true });
+  assert.equal(missingCollection.executed, false);
+  const wrongDatabase = decideOwnershipIndexMigration(observed({
+    collectionExists: false,
+    operationIndexes: [],
+    identity: { ...VERIFIED_IDENTITY, previewFingerprintMatches: false },
+  }));
+  assert.equal(wrongDatabase.code, "database_identity_unverified");
+  assert.deepEqual(wrongDatabase.commands, []);
+  const readyToCreate = decideSkuKeyIndexMigration(observed());
   assert.equal(readyToCreate.code, "ready_to_create");
-  assert.equal(readyToCreate.command, SKUKEY_INDEX_COMMAND);
+  assert.deepEqual(readyToCreate.commands, [SKUKEY_INDEX_COMMAND]);
+  assert.equal(readyToCreate.actions.createCollection, false);
   assert.deepEqual(readyToCreate.writes, []);
-  const duplicates = decideSkuKeyIndexMigration({
-    collectionExists: true,
-    operationIndexes: OPERATION_KEY,
-    parentOwnerIndexes: PARENT_UNIQUE,
-    duplicateSkuKeyCount: 1,
-  });
+  const duplicates = decideSkuKeyIndexMigration(observed({ duplicateSkuKeyCount: 1 }));
   assert.equal(duplicates.code, "duplicate_sku_key");
   assert.equal(duplicates.executed, false);
-  const blank = decideSkuKeyIndexMigration({
-    collectionExists: true,
-    operationIndexes: OPERATION_KEY,
-    parentOwnerIndexes: PARENT_UNIQUE,
-    blankSkuKeyCount: 2,
-  });
+  const blank = decideSkuKeyIndexMigration(observed({ blankSkuKeyCount: 2 }));
   assert.equal(blank.code, "duplicate_sku_key");
-  const incompatible = decideSkuKeyIndexMigration({
-    collectionExists: true,
+  const duplicateOperation = decideOwnershipIndexMigration(observed({ duplicateOperationKeyCount: 1 }));
+  assert.equal(duplicateOperation.code, "duplicate_operation_key");
+  const incompatible = decideSkuKeyIndexMigration(observed({
     operationIndexes: [...OPERATION_KEY, { key: { skuKey: 1 }, unique: false, name: "skuKey_1" }],
-    parentOwnerIndexes: PARENT_UNIQUE,
-  });
+  }));
   assert.equal(incompatible.code, "incompatible_sku_key_index");
-  const sparse = decideSkuKeyIndexMigration({
-    collectionExists: true,
+  const sparse = decideSkuKeyIndexMigration(observed({
     operationIndexes: [...OPERATION_KEY, { key: { skuKey: 1 }, unique: true, sparse: true, name: "skuKey_1" }],
-    parentOwnerIndexes: PARENT_UNIQUE,
-  });
+  }));
   assert.equal(sparse.code, "incompatible_sku_key_index");
-  const compound = decideSkuKeyIndexMigration({
-    collectionExists: true,
+  const compound = decideSkuKeyIndexMigration(observed({
     operationIndexes: [...OPERATION_KEY, { key: { skuKey: 1, productId: 1 }, unique: true, name: "skuKey_1" }],
-    parentOwnerIndexes: PARENT_UNIQUE,
-  });
-  assert.equal(compound.code, "incompatible_sku_key_index");
-  const missingParent = decideSkuKeyIndexMigration({
-    collectionExists: true,
-    operationIndexes: OPERATION_KEY,
-    parentOwnerIndexes: [],
-  });
+  }));
+  assert.equal(compound.code, "unexpected_operation_index");
+  const badOperationKey = decideOwnershipIndexMigration(observed({
+    operationIndexes: [{ key: { operationKey: 1 }, unique: false, name: "operationKey_1" }],
+  }));
+  assert.equal(badOperationKey.code, "incompatible_operation_key_index");
+  const missingParent = decideSkuKeyIndexMigration(observed({ parentOwnerIndexes: [] }));
   assert.equal(missingParent.code, "parent_owner_index_not_unique");
-  const already = decideSkuKeyIndexMigration({
-    collectionExists: true,
+  const missingParentCollection = decideOwnershipIndexMigration(observed({
+    parentCollectionExists: false,
+    collectionExists: false,
+    operationIndexes: [],
+  }));
+  assert.equal(missingParentCollection.code, "parent_owner_collection_missing");
+  assert.deepEqual(missingParentCollection.commands, []);
+  const already = decideSkuKeyIndexMigration(observed({
     operationIndexes: [...OPERATION_KEY, { key: { skuKey: 1 }, unique: true, name: "skuKey_1" }],
-    parentOwnerIndexes: PARENT_UNIQUE,
-    documentCount: 0,
-  });
+  }));
   assert.equal(already.code, "already_ready");
-  assert.equal(already.command, null);
+  assert.deepEqual(already.commands, []);
   assert.deepEqual(already.writes, []);
-  const renamed = decideSkuKeyIndexMigration({
-    collectionExists: true,
+  const renamed = decideSkuKeyIndexMigration(observed({
     operationIndexes: [...OPERATION_KEY, { key: { skuKey: 1 }, unique: true, name: "sku_key_unique" }],
-    parentOwnerIndexes: PARENT_UNIQUE,
-  });
+  }));
   assert.equal(renamed.code, "already_ready");
 });
 
-test("the skuKey index migration stays disabled and performs no writes", async () => {
+test("the ownership index migration stays disabled and the mock migration is idempotent", async () => {
   let created = 0;
   let reads = 0;
   const result = await runSkuKeyIndexMigration({
@@ -165,20 +190,22 @@ test("the skuKey index migration stays disabled and performs no writes", async (
     confirm: true,
     readState: async () => {
       reads += 1;
-      return {
-        collectionExists: true,
-        operationIndexes: OPERATION_KEY,
-        parentOwnerIndexes: PARENT_UNIQUE,
-        documentCount: 0,
-      };
+      return observed({ collectionExists: false, operationIndexes: [] });
+    },
+    createCollection: async () => {
+      created += 1;
+    },
+    createOperationKeyIndex: async () => {
+      created += 1;
     },
     createSkuKeyIndex: async () => {
       created += 1;
     },
   });
-  assert.equal(result.code, "sku_key_index_migration_disabled");
+  assert.equal(result.code, "ownership_index_migration_disabled");
   assert.equal(result.executed, false);
   assert.equal(result.authorizesOwnershipSave, false);
+  assert.deepEqual(result.commands, [...OWNERSHIP_MIGRATION_COMMANDS]);
   assert.deepEqual(result.writes, []);
   assert.equal(created, 0);
   assert.equal(reads, 0);
@@ -186,37 +213,63 @@ test("the skuKey index migration stays disabled and performs no writes", async (
   const client = new MongoClient(memory.getUri());
   await client.connect();
   try {
-    const db = client.db("sku-key-migration");
-    const operations = db.collection(OWNERSHIP_OPERATION_COLLECTION);
-    await operations.createIndex({ operationKey: 1 }, { unique: true, name: "operationKey_1" });
-    await operations.insertMany([
+    const db = client.db("brownstore");
+    const parent = db.collection("ginivariantparentowners");
+    await parent.createIndex({ skuKey: 1 }, { unique: true, name: "skuKey_1" });
+    await parent.insertMany(["ke20", "efr-575d-1adf", "ei-8888", "71868", "69392", "75244"].map((skuKey) => ({ skuKey, status: "verified_remote" })));
+    const variants = db.collection("sentinelvariants");
+    await variants.insertOne({ sku: "38104" });
+    const readState = async () => ({ ...(await readSkuKeyIndexState(db)), identity: VERIFIED_IDENTITY });
+    const operations = () => db.collection(OWNERSHIP_OPERATION_COLLECTION);
+    const migration = {
+      readState,
+      createCollection: (name) => db.createCollection(name),
+      createOperationKeyIndex: (keys, options) => operations().createIndex(keys, options),
+      createSkuKeyIndex: (keys, options) => operations().createIndex(keys, options),
+    };
+    const dryRun = await applyOwnershipIndexMigration({ ...migration, dryRun: true, confirm: true });
+    assert.equal(dryRun.code, "ready_to_create");
+    assert.equal(dryRun.executed, false);
+    assert.deepEqual(dryRun.writes, []);
+    assert.equal((await db.listCollections({ name: OWNERSHIP_OPERATION_COLLECTION }).toArray()).length, 0);
+    const createdMigration = await applyOwnershipIndexMigration({ ...migration, dryRun: false, confirm: true });
+    assert.equal(createdMigration.code, "ownership_indexes_created");
+    assert.equal(createdMigration.authorizesOwnershipSave, false);
+    assert.deepEqual(createdMigration.writes, [
+      `${OWNERSHIP_OPERATION_COLLECTION}.createCollection`,
+      `${OWNERSHIP_OPERATION_COLLECTION}.createIndex(operationKey_1)`,
+      `${OWNERSHIP_OPERATION_COLLECTION}.createIndex(skuKey_1)`,
+    ]);
+    const indexes = await operations().listIndexes().toArray();
+    assert.equal(indexes.find((index) => index.name === "operationKey_1")?.unique, true);
+    assert.equal(indexes.find((index) => index.name === "skuKey_1")?.unique, true);
+    assert.equal(await operations().countDocuments(), 0);
+    assert.equal(await parent.countDocuments(), 6);
+    assert.equal(await variants.countDocuments(), 1);
+    const repeated = await applyOwnershipIndexMigration({ ...migration, dryRun: false, confirm: true });
+    assert.equal(repeated.code, "already_ready");
+    assert.equal(repeated.executed, false);
+    assert.deepEqual(repeated.writes, []);
+    await operations().dropIndex("skuKey_1");
+    await operations().insertMany([
       { operationKey: "a", skuKey: "38104", productId: "p1" },
       { operationKey: "b", skuKey: "38104", productId: "p2" },
     ]);
-    await db.collection("ginivariantparentowners").createIndex({ skuKey: 1 }, { unique: true, name: "skuKey_1" });
-    const duplicate = decideSkuKeyIndexMigration(await readSkuKeyIndexState(db));
+    const duplicate = await applyOwnershipIndexMigration({ ...migration, dryRun: false, confirm: true });
     assert.equal(duplicate.code, "duplicate_sku_key");
-    await operations.deleteMany({});
-    await operations.createIndex({ skuKey: 1 }, { unique: false, name: "skuKey_1" });
-    const conflict = decideSkuKeyIndexMigration(await readSkuKeyIndexState(db));
+    assert.equal(duplicate.executed, false);
+    assert.equal(await operations().countDocuments(), 2);
+    assert.equal((await operations().listIndexes().toArray()).some((index) => index.name === "skuKey_1"), false);
+    await operations().deleteMany({});
+    await operations().createIndex({ skuKey: 1 }, { unique: false, name: "skuKey_1" });
+    const conflict = await applyOwnershipIndexMigration({ ...migration, dryRun: false, confirm: true });
     assert.equal(conflict.code, "incompatible_sku_key_index");
-    await operations.dropIndex("skuKey_1");
-    const pending = decideSkuKeyIndexMigration(await readSkuKeyIndexState(db));
-    assert.equal(pending.code, "ready_to_create");
-    const namesBefore = (await operations.listIndexes().toArray()).map((index) => index.name).sort();
-    const disabled = await runSkuKeyIndexMigration({
-      dryRun: false,
-      confirm: true,
-      readState: () => readSkuKeyIndexState(db),
-      createSkuKeyIndex: (...args) => operations.createIndex(...args),
-    });
-    const namesAfter = (await operations.listIndexes().toArray()).map((index) => index.name).sort();
-    assert.equal(disabled.code, "sku_key_index_migration_disabled");
-    assert.deepEqual(namesAfter, namesBefore);
-    await operations.createIndex({ skuKey: 1 }, { unique: true, name: "skuKey_1" });
-    const idempotent = decideSkuKeyIndexMigration(await readSkuKeyIndexState(db));
-    assert.equal(idempotent.code, "already_ready");
-    assert.equal(await operations.countDocuments(), 0);
+    assert.equal(conflict.executed, false);
+    assert.notEqual((await operations().listIndexes().toArray()).find((index) => index.name === "skuKey_1")?.unique, true);
+    const disabled = await runOwnershipIndexMigration({ ...migration, dryRun: false, confirm: true });
+    assert.equal(disabled.code, "ownership_index_migration_disabled");
+    assert.equal(await parent.countDocuments(), 6);
+    assert.equal(await variants.countDocuments(), 1);
   } finally {
     await client.close();
     await memory.stop();
@@ -230,8 +283,9 @@ test("the skuKey index migration stays disabled and performs no writes", async (
   assert.equal(code, 0);
   assert.equal(printed.released, false);
   assert.equal(printed.dryRun, true);
-  assert.equal(printed.command, SKUKEY_INDEX_COMMAND);
-  assert.equal(printed.result.code, "sku_key_index_migration_disabled");
+  assert.equal(printed.executes, false);
+  assert.deepEqual(printed.commands, [...OWNERSHIP_MIGRATION_COMMANDS]);
+  assert.equal(printed.result.code, "ownership_index_migration_disabled");
   assert.equal(printed.result.executed, false);
   assert.equal(mongoose.connection.readyState, 0);
 });

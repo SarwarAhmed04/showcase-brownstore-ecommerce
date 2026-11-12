@@ -96,29 +96,63 @@ export function executeOwnershipIndexMigration() {
   };
 }
 
-export const OWNERSHIP_SKUKEY_INDEX_MIGRATION_RELEASED = false;
+export const OWNERSHIP_INDEX_MIGRATION_RELEASED = false;
+export const OWNERSHIP_SKUKEY_INDEX_MIGRATION_RELEASED = OWNERSHIP_INDEX_MIGRATION_RELEASED;
+export const VERIFIED_OWNERSHIP_DATABASE = "brownstore";
 
-export const SKUKEY_INDEX_COMMAND = `db.${OWNERSHIP_OPERATION_COLLECTION}.createIndex({ skuKey: 1 }, { unique: true, name: "skuKey_1" })`;
+export const SKUKEY_INDEX_COMMAND = createIndexCommand("skuKey", "skuKey_1");
+export const OPERATION_KEY_INDEX_COMMAND = createIndexCommand("operationKey", "operationKey_1");
+export const OWNERSHIP_MIGRATION_COMMANDS = Object.freeze([
+  `db.createCollection("${OWNERSHIP_OPERATION_COLLECTION}")`,
+  OPERATION_KEY_INDEX_COMMAND,
+  SKUKEY_INDEX_COMMAND,
+]);
 
-function skuKeyIndexes(indexes) {
-  return (indexes || []).filter((index) => Object.prototype.hasOwnProperty.call(index?.key || {}, "skuKey"));
+export function ownershipDatabaseIdentityAccepted(identity = {}) {
+  return identity?.databaseName === VERIFIED_OWNERSHIP_DATABASE
+    && identity?.loopback === true
+    && identity?.merchantHostMatches === true
+    && identity?.clientMaskMatches === true
+    && identity?.previewFingerprintMatches === true;
 }
 
-export function classifySkuKeyIndex(indexes) {
-  const present = skuKeyIndexes(indexes);
-  const correct = matchingUniqueOwnershipIndex(indexes, "skuKey");
+function indexesOnField(indexes, field) {
+  return (indexes || []).filter((index) => Object.prototype.hasOwnProperty.call(index?.key || {}, field));
+}
+
+export function classifyFieldIndex(indexes, field) {
+  const present = indexesOnField(indexes, field);
+  const correct = matchingUniqueOwnershipIndex(indexes, field);
   if (correct && present.length === 1) return { state: "ready", index: correct };
   if (present.length === 0) return { state: "missing", indexes: [] };
   return { state: "incompatible", indexes: present };
 }
 
-export function decideSkuKeyIndexMigration({
+export function classifySkuKeyIndex(indexes) {
+  return classifyFieldIndex(indexes, "skuKey");
+}
+
+function unexpectedOperationIndexes(indexes) {
+  return (indexes || []).filter((index) => {
+    if (index?.name === "_id_") return false;
+    const keys = indexKeys(index);
+    return !(keys.length === 1 && (keys[0] === "operationKey" || keys[0] === "skuKey"));
+  });
+}
+
+export function decideOwnershipIndexMigration({
+  identity = null,
+  databaseName = "",
+  parentCollectionExists = true,
   collectionExists = false,
   operationIndexes = [],
   parentOwnerIndexes = null,
+  duplicateOperationKeyCount = 0,
+  blankOperationKeyCount = 0,
   duplicateSkuKeyCount = 0,
   blankSkuKeyCount = 0,
   documentCount = 0,
+  parentDocumentCount = 0,
 } = {}) {
   const held = {
     ok: false,
@@ -128,28 +162,78 @@ export function decideSkuKeyIndexMigration({
     sentToGini: 0,
     modifiesDocuments: false,
     modifiesParentOwners: false,
+    modifiesVariantRecords: false,
     authorizesOwnershipSave: false,
     collection: OWNERSHIP_OPERATION_COLLECTION,
+    databaseName: databaseName || identity?.databaseName || "",
     documentCount: Number(documentCount) || 0,
-    command: SKUKEY_INDEX_COMMAND,
+    parentDocumentCount: Number(parentDocumentCount) || 0,
+    commands: [],
+    command: null,
+    actions: { createCollection: false, operationKey: false, skuKey: false },
   };
-  if (!collectionExists) return { ...held, code: "collection_missing" };
-  const parent = matchingUniqueOwnershipIndex(parentOwnerIndexes || [], "skuKey");
-  if (!parent) return { ...held, code: "parent_owner_index_not_unique" };
+  if (!ownershipDatabaseIdentityAccepted(identity) || databaseName !== identity.databaseName) {
+    return { ...held, code: "database_identity_unverified" };
+  }
+  if (parentCollectionExists === false) return { ...held, code: "parent_owner_collection_missing" };
+  if (!matchingUniqueOwnershipIndex(parentOwnerIndexes || [], "skuKey")) {
+    return { ...held, code: "parent_owner_index_not_unique" };
+  }
+  if (Number(duplicateOperationKeyCount) > 0 || Number(blankOperationKeyCount) > 1) {
+    return { ...held, code: "duplicate_operation_key" };
+  }
   if (Number(duplicateSkuKeyCount) > 0 || Number(blankSkuKeyCount) > 1) {
     return { ...held, code: "duplicate_sku_key" };
   }
-  const skuKey = classifySkuKeyIndex(operationIndexes);
+  if (!collectionExists) {
+    return {
+      ...held,
+      ok: true,
+      code: "ready_to_create",
+      commands: [...OWNERSHIP_MIGRATION_COMMANDS],
+      command: OWNERSHIP_MIGRATION_COMMANDS[0],
+      actions: { createCollection: true, operationKey: true, skuKey: true },
+    };
+  }
+  const unexpected = unexpectedOperationIndexes(operationIndexes);
+  if (unexpected.length) return { ...held, code: "unexpected_operation_index", observedIndexes: unexpected };
+  const operationKey = classifyFieldIndex(operationIndexes, "operationKey");
+  const skuKey = classifyFieldIndex(operationIndexes, "skuKey");
+  if (operationKey.state === "incompatible") {
+    return { ...held, code: "incompatible_operation_key_index", observedIndexes: operationKey.indexes };
+  }
   if (skuKey.state === "incompatible") {
     return { ...held, code: "incompatible_sku_key_index", observedIndexes: skuKey.indexes };
   }
-  if (skuKey.state === "ready") {
-    return { ...held, ok: true, code: "already_ready", command: null };
+  const commands = [];
+  const actions = { createCollection: false, operationKey: false, skuKey: false };
+  if (operationKey.state === "missing") {
+    commands.push(OPERATION_KEY_INDEX_COMMAND);
+    actions.operationKey = true;
   }
-  if (!matchingUniqueOwnershipIndex(operationIndexes, "operationKey")) {
-    return { ...held, code: "operation_key_index_missing" };
+  if (skuKey.state === "missing") {
+    commands.push(SKUKEY_INDEX_COMMAND);
+    actions.skuKey = true;
   }
-  return { ...held, ok: true, code: "ready_to_create" };
+  if (!commands.length) return { ...held, ok: true, code: "already_ready" };
+  return { ...held, ok: true, code: "ready_to_create", commands, command: commands[0], actions };
+}
+
+export function decideSkuKeyIndexMigration(observed = {}) {
+  return decideOwnershipIndexMigration(observed);
+}
+
+async function duplicateKeyCounts(collection, field) {
+  if (!collection) return { duplicateCount: 0, blankCount: 0 };
+  const groups = await collection.aggregate([
+    { $group: { _id: { $toLower: { $trim: { input: { $ifNull: [`$${field}`, ""] } } } }, count: { $sum: 1 } } },
+    { $match: { count: { $gt: 1 } } },
+  ]).toArray();
+  const blank = groups.find((row) => String(row._id || "") === "");
+  return {
+    duplicateCount: groups.filter((row) => String(row._id || "") !== "").length,
+    blankCount: blank ? blank.count : 0,
+  };
 }
 
 export async function readSkuKeyIndexState(db) {
@@ -159,64 +243,82 @@ export async function readSkuKeyIndexState(db) {
   const parentName = names.get(OWNERSHIP_PARENT_COLLECTION) || "";
   const operation = operationName ? db.collection(operationName) : null;
   const parent = parentName ? db.collection(parentName) : null;
-  const [operationIndexes, parentOwnerIndexes, documentCount, duplicateGroups] = await Promise.all([
+  const [operationIndexes, parentOwnerIndexes, documentCount, parentDocumentCount, operationKeys, skuKeys] = await Promise.all([
     operation ? operation.listIndexes().toArray() : [],
     parent ? parent.listIndexes().toArray() : [],
     operation ? operation.countDocuments() : 0,
-    operation ? operation.aggregate([
-      { $group: { _id: { $toLower: { $trim: { input: { $ifNull: ["$skuKey", ""] } } } }, count: { $sum: 1 } } },
-      { $match: { count: { $gt: 1 } } },
-    ]).toArray() : [],
+    parent ? parent.countDocuments() : 0,
+    duplicateKeyCounts(operation, "operationKey"),
+    duplicateKeyCounts(operation, "skuKey"),
   ]);
-  const blankGroup = duplicateGroups.find((row) => String(row._id || "") === "");
   return {
+    databaseName: db.databaseName,
+    parentCollectionExists: Boolean(parentName),
     collectionExists: Boolean(operationName),
     operationIndexes,
     parentOwnerIndexes,
-    duplicateSkuKeyCount: duplicateGroups.filter((row) => String(row._id || "") !== "").length,
-    blankSkuKeyCount: blankGroup ? blankGroup.count : 0,
+    duplicateOperationKeyCount: operationKeys.duplicateCount,
+    blankOperationKeyCount: operationKeys.blankCount,
+    duplicateSkuKeyCount: skuKeys.duplicateCount,
+    blankSkuKeyCount: skuKeys.blankCount,
     documentCount,
+    parentDocumentCount,
   };
 }
 
-export async function runSkuKeyIndexMigration({
+export async function applyOwnershipIndexMigration({
   readState,
+  createCollection,
+  createOperationKeyIndex,
   createSkuKeyIndex,
   dryRun = true,
   confirm = false,
 } = {}) {
-  if (OWNERSHIP_SKUKEY_INDEX_MIGRATION_RELEASED !== true) {
-    return {
-      ok: false,
-      executed: false,
-      dryRun: true,
-      code: "sku_key_index_migration_disabled",
-      writes: [],
-      sentToGini: 0,
-      modifiesDocuments: false,
-      modifiesParentOwners: false,
-      authorizesOwnershipSave: false,
-      command: SKUKEY_INDEX_COMMAND,
-    };
-  }
   const before = await readState();
-  const decision = decideSkuKeyIndexMigration(before);
-  if (dryRun !== false || confirm !== true || decision.code !== "ready_to_create") {
-    return { ...decision, executed: false, writes: [], dryRun: true };
+  const decision = decideOwnershipIndexMigration(before);
+  const stopped = {
+    ...decision,
+    executed: false,
+    writes: [],
+    dryRun: true,
+    modifiesDocuments: false,
+    modifiesParentOwners: false,
+    modifiesVariantRecords: false,
+    authorizesOwnershipSave: false,
+    sentToGini: 0,
+  };
+  if (dryRun !== false || confirm !== true || decision.code !== "ready_to_create") return stopped;
+  const writes = [];
+  if (decision.actions.createCollection) {
+    await createCollection(OWNERSHIP_OPERATION_COLLECTION);
+    writes.push(`${OWNERSHIP_OPERATION_COLLECTION}.createCollection`);
   }
-  await createSkuKeyIndex({ skuKey: 1 }, { unique: true, name: "skuKey_1" });
+  if (decision.actions.operationKey) {
+    await createOperationKeyIndex({ operationKey: 1 }, { unique: true, name: "operationKey_1" });
+    writes.push(`${OWNERSHIP_OPERATION_COLLECTION}.createIndex(operationKey_1)`);
+  }
+  if (decision.actions.skuKey) {
+    await createSkuKeyIndex({ skuKey: 1 }, { unique: true, name: "skuKey_1" });
+    writes.push(`${OWNERSHIP_OPERATION_COLLECTION}.createIndex(skuKey_1)`);
+  }
   const after = await readState();
-  const verified = decideSkuKeyIndexMigration(after);
-  if (verified.code !== "already_ready" || after.documentCount !== before.documentCount) {
+  const verified = decideOwnershipIndexMigration(after);
+  const unchanged = after.documentCount === before.documentCount && after.parentDocumentCount === before.parentDocumentCount;
+  if (verified.code !== "already_ready" || !unchanged) {
     return {
-      ...decision,
       ok: false,
       executed: true,
       dryRun: false,
       code: "index_verification_failed",
-      writes: [`${OWNERSHIP_OPERATION_COLLECTION}.createIndex`],
+      writes,
       documentCount: after.documentCount,
+      parentDocumentCount: after.parentDocumentCount,
       verified,
+      modifiesDocuments: false,
+      modifiesParentOwners: false,
+      modifiesVariantRecords: false,
+      authorizesOwnershipSave: false,
+      sentToGini: 0,
     };
   }
   return {
@@ -224,8 +326,37 @@ export async function runSkuKeyIndexMigration({
     ok: true,
     executed: true,
     dryRun: false,
-    code: "sku_key_index_created",
-    writes: [`${OWNERSHIP_OPERATION_COLLECTION}.createIndex`],
+    code: "ownership_indexes_created",
+    writes,
     documentCount: after.documentCount,
+    parentDocumentCount: after.parentDocumentCount,
+    modifiesDocuments: false,
+    modifiesParentOwners: false,
+    modifiesVariantRecords: false,
+    authorizesOwnershipSave: false,
+    sentToGini: 0,
   };
+}
+
+export async function runOwnershipIndexMigration(options = {}) {
+  if (OWNERSHIP_INDEX_MIGRATION_RELEASED !== true) {
+    return {
+      ok: false,
+      executed: false,
+      dryRun: true,
+      code: "ownership_index_migration_disabled",
+      writes: [],
+      sentToGini: 0,
+      modifiesDocuments: false,
+      modifiesParentOwners: false,
+      modifiesVariantRecords: false,
+      authorizesOwnershipSave: false,
+      commands: [...OWNERSHIP_MIGRATION_COMMANDS],
+    };
+  }
+  return applyOwnershipIndexMigration(options);
+}
+
+export async function runSkuKeyIndexMigration(options = {}) {
+  return runOwnershipIndexMigration(options);
 }
