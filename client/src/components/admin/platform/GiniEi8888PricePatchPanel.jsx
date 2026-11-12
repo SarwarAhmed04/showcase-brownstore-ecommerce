@@ -52,6 +52,7 @@ export default function GiniEi8888PricePatchPanel() {
             Ownership {preview.ownership?.ok ? "matches" : `blocked (${(preview.ownership?.blockers || []).join(", ") || "unread"})`}.
             Approval {preview.approval?.ok ? "matches" : `blocked (${(preview.approval?.blockers || []).join(", ") || "unread"})`}.
             Commission {preview.commission?.ok ? "matches 5.5%" : `blocked (${(preview.commission?.blockers || []).join(", ") || "unread"})`}.
+            {preview.commissionRefresh ? ` Snapshot refresh ${preview.commissionRefresh.applied ? "applied" : preview.commissionRefresh.ok ? "ready, not applied" : `blocked (${(preview.commissionRefresh.blockers || []).join(", ") || "unread"})`}.` : ""}
           </p>
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />

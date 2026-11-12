@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { after, describe, it } from "node:test";
 import { performGiniJsonRequest, setGiniFetch } from "./services/giniConnection.js";
-import { previewEi8888PricePatch, previewKe20PricePatch, resolvePricePilotCommissionSnapshot, runEi8888PricePatch, runKe20PricePatch } from "./services/giniVariantPricePatch.js";
+import { previewEi8888PricePatch, previewKe20PricePatch, refreshEi8888CommissionSnapshot, resolvePricePilotCommissionSnapshot, runEi8888PricePatch, runKe20PricePatch } from "./services/giniVariantPricePatch.js";
 import { applyCommissionRate } from "./utils/commission.js";
 import { signGiniRequest } from "./utils/giniSigner.js";
 import {
@@ -1018,5 +1018,250 @@ describe("EI-8888 sequential price PATCH", () => {
     assert.equal(panel.includes("GINI_EI8888_PRICE_PATCH_ENABLED=true"), false);
     assert.equal(EI8888_BLUE_PRICE_PATCH_RAW_BODY, "{\"variant_id\":164312,\"price\":126500}");
     assert.equal(EI8888_PURPLE_PRICE_PATCH_RAW_BODY, "{\"variant_id\":164313,\"price\":126500}");
+  });
+});
+
+function sokanyFilter(percentage, targetId = "vendor-sokany|_ALL_|category-1|_ALL_|_ALL_") {
+  return {
+    scope: "filter",
+    percentage,
+    isActive: true,
+    targetId,
+    targetName: { en: "Sokany" },
+    vendorId: "vendor-sokany",
+    brandId: "",
+    categoryId: "category-1",
+    subCategoryId: "",
+    collectionId: "",
+  };
+}
+
+function eiCatalogProduct(productId, { ownPrice = 119750 } = {}) {
+  const size = (id) => ({ _id: id, size: "One", stockQuantity: 10, ...(ownPrice == null ? {} : { price: ownPrice }) });
+  return {
+    _id: productId,
+    price: 119750,
+    createdBy: { _id: "vendor-sokany" },
+    brand: { _id: "brand-1" },
+    category: { _id: "category-1" },
+    subCategory: { _id: "sub-1" },
+    collectionName: { _id: "col-1" },
+    variants: [
+      { _id: "blue-source", color: "Blue", sizes: [size("blue-size")] },
+      { _id: "purple-source", color: "Purple", sizes: [size("purple-size")] },
+    ],
+  };
+}
+
+function legacyEiApprovals(productId) {
+  return [164312, 164313].map((variantId, index) => ({
+    operationKey: `ei-8888:${variantId}`,
+    parentSku: "EI-8888",
+    productId,
+    variantId: String(variantId),
+    variantSku: index === 0 ? "EI-8888-BLUE" : "EI-8888-PURPLE",
+    status: "approved",
+    baselinePrice: 119750,
+    baselineQuantity: 10,
+    proposedPrice: 126500,
+    rawBody: index === 0 ? EI8888_BLUE_PRICE_PATCH_RAW_BODY : EI8888_PURPLE_PRICE_PATCH_RAW_BODY,
+  }));
+}
+
+function eiRemoteBaseline() {
+  return {
+    parent: { state: "present", id: "618651", sku: "EI-8888", quantity: 20, price: 119750, visibility: "hidden" },
+    variants: [
+      { normalized: true, id: "164312", sku: "EI-8888-BLUE", price: 119750, quantity: 10 },
+      { normalized: true, id: "164313", sku: "EI-8888-PURPLE", price: 119750, quantity: 10 },
+    ],
+  };
+}
+
+describe("EI-8888 commission snapshot refresh", () => {
+  const productId = EI_PRODUCTION;
+  const rules = [sokanyFilter(5.5), { scope: "all", percentage: 10, isActive: true, targetId: "all", targetName: { en: "All products" } }];
+  const legacy = {
+    ...eiRecords(productId, { approvals: legacyEiApprovals(productId), commissionSnapshot: null }),
+  };
+
+  function refreshInput(overrides = {}) {
+    const saves = [];
+    return {
+      saves,
+      input: {
+        confirm: false,
+        skipRemote: true,
+        remote: eiRemoteBaseline(),
+        product: eiCatalogProduct(productId),
+        rules,
+        owner: legacy.owner,
+        identities: legacy.identities,
+        approvals: legacy.approvals.map((row) => ({ ...row })),
+        store: {
+          async save(doc) {
+            saves.push(doc);
+            return true;
+          },
+        },
+        ...overrides,
+      },
+    };
+  }
+
+  it("keeps a pre-deployment approval blocked until a confirmed snapshot refresh", async () => {
+    const preview = await previewEi8888PricePatch({
+      env: {},
+      host: "merchant.gini.iq",
+      remote: eiRemoteBaseline(),
+      operation: eiJournal(),
+      skipConnection: true,
+      product: eiCatalogProduct(productId),
+      rules,
+      owner: legacy.owner,
+      identities: legacy.identities,
+      approvals: legacy.approvals,
+    });
+    assert.equal(preview.baseline.ok, true);
+    assert.equal(preview.ownership.ok, true);
+    assert.equal(preview.approval.ok, true);
+    assert.equal(preview.commission.ok, false);
+    assert.equal(preview.commission.blockers.includes("commission_snapshot_missing"), true);
+    assert.equal(preview.commissionRefresh.ok, true);
+    assert.equal(preview.commissionRefresh.applied, false);
+    assert.equal(preview.commissionRefresh.snapshot.scope, "filter");
+    assert.equal(preview.commissionRefresh.snapshot.percentage, rules[0].percentage);
+    assert.equal(preview.commissionRefresh.snapshot.giniPrice, 126500);
+    assert.equal(preview.writesEnabled, false);
+    assert.equal(preview.readyForConfirmation, false);
+    assert.equal(preview.sent, false);
+
+    const { saves, input } = refreshInput();
+    const dry = await refreshEi8888CommissionSnapshot(input);
+    assert.equal(dry.applied, false);
+    assert.equal(dry.ok, true);
+    assert.equal(saves.length, 0);
+    assert.equal(input.approvals.every((row) => row.commissionSnapshot == null), true);
+
+    const confirmed = await refreshEi8888CommissionSnapshot({ ...input, confirm: true });
+    assert.equal(confirmed.applied, true);
+    assert.equal(confirmed.sent, false);
+    assert.equal(confirmed.liveSend, false);
+    assert.equal(saves.length, 2);
+    assert.deepEqual(saves.map((row) => Object.keys(row).sort()), [["commissionSnapshot", "operationKey"], ["commissionSnapshot", "operationKey"]]);
+    assert.equal(saves.every((row) => row.commissionSnapshot.percentage === rules[0].percentage), true);
+    assert.equal(saves.every((row) => row.commissionSnapshot.scope === "filter" && row.commissionSnapshot.targetId === rules[0].targetId), true);
+    assert.equal(saves.every((row) => row.baselinePrice == null && row.proposedPrice == null && row.rawBody == null), true);
+
+    const storedApprovals = input.approvals.map((row, index) => ({ ...row, commissionSnapshot: saves[index].commissionSnapshot }));
+    const released = await previewEi8888PricePatch({
+      env: {},
+      host: "merchant.gini.iq",
+      remote: eiRemoteBaseline(),
+      operation: eiJournal(),
+      skipConnection: true,
+      product: eiCatalogProduct(productId),
+      rules,
+      owner: legacy.owner,
+      identities: legacy.identities,
+      approvals: storedApprovals,
+    });
+    assert.equal(released.commission.ok, true);
+    assert.equal(released.commissionRefresh.applied, false);
+    assert.equal(released.readyForConfirmation, false);
+    assert.equal(KE20_BLUE_PRICE_PATCH_RAW_BODY, "{\"variant_id\":164306,\"price\":28000}");
+    assert.equal(KE20_BLACK_PRICE_PATCH_RAW_BODY, "{\"variant_id\":164307,\"price\":28000}");
+  });
+
+  it("quotes from the parent selling price when a variant has no own price", async () => {
+    const snapshot = await resolvePricePilotCommissionSnapshot({
+      pilot: EI8888_PRICE_PILOT,
+      stageOrder: ["blue", "purple"],
+      productId,
+      identities: legacy.identities,
+      product: eiCatalogProduct(productId, { ownPrice: null }),
+      rules,
+    });
+    assert.equal(snapshot.percentage, rules[0].percentage);
+    assert.equal(snapshot.basePrice, 119750);
+    assert.equal(snapshot.giniPrice, 126500);
+    assert.equal(snapshot.scope, "filter");
+  });
+
+  it("rejects a missing, changed, ambiguous, or mismatched commission before any write", async () => {
+    const missing = refreshInput({ rules: [] });
+    const missingResult = await refreshEi8888CommissionSnapshot({ ...missing.input, confirm: true });
+    assert.equal(missingResult.applied, false);
+    assert.equal(missingResult.blockers.includes("commission_rule_missing"), true);
+    assert.equal(missing.saves.length, 0);
+    assert.equal(missingResult.snapshot, null);
+
+    const changed = refreshInput({ rules: [sokanyFilter(7), rules[1]] });
+    const changedResult = await refreshEi8888CommissionSnapshot({ ...changed.input, confirm: true });
+    assert.equal(changedResult.applied, false);
+    assert.equal(changedResult.blockers.includes("commission_rule_changed"), true);
+    assert.equal(changed.saves.length, 0);
+
+    const ambiguous = refreshInput({
+      rules: [sokanyFilter(5.5, "sokany-a"), sokanyFilter(5.5, "sokany-b"), rules[1]],
+    });
+    const ambiguousResult = await refreshEi8888CommissionSnapshot({ ...ambiguous.input, confirm: true });
+    assert.equal(ambiguousResult.applied, false);
+    assert.equal(ambiguousResult.blockers.includes("commission_rule_ambiguous"), true);
+    assert.equal(ambiguous.saves.length, 0);
+
+    const mismatched = refreshInput({
+      approvals: legacy.approvals.map((row) => ({ ...row, proposedPrice: 130000 })),
+    });
+    const mismatchedResult = await refreshEi8888CommissionSnapshot({ ...mismatched.input, confirm: true });
+    assert.equal(mismatchedResult.applied, false);
+    assert.equal(mismatchedResult.blockers.includes("blue_approval_missing"), true);
+    assert.equal(mismatchedResult.blockers.includes("purple_approval_missing"), true);
+    assert.equal(mismatched.saves.length, 0);
+
+    const stored = legacy.approvals.map((row) => ({
+      ...row,
+      commissionSnapshot: { percentage: 5.5, basePrice: 119750, giniPrice: 126500, scope: "filter", targetId: rules[0].targetId },
+    }));
+    const drifted = refreshInput({ approvals: stored, rules: [sokanyFilter(7), rules[1]] });
+    const driftedResult = await refreshEi8888CommissionSnapshot({ ...drifted.input, confirm: true });
+    assert.equal(driftedResult.applied, false);
+    assert.equal(driftedResult.blockers.includes("commission_rule_changed"), true);
+    assert.equal(drifted.saves.length, 0);
+    assert.equal(stored.every((row) => row.proposedPrice === 126500 && row.baselinePrice === 119750), true);
+
+    const preview = await previewEi8888PricePatch({
+      env: {},
+      host: "merchant.gini.iq",
+      remote: eiRemoteBaseline(),
+      operation: eiJournal(),
+      skipConnection: true,
+      product: eiCatalogProduct(productId),
+      rules: [sokanyFilter(7)],
+      owner: legacy.owner,
+      identities: legacy.identities,
+      approvals: stored,
+    });
+    assert.equal(preview.commission.ok, false);
+    assert.equal(preview.commission.blockers.includes("commission_rule_changed"), true);
+    assert.equal(preview.readyForConfirmation, false);
+  });
+
+  it("does not let the snapshot refresh touch KE20 journals or enable a GINI write", () => {
+    const service = fs.readFileSync(new URL("./services/giniVariantPricePatch.js", import.meta.url), "utf8");
+    const route = fs.readFileSync(new URL("./routes/giniConnection.js", import.meta.url), "utf8");
+    const refreshStart = service.indexOf("async function planCommissionSnapshotRefresh");
+    const refreshEnd = service.indexOf("const ke20Runner");
+    const refreshSource = service.slice(refreshStart, refreshEnd);
+    assert.equal(refreshStart > 0, true);
+    assert.equal(refreshSource.includes("GiniVariantPricePatch"), false);
+    assert.equal(refreshSource.includes("KE20"), false);
+    assert.equal(refreshSource.includes("5.5"), false);
+    assert.equal(refreshSource.includes("miswag"), false);
+    assert.equal(refreshSource.includes("elryan"), false);
+    assert.equal(refreshSource.includes("ibsher"), false);
+    assert.equal(route.includes("variant-sync/ei8888-price-patch/commission-snapshot"), true);
+    assert.equal(route.includes("confirm: req.body?.confirm === true"), true);
+    assert.equal(service.includes("EI-8888"), false);
   });
 });

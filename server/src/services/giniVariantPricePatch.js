@@ -1,5 +1,7 @@
 import { Commission } from "../models/Commission.js";
 import { Product } from "../models/Product.js";
+import { explainCommissionMatch } from "../utils/commission.js";
+import { partnerPricePreview } from "../utils/partnerCatalog.js";
 import { GiniVariantChangedOperation } from "../models/GiniVariantChangedOperation.js";
 import { GiniVariantIdentity } from "../models/GiniVariantIdentity.js";
 import { GiniVariantParentOwner } from "../models/GiniVariantParentOwner.js";
@@ -139,14 +141,26 @@ function createRunner(pilot, api) {
     const statuses = Object.fromEntries(api.stageOrder.map((stage) => [stage, saved[stage]?.status]));
     const nextStage = api.nextStage(statuses);
     const baseline = nextStage ? api.assessState(remote.parent, remote.variants, nextStage, "before") : { ok: true, blockers: [] };
-    let commissionSnapshot = deps.commissionSnapshot;
-    if (api.requiresCommission && commissionSnapshot === undefined && deps.skipDatabase !== true) {
-      commissionSnapshot = await resolvePricePilotCommissionSnapshot({
+    let commissionSnapshot;
+    let commissionRefresh = null;
+    if (api.requiresCommission && deps.commissionSnapshot !== undefined) {
+      commissionSnapshot = deps.commissionSnapshot;
+    } else if (api.requiresCommission) {
+      const refresh = await planCommissionSnapshotRefresh({
         pilot,
-        stageOrder: api.stageOrder,
-        productId: owner?.productId,
+        api,
+        confirm: false,
+        owner,
         identities,
+        approvals,
+        remote,
+        skipRemote: true,
+        product: deps.product,
+        rules: deps.rules,
+        store: { async save() { throw new Error("commission_snapshot_write_blocked"); } },
       });
+      commissionRefresh = refresh;
+      commissionSnapshot = gateCommissionSnapshot(approvals, pilot, api.stageOrder, refresh);
     }
     const ownership = api.resolveIdentity({ owner, identities });
     const approval = api.assessApproval(approvals, ownership);
@@ -168,6 +182,7 @@ function createRunner(pilot, api) {
       ownership,
       approval,
       ...(commission ? { commission } : {}),
+      ...(commissionRefresh ? { commissionRefresh } : {}),
       readyForConfirmation: Boolean(nextStage) && writesEnabled && host === KE20_REQUIRED_HOST && baseline.ok && ownership.ok && approval.ok && (commission ? commission.ok : true) && !locked && request.ok,
     });
   }
@@ -302,8 +317,20 @@ function createRunner(pilot, api) {
     const owner = await GiniVariantParentOwner.findOne({ skuKey: giniSkuKey(pilot.parentSku) }).lean();
     const identities = await GiniVariantIdentity.find({ parentSkuKey: giniSkuKey(pilot.parentSku) }).lean();
     const approvals = await GiniVariantChangedOperation.find({ parentSku: pilot.parentSku }).lean();
+    const refresh = api.requiresCommission
+      ? await planCommissionSnapshotRefresh({
+          pilot,
+          api,
+          confirm: false,
+          owner,
+          identities,
+          approvals,
+          skipRemote: true,
+          store: { async save() { throw new Error("commission_snapshot_write_blocked"); } },
+        })
+      : null;
     const commissionSnapshot = api.requiresCommission
-      ? await resolvePricePilotCommissionSnapshot({ pilot, stageOrder: api.stageOrder, productId: owner?.productId, identities })
+      ? gateCommissionSnapshot(approvals, pilot, api.stageOrder, refresh)
       : undefined;
     return run({
       stage,
@@ -332,30 +359,215 @@ export async function resolvePricePilotCommissionSnapshot({
   const commissionRules = rules !== undefined ? rules : await Commission.find({ partner: "gini", isActive: { $ne: false } }).lean();
   if (!doc || !productId) return null;
   const combos = variationCombinations(doc);
+  const priced = partnerPricePreview(doc, commissionRules);
   const quotes = [];
   for (const stage of stageOrder || []) {
     const rowSpec = pilot[stage];
-    const identity = (identities || []).find((row) => String(row?.confirmedGiniVariantId || "") === rowSpec.id && giniSkuKey(row?.approvedSku) === giniSkuKey(rowSpec.sku));
+    const identity = (identities || []).find((row) => {
+      const sku = giniSkuKey(row?.approvedSku || row?.approvedSkuKey);
+      return String(row?.confirmedGiniVariantId || "") === rowSpec.id
+        && sku === giniSkuKey(rowSpec.sku)
+        && String(row?.productId || "") === String(productId);
+    });
     if (!identity) return null;
     const combo = combos.find((row) => String(row.sourceVariantId) === String(identity.sourceVariantId) && String(row.sourceSizeId) === String(identity.sourceSizeId));
-    if (!combo || combo.ownPrice == null) return null;
-    quotes.push(quoteVariantGiniPrice({
+    if (!combo) return null;
+    const quote = quoteVariantGiniPrice({
       product: doc,
       rules: commissionRules,
       ownPrice: combo.ownPrice,
-      parentStorePrice: doc.price,
-      parentPriceReview: doc.priceReview === true,
-    }));
+      parentStorePrice: priced.priceReview === true ? null : priced.storePrice,
+      parentPriceReview: priced.priceReview === true,
+    });
+    if (quote.basePrice == null || !Number.isInteger(quote.giniPrice)) return null;
+    quotes.push(quote);
   }
   if (!quotes.length || quotes.length !== (stageOrder || []).length) return null;
   const first = quotes[0];
   const agreed = quotes.every((row) => row.rate === first.rate && row.basePrice === first.basePrice && row.giniPrice === first.giniPrice);
-  if (!agreed) return { percentage: first.rate, basePrice: first.basePrice, giniPrice: null, scope: first.commission?.scope || "" };
+  if (!agreed) return { percentage: first.rate, basePrice: first.basePrice, giniPrice: null, scope: first.commission?.scope || "", targetId: first.commission?.targetId || "" };
   return {
     percentage: first.rate,
     basePrice: first.basePrice,
     giniPrice: first.giniPrice,
     scope: first.commission?.scope || "",
+    targetId: first.commission?.targetId || "",
+  };
+}
+
+function storedCommissionSnapshot(approvals, pilot, stageOrder) {
+  const rows = (stageOrder || []).map((stage) => {
+    const rowSpec = pilot[stage];
+    return (approvals || []).filter((row) => String(row?.variantId || "") === rowSpec.id
+      && giniSkuKey(row?.parentSku) === giniSkuKey(pilot.parentSku)
+      && row?.status === "approved");
+  });
+  if (rows.some((list) => list.length !== 1)) return null;
+  const snapshots = rows.map((list) => list[0].commissionSnapshot || null);
+  if (snapshots.some((item) => !item || item.percentage == null || item.basePrice == null || item.giniPrice == null)) return null;
+  const first = snapshots[0];
+  const same = snapshots.every((item) => Number(item.percentage) === Number(first.percentage)
+    && Number(item.basePrice) === Number(first.basePrice)
+    && Number(item.giniPrice) === Number(first.giniPrice)
+    && String(item.scope || "") === String(first.scope || "")
+    && String(item.targetId || "") === String(first.targetId || ""));
+  if (!same) return { conflict: "mismatched" };
+  return {
+    percentage: Number(first.percentage),
+    basePrice: Number(first.basePrice),
+    giniPrice: Number(first.giniPrice),
+    scope: String(first.scope || ""),
+    targetId: String(first.targetId || ""),
+  };
+}
+
+function gateCommissionSnapshot(approvals, pilot, stageOrder, refresh) {
+  const stored = storedCommissionSnapshot(approvals, pilot, stageOrder);
+  const blockers = new Set(refresh?.blockers || []);
+  if (stored?.conflict === "mismatched") return { conflict: "mismatched" };
+  if (!stored) return null;
+  if (blockers.has("commission_rule_changed")) return { ...stored, conflict: "changed" };
+  if (blockers.has("commission_rule_ambiguous")) return { ...stored, conflict: "ambiguous" };
+  if (blockers.has("commission_rule_missing")) return { ...stored, conflict: "missing_rule" };
+  return stored;
+}
+
+function sameCommissionSnapshot(left, right) {
+  return Number(left?.percentage) === Number(right?.percentage)
+    && Number(left?.basePrice) === Number(right?.basePrice)
+    && Number(left?.giniPrice) === Number(right?.giniPrice)
+    && String(left?.scope || "") === String(right?.scope || "")
+    && String(left?.targetId || "") === String(right?.targetId || "");
+}
+
+function mongoCommissionSnapshotStore(pilot) {
+  return {
+    async save(doc) {
+      const result = await GiniVariantChangedOperation.updateOne(
+        { operationKey: doc.operationKey, parentSku: pilot.parentSku, status: "approved" },
+        { $set: { commissionSnapshot: doc.commissionSnapshot } }
+      );
+      return result.matchedCount === 1;
+    },
+  };
+}
+
+async function planCommissionSnapshotRefresh({
+  pilot,
+  api,
+  confirm = false,
+  product,
+  rules,
+  owner,
+  identities,
+  approvals,
+  remote,
+  store = null,
+  skipRemote = false,
+  performGet = null,
+} = {}) {
+  const blockers = [];
+  const loadedOwner = owner === undefined ? await GiniVariantParentOwner.findOne({ skuKey: giniSkuKey(pilot.parentSku) }).lean() : owner;
+  const loadedIdentities = identities === undefined
+    ? await GiniVariantIdentity.find({ parentSkuKey: giniSkuKey(pilot.parentSku) }).lean()
+    : identities;
+  const loadedApprovals = approvals === undefined
+    ? await GiniVariantChangedOperation.find({ parentSku: pilot.parentSku }).lean()
+    : approvals;
+  const productId = String(loadedOwner?.productId || "");
+  let doc = product;
+  if (product === undefined) {
+    try {
+      doc = productId ? await Product.findById(productId).lean() : null;
+    } catch {
+      doc = null;
+    }
+  }
+  let commissionRules = rules;
+  if (rules === undefined) {
+    commissionRules = await Commission.find({ partner: "gini", isActive: { $ne: false } }).lean();
+  }
+  let seen = remote;
+  if (!seen && skipRemote !== true && performGet) {
+    try {
+      const parentPath = `/api/v2.0/third-party/products/${encodeURIComponent(pilot.parentSku)}`;
+      const read = async (request) => {
+        if (String(request?.method || "GET").toUpperCase() !== "GET") throw new Error("price_patch_write_blocked");
+        return performGet(request);
+      };
+      seen = {
+        parent: api.readParent(await read({ method: "GET", path: parentPath })),
+        variants: api.readVariants(await read({ method: "GET", path: `${parentPath}/variants` })),
+      };
+    } catch {
+      seen = null;
+    }
+  }
+  const ownership = api.resolveIdentity({ owner: loadedOwner, identities: loadedIdentities });
+  if (!ownership.ok) blockers.push(...ownership.blockers);
+  const approval = api.assessApproval(loadedApprovals, ownership);
+  if (!approval.ok) blockers.push(...approval.blockers);
+  if (!seen || seen.parent == null || seen.variants == null) blockers.push("remote_not_confirmed");
+  else {
+    const state = api.assessState(seen.parent, seen.variants, api.stageOrder[0], "before");
+    if (!state.ok) blockers.push(...state.blockers.map((code) => `remote_${code}`));
+  }
+  const targets = [];
+  for (const stage of api.stageOrder) {
+    const rowSpec = pilot[stage];
+    const rows = (loadedApprovals || []).filter((row) => String(row?.variantId || "") === rowSpec.id
+      && giniSkuKey(row?.parentSku) === giniSkuKey(pilot.parentSku)
+      && row?.status === "approved");
+    if (rows.length !== 1 || !rows[0].operationKey) blockers.push("approval_key_missing");
+    else targets.push(rows[0]);
+  }
+  const explained = explainCommissionMatch(doc, commissionRules);
+  const quote = await resolvePricePilotCommissionSnapshot({
+    pilot,
+    stageOrder: api.stageOrder,
+    productId,
+    identities: loadedIdentities,
+    product: doc,
+    rules: commissionRules,
+  });
+  if (!quote) blockers.push("commission_snapshot_missing");
+  if (!explained.rule) blockers.push("commission_rule_missing");
+  else if (explained.ambiguous) blockers.push("commission_rule_ambiguous");
+  else if (quote) {
+    const judged = api.assessCommission(quote);
+    if (!judged.ok) blockers.push("commission_rule_changed", ...judged.blockers);
+  }
+  const stored = storedCommissionSnapshot(loadedApprovals, pilot, api.stageOrder);
+  if (stored?.conflict === "mismatched") blockers.push("commission_snapshot_mismatch");
+  else if (stored && quote && explained.rule && !explained.ambiguous && !sameCommissionSnapshot(stored, quote)) blockers.push("commission_rule_changed");
+  const unique = [...new Set(blockers)];
+  let applied = false;
+  if (confirm === true && unique.length === 0) {
+    const snapshot = {
+      percentage: quote.percentage,
+      basePrice: quote.basePrice,
+      giniPrice: quote.giniPrice,
+      scope: quote.scope || "",
+      targetId: quote.targetId || "",
+    };
+    const records = store || mongoCommissionSnapshotStore(pilot);
+    for (const row of targets) {
+      const saved = await records.save({ operationKey: row.operationKey, commissionSnapshot: snapshot });
+      if (!saved) unique.push("approval_not_updated");
+    }
+    applied = unique.length === 0;
+  }
+  return {
+    ok: unique.length === 0,
+    applied,
+    confirmRequired: true,
+    writesEnabled: false,
+    canSend: false,
+    liveSend: false,
+    sent: false,
+    parentSku: pilot.parentSku,
+    blockers: unique,
+    snapshot: unique.length === 0 ? quote : null,
   };
 }
 
@@ -371,3 +583,12 @@ export const mongoEi8888PriceJournal = ei8888Runner.mongoJournal;
 export const previewEi8888PricePatch = ei8888Runner.preview;
 export const runEi8888PricePatch = ei8888Runner.run;
 export const runAuthorizedEi8888PricePatch = ei8888Runner.runAuthorized;
+
+export async function refreshEi8888CommissionSnapshot(args = {}) {
+  return planCommissionSnapshotRefresh({
+    pilot: EI8888_PRICE_PILOT,
+    api: ei8888PricePatchApi,
+    performGet: performGiniRequest,
+    ...args,
+  });
+}

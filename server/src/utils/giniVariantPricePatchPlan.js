@@ -205,7 +205,11 @@ function defineStagedPricePilot(spec, stageOrder, gates) {
     };
     const blockers = [];
     if (!snapshot) blockers.push("commission_snapshot_missing");
+    else if (snapshot.conflict === "mismatched") blockers.push("commission_snapshot_mismatch");
     else {
+      if (snapshot.conflict === "changed") blockers.push("commission_rule_changed");
+      if (snapshot.conflict === "ambiguous") blockers.push("commission_rule_ambiguous");
+      if (snapshot.conflict === "missing_rule") blockers.push("commission_rule_missing");
       if (Number(snapshot.percentage) !== spec.commissionPercentage) blockers.push("commission_rate_mismatch");
       if (Number(snapshot.basePrice) !== spec.baselinePrice) blockers.push("commission_base_mismatch");
       if (Number(snapshot.giniPrice) !== spec.targetPrice || Number(snapshot.giniPrice) !== expectedPrice) blockers.push("commission_price_mismatch");

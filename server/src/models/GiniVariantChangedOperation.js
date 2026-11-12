@@ -17,6 +17,13 @@ const giniVariantChangedOperationSchema = new mongoose.Schema(
     proposedPrice: { type: Number, default: null },
     proposedQuantity: { type: Number, default: null },
     rawBody: { type: String, default: "" },
+    commissionSnapshot: {
+      percentage: { type: Number },
+      basePrice: { type: Number },
+      giniPrice: { type: Number },
+      scope: { type: String },
+      targetId: { type: String },
+    },
     baselineKey: { type: String, default: "" },
     lastCode: { type: String, default: "" },
     httpStatus: { type: Number, default: 0 },

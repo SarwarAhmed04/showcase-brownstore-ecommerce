@@ -33,7 +33,7 @@ import { approveParentOwner, approveVariantSkus, variantCatalogPage } from "../s
 import { previewGiniVariantPilot, runGiniVariantPilotStage } from "../services/giniVariantPilot.js";
 import { previewVariantChangedSync } from "../services/giniVariantChangedSync.js";
 import { approveVariantPricePilot } from "../services/giniVariantPricePilot.js";
-import { previewEi8888PricePatch, previewKe20PricePatch, runAuthorizedEi8888PricePatch, runAuthorizedKe20PricePatch } from "../services/giniVariantPricePatch.js";
+import { previewEi8888PricePatch, previewKe20PricePatch, refreshEi8888CommissionSnapshot, runAuthorizedEi8888PricePatch, runAuthorizedKe20PricePatch } from "../services/giniVariantPricePatch.js";
 import { previewKe20StockPatch, runAuthorizedKe20StockPatch } from "../services/giniVariantStockPatch.js";
 import { verifyXiaomiVariantReadBack } from "../services/giniVariantReadBack.js";
 
@@ -445,6 +445,16 @@ giniConnectionRouter.get("/platforms/gini/variant-sync/ei8888-price-patch", asyn
     res.json(assertNoSecretLeak(await previewEi8888PricePatch(), ""));
   } catch (err) {
     fail(res, err, "Failed to preview the EI-8888 price PATCH");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-sync/ei8888-price-patch/commission-snapshot", async (req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await refreshEi8888CommissionSnapshot({
+      confirm: req.body?.confirm === true,
+    }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to refresh the EI-8888 commission snapshot");
   }
 });
 

@@ -512,6 +512,27 @@ function filterRuleScore(rule, productIds) {
   return depth * 2 + (ids.brandId ? 1 : 0);
 }
 
+function productCommissionIds(product) {
+  const raw = typeof product?.toObject === "function" ? product.toObject() : product || {};
+  return {
+    vendorId: entityId(raw.createdBy),
+    brandId: entityId(raw.brand),
+    categoryId: entityId(raw.category),
+    subCategoryId: entityId(raw.subCategory),
+    collectionId: entityId(raw.collectionName),
+  };
+}
+
+function ruleMatchesScope(rule, ids) {
+  if (rule.scope === "vendor") return Boolean(ids.vendorId) && rule.targetId === ids.vendorId;
+  if (rule.scope === "collection") return Boolean(ids.collectionId) && rule.targetId === ids.collectionId;
+  if (rule.scope === "subcategory") return Boolean(ids.subCategoryId) && rule.targetId === ids.subCategoryId;
+  if (rule.scope === "brand") return Boolean(ids.brandId) && rule.targetId === ids.brandId;
+  if (rule.scope === "category") return Boolean(ids.categoryId) && rule.targetId === ids.categoryId;
+  if (rule.scope === "all") return true;
+  return false;
+}
+
 export function winningCommission(product, rules) {
   const raw = typeof product?.toObject === "function" ? product.toObject() : product;
   const collectionId = entityId(raw.collectionName);
@@ -550,6 +571,19 @@ export function winningCommission(product, rules) {
   }
 
   return null;
+}
+
+/** Same winner as winningCommission, plus a tie at that winner's rank. */
+export function explainCommissionMatch(product, rules) {
+  if (!product) return { rule: null, ambiguous: false };
+  const rule = winningCommission(product, rules);
+  if (!rule) return { rule: null, ambiguous: false };
+  const ids = productCommissionIds(product);
+  const active = (rules || []).filter((item) => item.isActive !== false);
+  const tied = rule.scope === "filter"
+    ? active.filter((item) => item.scope === "filter" && filterRuleScore(item, ids) === filterRuleScore(rule, ids) && filterRuleScore(rule, ids) > 0)
+    : active.filter((item) => item.scope === rule.scope && ruleMatchesScope(item, ids));
+  return { rule, ambiguous: tied.length > 1 };
 }
 
 export function resolveCommissionRate(product, rules) {
