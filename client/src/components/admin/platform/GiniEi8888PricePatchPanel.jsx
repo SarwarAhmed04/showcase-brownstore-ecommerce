@@ -1,14 +1,18 @@
 import { useState } from "react";
 import { api } from "../../../api";
+import { ei8888CommissionSnapshotCanSave, ei8888CommissionSnapshotStatus } from "./ei8888CommissionSnapshotGate";
 
 export default function GiniEi8888PricePatchPanel() {
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [snapshotConfirmed, setSnapshotConfirmed] = useState(false);
   const [result, setResult] = useState(null);
+  const [snapshotResult, setSnapshotResult] = useState(null);
   const stage = preview?.nextStage === "purple" ? "purple" : preview?.nextStage === "blue" ? "blue" : "";
   const canSend = preview?.readyForConfirmation === true && stage !== "" && confirmed && !busy;
+  const canSaveSnapshot = ei8888CommissionSnapshotCanSave(preview, { confirmed: snapshotConfirmed, busy });
 
   return (
     <div className="mt-5 rounded-2xl bg-cream/50 p-4">
@@ -27,6 +31,8 @@ export default function GiniEi8888PricePatchPanel() {
             setBusy(true);
             setError("");
             setConfirmed(false);
+            setSnapshotConfirmed(false);
+            setSnapshotResult(null);
             try {
               setPreview(await api.giniEi8888PricePatchPreview());
             } catch (err) {
@@ -54,6 +60,40 @@ export default function GiniEi8888PricePatchPanel() {
             Commission {preview.commission?.ok ? "matches 5.5%" : `blocked (${(preview.commission?.blockers || []).join(", ") || "unread"})`}.
             {preview.commissionRefresh ? ` Snapshot refresh ${preview.commissionRefresh.applied ? "applied" : preview.commissionRefresh.ok ? "ready, not applied" : `blocked (${(preview.commissionRefresh.blockers || []).join(", ") || "unread"})`}.` : ""}
           </p>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={snapshotConfirmed} onChange={(event) => setSnapshotConfirmed(event.target.checked)} />
+            I confirm saving this EI-8888 commission snapshot only. This does not send a price PATCH or change any other product or commission rule.
+          </label>
+          <button
+            type="button"
+            disabled={!canSaveSnapshot}
+            className="rounded-full bg-brown px-4 py-2 text-sm font-semibold text-cream disabled:bg-brown/20 disabled:text-brown/50"
+            onClick={async () => {
+              setBusy(true);
+              setError("");
+              let saved = null;
+              try {
+                saved = await api.giniEi8888CommissionSnapshot({ confirm: true });
+                setSnapshotResult(saved);
+                if (saved?.applied === true) {
+                  setPreview(await api.giniEi8888PricePatchPreview());
+                  setSnapshotConfirmed(false);
+                }
+              } catch (err) {
+                if (!saved) {
+                  setSnapshotResult(null);
+                  setError(err.message || "EI-8888 commission snapshot save failed");
+                } else {
+                  setError(err.message || "EI-8888 price baseline reload failed");
+                }
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Confirm & Save Commission Snapshot
+          </button>
+          {snapshotResult ? <p>{ei8888CommissionSnapshotStatus(snapshotResult)}</p> : null}
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
             I confirm this single {stage || "EI-8888"} price PATCH and no other product

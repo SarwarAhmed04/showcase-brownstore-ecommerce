@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { after, describe, it } from "node:test";
 import { performGiniJsonRequest, setGiniFetch } from "./services/giniConnection.js";
 import { previewEi8888PricePatch, previewKe20PricePatch, refreshEi8888CommissionSnapshot, resolvePricePilotCommissionSnapshot, runEi8888PricePatch, runKe20PricePatch } from "./services/giniVariantPricePatch.js";
+import { ei8888CommissionSnapshotCanSave, ei8888CommissionSnapshotStatus } from "../../client/src/components/admin/platform/ei8888CommissionSnapshotGate.js";
 import { applyCommissionRate } from "./utils/commission.js";
 import { signGiniRequest } from "./utils/giniSigner.js";
 import {
@@ -1263,5 +1264,88 @@ describe("EI-8888 commission snapshot refresh", () => {
     assert.equal(route.includes("variant-sync/ei8888-price-patch/commission-snapshot"), true);
     assert.equal(route.includes("confirm: req.body?.confirm === true"), true);
     assert.equal(service.includes("EI-8888"), false);
+  });
+
+  it("enables a confirmed snapshot save only while the EI-8888 refresh preview is ready", async () => {
+    const preview = await previewEi8888PricePatch({
+      env: {},
+      host: "merchant.gini.iq",
+      remote: eiRemoteBaseline(),
+      operation: eiJournal(),
+      skipConnection: true,
+      product: eiCatalogProduct(productId),
+      rules,
+      owner: legacy.owner,
+      identities: legacy.identities,
+      approvals: legacy.approvals,
+    });
+    assert.equal(preview.commission.ok, false);
+    assert.equal(preview.commission.blockers.includes("commission_snapshot_missing"), true);
+    assert.equal(preview.commissionRefresh.ok, true);
+    assert.equal(preview.commissionRefresh.applied, false);
+    assert.equal(preview.writesEnabled, false);
+    assert.equal(preview.readyForConfirmation, false);
+    assert.equal(ei8888CommissionSnapshotCanSave(preview, { confirmed: false, busy: false }), false);
+    assert.equal(ei8888CommissionSnapshotCanSave(preview, { confirmed: true, busy: true }), false);
+    assert.equal(ei8888CommissionSnapshotCanSave(preview, { confirmed: true, busy: false }), true);
+    assert.equal(ei8888CommissionSnapshotCanSave({ ...preview, hostMatches: false }, { confirmed: true }), false);
+    assert.equal(ei8888CommissionSnapshotCanSave({ ...preview, baseline: { ok: false, blockers: ["remote_price"] } }, { confirmed: true }), false);
+    assert.equal(ei8888CommissionSnapshotCanSave({ ...preview, ownership: { ok: false, blockers: ["owner_missing"] } }, { confirmed: true }), false);
+    assert.equal(ei8888CommissionSnapshotCanSave({ ...preview, approval: { ok: false, blockers: ["blue_approval_missing"] } }, { confirmed: true }), false);
+    assert.equal(ei8888CommissionSnapshotCanSave({
+      ...preview,
+      commissionRefresh: { ...preview.commissionRefresh, blockers: ["commission_rule_changed"], ok: false },
+    }, { confirmed: true }), false);
+    assert.equal(ei8888CommissionSnapshotCanSave({
+      ...preview,
+      commissionRefresh: { ...preview.commissionRefresh, writesEnabled: true },
+    }, { confirmed: true }), false);
+    assert.equal(ei8888CommissionSnapshotCanSave({
+      ...preview,
+      commissionRefresh: { ...preview.commissionRefresh, sent: true },
+    }, { confirmed: true }), false);
+    assert.equal(ei8888CommissionSnapshotCanSave({
+      ...preview,
+      commissionRefresh: { ...preview.commissionRefresh, applied: true },
+    }, { confirmed: true }), false);
+    assert.equal(ei8888CommissionSnapshotStatus({
+      applied: true,
+      sent: false,
+      writesEnabled: false,
+      parentSku: "EI-8888",
+      blockers: [],
+    }), "Commission snapshot saved. Applied: yes. GINI send: no. Write gate: off.");
+    assert.equal(ei8888CommissionSnapshotStatus({
+      applied: false,
+      sent: false,
+      writesEnabled: false,
+      blockers: ["commission_rule_changed"],
+    }), "Commission snapshot not saved (commission_rule_changed). Applied: no. GINI send: no. Write gate: off.");
+
+    const panel = fs.readFileSync(new URL("../../client/src/components/admin/platform/GiniEi8888PricePatchPanel.jsx", import.meta.url), "utf8");
+    const apiSource = fs.readFileSync(new URL("../../client/src/api.js", import.meta.url), "utf8");
+    const saveStart = panel.lastIndexOf("onClick", panel.indexOf("Confirm & Save Commission Snapshot"));
+    const saveHandler = panel.slice(saveStart, panel.indexOf("Confirm & Save Commission Snapshot"));
+    const apiStart = apiSource.indexOf("giniEi8888CommissionSnapshot:");
+    const apiMethod = apiSource.slice(apiStart, apiSource.indexOf("giniEi8888PricePatch:", apiStart));
+    assert.equal(panel.includes("ei8888CommissionSnapshotCanSave"), true);
+    assert.equal(panel.includes("readyForConfirmation === true"), true);
+    assert.equal(saveHandler.includes("giniEi8888CommissionSnapshot({ confirm: true })"), true);
+    assert.equal(saveHandler.includes("saved?.applied === true"), true);
+    assert.equal(saveHandler.includes("giniEi8888PricePatchPreview()"), true);
+    assert.equal(saveHandler.includes("giniEi8888PricePatch("), false);
+    assert.equal(saveHandler.includes("GINI_EI8888_PRICE_PATCH_ENABLED"), false);
+    assert.equal(saveHandler.includes("GINI_ALLOW_LIVE_EI8888_PRICE_PATCH"), false);
+    assert.equal(saveHandler.includes("PATCH"), false);
+    assert.equal(saveHandler.includes("PUT"), false);
+    assert.equal(saveHandler.includes("DELETE"), false);
+    assert.equal(apiMethod.includes('"/api/admin/platforms/gini/variant-sync/ei8888-price-patch/commission-snapshot"'), true);
+    assert.equal(apiMethod.includes('method: "POST"'), true);
+    assert.equal(apiMethod.includes("confirm: body?.confirm === true"), true);
+    assert.equal(apiMethod.includes("PATCH"), false);
+    assert.equal(apiMethod.includes("PUT"), false);
+    assert.equal(apiMethod.includes("DELETE"), false);
+    assert.equal(panel.includes("GINI_EI8888_PRICE_PATCH_ENABLED=true"), false);
+    assert.equal(panel.includes("GINI_ALLOW_LIVE_EI8888_PRICE_PATCH=true"), false);
   });
 });
