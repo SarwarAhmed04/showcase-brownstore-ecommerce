@@ -150,6 +150,7 @@ export function classifyVariantProduct({
     name: text(doc?.name, "en") || text(doc?.name, "ar"),
     vendor: text(doc?.createdBy, "en") || String(doc?.createdBy?.name || ""),
     vendorId: String(doc?.createdBy?._id || ""),
+    sourceItemId: String(doc?.ibsherId || ""),
     parentSku,
     categoryId,
     subcategoryId,

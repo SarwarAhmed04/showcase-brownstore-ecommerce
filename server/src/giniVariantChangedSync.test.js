@@ -3,7 +3,8 @@ import fs from "node:fs";
 import test from "node:test";
 import { GINI_PUT_DOCUMENTED_FIELDS } from "./utils/giniProductUpdateContract.js";
 import { GINI_VARIANT_UPDATE_CAPABILITIES, buildSingleVariantStockPatch, ke20BlackQuantityPilotPatch } from "./utils/giniVariantUpdateContract.js";
-import { auditBlockedProducts, buildGenericChangedPreview, planVariantChange, selectPricePilot } from "./utils/giniVariantChangedPlan.js";
+import { auditBlockedProducts, buildGenericChangedPreview, countSkippedUnchangedVariants, planVariantChange, selectPricePilot } from "./utils/giniVariantChangedPlan.js";
+import { auditDuplicateOwnership, planOwnershipSelection } from "./utils/giniVariantOwnershipAudit.js";
 import { previewVariantChangedSync } from "./services/giniVariantChangedSync.js";
 import { canSendVariantChangedSync } from "../../client/src/components/admin/platform/giniVariantSyncDisplay.js";
 
@@ -370,6 +371,10 @@ test("the dry run only reads and keeps bulk variant writes off", async () => {
   assert.equal(result.generic.liveSend, false);
   assert.equal(result.generic.nextTest.ready, false);
   assert.equal(result.blockerAudit.primaryTotal, result.summary.blocked);
+  assert.equal(result.ownershipAudit.readOnly, true);
+  assert.equal(result.ownershipAudit.automaticSelection, false);
+  assert.equal(result.ownershipAudit.saved, false);
+  assert.equal(result.ownershipAudit.uniqueDuplicateSkuGroups, 0);
   assert.equal(source.includes("PATCH"), false);
   assert.equal(source.includes("Commission"), true);
 });
@@ -579,4 +584,121 @@ test("only a verified single-owner parent is added to the fresh read list", asyn
     colorLabels: LABELS,
     colorAttributeId: "3696",
   }), []);
+});
+
+test("unchanged variants are counted once for the selected owner", () => {
+  const owner = planVariantChange(base());
+  const copy = planVariantChange(base({
+    productId: "copy",
+    catalogBlockers: ["duplicate_parent_sku", "other_vendor_owns_parent"],
+  }));
+  assert.equal(owner.disposition, "UNCHANGED");
+  assert.equal(owner.priceRows.length, 2);
+  const counted = countSkippedUnchangedVariants([owner, copy]);
+  assert.equal(counted.skippedUnchangedVariants, 2);
+  assert.equal(counted.reconciledParentVariantsCompared, 2);
+  assert.equal(counted.duplicateCopyRowsExcluded, 2);
+  const preview = buildGenericChangedPreview([owner, copy]);
+  assert.equal(preview.skippedUnchangedVariants, 2);
+  assert.equal(preview.duplicateCopyRowsExcluded, 2);
+});
+
+test("duplicate ownership review lists every vendor and does not choose one", () => {
+  const products = [
+    {
+      productId: "p1",
+      parentSku: "SHARED-1",
+      vendor: "Vendor A",
+      vendorId: "vendor-a",
+      sourceItemId: "item-a",
+      blockers: ["duplicate_parent_sku", "missing_variant_sku_approval"],
+      combinations: [
+        { color: "Blue", proposedSku: "SHARED-1-BLUE", stock: 2 },
+        { color: "Black", proposedSku: "SHARED-1-BLACK", stock: 3 },
+      ],
+    },
+    {
+      productId: "p2",
+      parentSku: "shared-1",
+      vendor: "Vendor B",
+      vendorId: "vendor-b",
+      sourceItemId: "item-b",
+      blockers: ["duplicate_parent_sku", "missing_color_mapping", "missing_variant_sku_approval"],
+      combinations: [
+        { color: "Green", proposedSku: "SHARED-1-GREEN", stock: 1 },
+        { color: "Blue", proposedSku: "SHARED-1-BLUE", stock: 4 },
+      ],
+    },
+    {
+      productId: "owner",
+      parentSku: "KE20",
+      vendor: "Owner Vendor",
+      vendorId: "vendor-owner",
+      sourceItemId: "item-owner",
+      blockers: [],
+      combinations: [
+        { color: "Blue", proposedSku: "KE20-BLUE", stock: 10 },
+        { color: "Black", proposedSku: "KE20-BLACK", stock: 10 },
+      ],
+    },
+    {
+      productId: "copy",
+      parentSku: "KE20",
+      vendor: "Other Vendor",
+      vendorId: "vendor-other",
+      sourceItemId: "item-copy",
+      blockers: ["duplicate_parent_sku"],
+      combinations: [
+        { color: "Blue", proposedSku: "KE20-BLUE", stock: 1 },
+        { color: "Black", proposedSku: "KE20-BLACK", stock: 1 },
+      ],
+    },
+  ];
+  const plans = products.map((product) => ({ productId: product.productId, parentSku: product.parentSku, blockers: product.blockers }));
+  const audit = auditDuplicateOwnership({
+    products,
+    plans,
+    owners: [{ parentSku: "KE20", productId: "owner", status: "verified_remote", giniProductId: "618623" }],
+    remoteBySku: { KE20: { state: "present", id: "618623", sku: "KE20", visibility: "hidden", variants: [] } },
+  });
+  assert.equal(audit.saved, false);
+  assert.equal(audit.automaticSelection, false);
+  assert.equal(audit.mergesStock, false);
+  assert.equal(audit.approvesVariantSkus, false);
+  assert.equal(audit.uniqueDuplicateSkuGroups, 2);
+  assert.equal(audit.blockedProductRows, 3);
+  assert.equal(audit.groupsWithVerifiedOwner, 1);
+  assert.equal(audit.groupsAwaitingSelection, 1);
+  assert.equal(audit.afterOwnershipApproval.sendReady, 0);
+  assert.equal(audit.afterOwnershipApproval.productsThatCanAdvance, 1);
+  assert.equal(audit.afterOwnershipApproval.copiesThatStayBlocked, 1);
+  const shared = audit.groups.find((group) => group.parentSkuKey === "shared-1");
+  assert.deepEqual(shared.vendors, ["Vendor A", "Vendor B"]);
+  assert.equal(shared.candidates.find((row) => row.productId === "p1").sourceItemId, "item-a");
+  assert.equal(shared.candidates.find((row) => row.productId === "p1").totalStock, 5);
+  assert.deepEqual(shared.candidates.find((row) => row.productId === "p1").variantSkus, ["SHARED-1-BLUE", "SHARED-1-BLACK"]);
+  assert.equal(shared.candidates.find((row) => row.productId === "p2").nextGate, "unmapped_colors");
+  assert.equal(shared.verifiedOwner, null);
+  const known = audit.groups.find((group) => group.parentSku === "KE20");
+  assert.equal(known.verifiedOwner.productId, "owner");
+  assert.equal(known.candidates.find((row) => row.productId === "copy").role, "non_owner");
+  assert.equal(known.remote.id, "618623");
+  assert.equal(known.selectionOpen, false);
+  const refused = planOwnershipSelection({ group: shared, productId: "p1", confirm: false });
+  assert.equal(refused.code, "approval_required");
+  assert.equal(refused.saved, false);
+  assert.deepEqual(refused.writes, []);
+  const prepared = planOwnershipSelection({ group: shared, productId: "p1", confirm: true });
+  assert.equal(prepared.code, "selection_prepared_not_saved");
+  assert.equal(prepared.saved, false);
+  assert.equal(prepared.sentToGini, 0);
+  assert.equal(prepared.approvesVariantSkus, false);
+  assert.equal(prepared.inventsAttributeMappings, false);
+  assert.equal(prepared.mergesStock, false);
+  assert.equal(prepared.sendReady, false);
+  assert.equal(prepared.nextGate, "missing_approved_variant_skus");
+  const locked = planOwnershipSelection({ group: known, productId: "copy", confirm: true });
+  assert.equal(locked.code, "owner_already_verified");
+  assert.equal(locked.overwritesOwner, false);
+  assert.equal(locked.saved, false);
 });

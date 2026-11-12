@@ -766,9 +766,36 @@ export function selectNextVariantTest(rows = []) {
   };
 }
 
+export function countSkippedUnchangedVariants(plans = []) {
+  const seen = new Set();
+  const reconciledSeen = new Set();
+  let duplicateCopyRowsExcluded = 0;
+  for (const plan of plans || []) {
+    const copy = (plan?.blockers || []).includes("duplicate_parent_sku") || (plan?.blockers || []).includes("other_vendor_owns_parent");
+    const ownerOfKnownParent = isKnownVariantParent(plan?.parentSku) && !copy;
+    for (const row of plan?.priceRows || []) {
+      const key = `${giniSkuKey(plan?.parentSku)}:${row.variantId || row.sku || ""}`;
+      if (ownerOfKnownParent && !reconciledSeen.has(key)) reconciledSeen.add(key);
+      if (row.preserved !== true) continue;
+      if (copy) {
+        duplicateCopyRowsExcluded += 1;
+        continue;
+      }
+      seen.add(key);
+    }
+  }
+  return {
+    skippedUnchangedVariants: seen.size,
+    skippedUnchangedScope: "selected_owner_remote_variants",
+    reconciledParentVariantsCompared: reconciledSeen.size,
+    duplicateCopyRowsExcluded,
+  };
+}
+
 export function buildGenericChangedPreview(plans = [], pricePatchJournals = [], { sharedParentKeys = new Set() } = {}) {
   const rows = (plans || []).map((plan) => genericVariantRequests(plan, { sharedParent: sharedParentKeys.has(giniSkuKey(plan.parentSku)) && !isKnownVariantParent(plan.parentSku) }));
   const preparedRequests = rows.flatMap((row) => row.requests);
+  const skipped = countSkippedUnchangedVariants(plans);
   return {
     workflow: "gini_variant_changed_sync",
     sending: "off",
@@ -781,7 +808,7 @@ export function buildGenericChangedPreview(plans = [], pricePatchJournals = [], 
     preservedPilotJournals: preservedPilotJournals(pricePatchJournals),
     eligibleCount: rows.filter((row) => row.eligible).length,
     preparedRequestCount: preparedRequests.length,
-    skippedUnchangedVariants: rows.reduce((sum, row) => sum + row.skippedUnchanged, 0),
+    ...skipped,
     preparedRequests: preparedRequests.slice(0, 30),
     nextTest: selectNextVariantTest(rows),
   };

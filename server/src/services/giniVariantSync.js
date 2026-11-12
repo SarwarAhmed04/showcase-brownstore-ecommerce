@@ -159,6 +159,7 @@ function publicProduct(row) {
     productId: row.productId,
     name: row.name,
     vendor: row.vendor,
+    sourceItemId: row.sourceItemId || "",
     parentSku: row.parentSku,
     categoryId: row.categoryId,
     subcategoryId: row.subcategoryId,

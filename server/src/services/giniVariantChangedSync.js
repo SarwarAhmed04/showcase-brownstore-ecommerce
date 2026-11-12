@@ -7,6 +7,7 @@ import { GiniVariantParentOwner } from "../models/GiniVariantParentOwner.js";
 import { GiniVariantPricePatch } from "../models/GiniVariantPricePatch.js";
 import { performGiniRequest } from "./giniConnection.js";
 import { loadVariantCatalog } from "./giniVariantSync.js";
+import { auditDuplicateOwnership } from "../utils/giniVariantOwnershipAudit.js";
 import { giniSkuKey } from "../utils/giniSyncOnePlan.js";
 import { applyCatalogVariantPrices } from "../utils/giniVariantPricing.js";
 import { GINI_VARIANT_UPDATE_CAPABILITIES, unsupportedVariantOperations } from "../utils/giniVariantUpdateContract.js";
@@ -252,6 +253,7 @@ export async function previewVariantChangedSync(deps = {}) {
     summary,
     blockerCounts,
     blockerAudit: auditBlockedProducts(plans),
+    ownershipAudit: auditDuplicateOwnership({ products: catalog.products || [], owners, remoteBySku, plans }),
     generic: buildGenericChangedPreview(plans, pricePatchJournals, { sharedParentKeys }),
     overview: routeGiniOverview({ variantSummary: summary, simpleJob }),
     futureBulk: futureBulkPreview(summary),

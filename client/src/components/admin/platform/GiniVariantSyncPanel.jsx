@@ -123,9 +123,30 @@ export default function GiniVariantSyncPanel() {
                 </p>
               </div>
             ) : null}
+            {dryRun.ownershipAudit ? (
+              <div>
+                <p className="font-semibold text-brown">Duplicate SKU ownership review</p>
+                <p>
+                  Blocked product rows {dryRun.ownershipAudit.blockedProductRows || 0}. Unique SKU groups {dryRun.ownershipAudit.uniqueDuplicateSkuGroups || 0}. Verified owners {dryRun.ownershipAudit.groupsWithVerifiedOwner || 0}. Groups still awaiting a person {dryRun.ownershipAudit.groupsAwaitingSelection || 0}.
+                </p>
+                <p>
+                  After an explicit choice, {dryRun.ownershipAudit.afterOwnershipApproval?.productsThatCanAdvance || 0} selected products can move to the next validation gate. Send-ready products: {dryRun.ownershipAudit.afterOwnershipApproval?.sendReady || 0}. Copies that stay blocked: {dryRun.ownershipAudit.afterOwnershipApproval?.copiesThatStayBlocked || 0}. This preview does not choose a vendor or save an owner.
+                </p>
+                <ul className="space-y-2">
+                  {(dryRun.ownershipAudit.groups || []).slice(0, 8).map((group) => (
+                    <li key={group.parentSku}>
+                      {group.parentSku}: {group.vendors.join(", ") || "vendor name missing"}.
+                      {" "}{group.verifiedOwner ? `Verified owner ${group.verifiedOwner.vendor} ${group.verifiedOwner.productId}.` : "No verified owner."}
+                      {" "}Remote {group.remote?.state || "not_read"} {group.remote?.id || ""}.
+                      {" "}{(group.candidates || []).map((row) => `${row.role} ${row.vendor || row.vendorId} ${row.productId} stock ${row.totalStock}`).join("; ")}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             {dryRun.generic ? (
               <p>
-                Generic workflow: sending {dryRun.generic.sending}. Eligible products {dryRun.generic.eligibleCount || 0}. Prepared PATCH requests {dryRun.generic.preparedRequestCount || 0}. Unchanged variants skipped {dryRun.generic.skippedUnchangedVariants || 0}. Journals written: {dryRun.generic.journalsWritten ? "yes" : "no"}.
+                Generic workflow: sending {dryRun.generic.sending}. Eligible products {dryRun.generic.eligibleCount || 0}. Prepared PATCH requests {dryRun.generic.preparedRequestCount || 0}. Unchanged owner variants skipped {dryRun.generic.skippedUnchangedVariants || 0} of {dryRun.generic.reconciledParentVariantsCompared || 0} reconciled variants. Duplicate-copy rows left out of that count: {dryRun.generic.duplicateCopyRowsExcluded || 0}. Journals written: {dryRun.generic.journalsWritten ? "yes" : "no"}.
                 {" "}Next one-variant test: {dryRun.generic.nextTest?.ready ? `${dryRun.generic.nextTest.request?.parentSku} ${dryRun.generic.nextTest.request?.variantSku} (${dryRun.generic.nextTest.kind})` : "none until one verified variant differs"}.
               </p>
             ) : null}
