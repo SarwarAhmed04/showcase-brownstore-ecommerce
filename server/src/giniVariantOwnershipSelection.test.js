@@ -27,6 +27,7 @@ import {
   protectedReconciledParentSkus,
 } from "./utils/giniVariantOwnershipAudit.js";
 import { listOwnershipGroups, prepareOwnershipSelection, saveOwnershipSelection } from "./services/giniVariantOwnershipSelection.js";
+import { rememberVerifiedSnapshot } from "./utils/giniOwnershipProductionContext.js";
 import { OWNERSHIP_IMAGE_FALLBACK, ownershipImageSrc } from "../../client/src/components/admin/platform/ownershipImage.js";
 
 const COLOR = { attributeId: "3696", name: "Color", values: ["Blue", "Black", "Green"] };
@@ -324,6 +325,9 @@ test("selection preparation rechecks the database and does not save or send", as
   assert.deepEqual(prepared.savePreview.remainingBlockers, ["missing_variant_sku_approval"]);
   assert.equal(prepared.savePreview.wouldInsert.length, 2);
   assert.equal(prepared.savePreview.pilot.authorized, false);
+  assert.equal(prepared.savePreview.pilot.named, true);
+  assert.equal(prepared.savePreview.pilot.parentSku, "38104");
+  assert.equal(prepared.savePreview.pilot.productId, "6adf9ca49dedbaa3dd573cce");
   assert.equal(prepared.savePreview.pilot.globalSave, false);
   assert.equal(prepared.savePreview.reread.candidateCount, 2);
   const outsider = await prepareOwnershipSelection({ parentSku: "SHARE-9", productId: "not-in-group", confirm: true }, deps);
@@ -359,7 +363,7 @@ test("selection preparation rechecks the database and does not save or send", as
   const syncPanel = fs.readFileSync(new URL("../../client/src/components/admin/platform/GiniVariantSyncPanel.jsx", import.meta.url), "utf8");
   assert.equal(panel.includes("Review selection"), true);
   assert.equal(panel.includes("giniVariantApproveOwner"), false);
-  assert.equal(panel.includes("Save owner"), false);
+  assert.equal(panel.includes("saveAvailable !== true"), true);
   assert.equal(syncPanel.includes("slice(0, 8)"), false);
   assert.equal(syncPanel.includes("GiniOwnershipSelectionPanel"), true);
   assert.equal(syncPanel.includes("giniVariantApproveOwner"), false);
@@ -713,8 +717,9 @@ test("ownership save authorization stays disabled and writes nothing", async () 
     const saveFn = service.slice(service.indexOf("export async function saveOwnershipSelection"));
     const commit = service.slice(service.indexOf("async function commitOwnershipSave"), service.indexOf("export async function saveOwnershipSelection"));
     assert.ok(saveFn.indexOf("OWNERSHIP_SAVE_RELEASED") < saveFn.indexOf("commitOwnershipSave"));
-    assert.ok(commit.indexOf("await currentAudit") !== -1);
-    assert.ok(commit.indexOf("await currentAudit") < commit.indexOf("insertOnce"));
+    assert.ok(commit.indexOf("await readOwnershipReadiness") !== -1);
+    assert.ok(commit.indexOf("await readOwnershipReadiness") < commit.indexOf("insertOnce"));
+    assert.ok(commit.indexOf("await listNamedIndexes") < commit.indexOf("insertOnce"));
     assert.equal(commit.includes("updateOne"), false);
     assert.equal(commit.includes("GiniVariantIdentity"), false);
     assert.equal(commit.includes("performGiniRequest"), false);
@@ -775,11 +780,15 @@ test("one-SKU pilot preview rejects conflicts, stale reads, and unverified remot
   assert.equal(Object.hasOwn(preview.documents.owner, "verifiedAt"), false);
   assert.equal(preview.documents.owner.giniProductId, "");
   assert.equal(ownershipPilotAllows("SHARE-9", "p1"), false);
+  assert.equal(ownershipPilotAllows("38104", "6adf9ca49dedbaa3dd573cce"), true);
+  assert.equal(ownershipPilotAllows("38104", "6ae08bbd9dedbaa3dd5740d9"), false);
   assert.equal(ownershipPilotAllows("SHARE-9", "p1", { parentSku: "SHARE-9", productId: "p1" }), true);
   assert.equal(ownershipPilotAllows("SHARE-9", "p2", { parentSku: "SHARE-9", productId: "p1" }), false);
   assert.equal(ownershipPilotAllows("OTHER-1", "p1", { parentSku: "SHARE-9", productId: "p1" }), false);
-  assert.equal(OWNERSHIP_SAVE_PILOT.parentSku, "");
-  assert.equal(OWNERSHIP_SAVE_PILOT.productId, "");
+  assert.equal(OWNERSHIP_SAVE_PILOT.parentSku, "38104");
+  assert.equal(OWNERSHIP_SAVE_PILOT.productId, "6adf9ca49dedbaa3dd573cce");
+  assert.equal(preview.pilot.named, true);
+  assert.equal(preview.pilot.authorized, false);
   assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
   const first = evaluateOwnershipSave(explicitSave({ group }));
   const second = evaluateOwnershipSave(explicitSave({
@@ -857,4 +866,130 @@ test("one-SKU pilot preview rejects conflicts, stale reads, and unverified remot
   assert.equal(retry.saved, false);
   assert.deepEqual(retry.writes, []);
   assert.equal(retry.remoteVerification, "not_performed");
+});
+
+test("the SKU 38104 API review does not register a snapshot and save stays disabled", async () => {
+  const itLobby = "6adf9ca49dedbaa3dd573cce";
+  const jawal = "6ae08bbd9dedbaa3dd5740d9";
+  const products = [
+    member("38104", { productId: itLobby, vendor: "IT Lobby", vendorId: "it", sourceItemId: "6adf9824ef43bcf3ec7d1ee4", stock: 4 }),
+    member("38104", { productId: jawal, vendor: "Jawal Flex", vendorId: "jf", sourceItemId: "6adf9cf4ef43bcf3ec7daac1", stock: 4 }),
+  ];
+  let writes = 0;
+  const deps = {
+    env: {
+      GINI_VARIANT_OWNERSHIP_SAVE_ENABLED: "true",
+      GINI_ALLOW_OWNERSHIP_SAVE: "true",
+    },
+    loadCatalog: async () => ({ products }),
+    loadOwners: async () => [],
+    loadOperations: async () => [],
+    ownerModel: { create() { writes += 1; } },
+    operationModel: { create() { writes += 1; } },
+  };
+  const review = await prepareOwnershipSelection({ parentSku: "38104", productId: itLobby, confirm: true }, deps);
+  assert.equal(review.code, "selection_prepared_not_saved");
+  assert.equal(review.databaseRechecked, true);
+  assert.equal(review.saved, false);
+  assert.equal(review.sentToGini, 0);
+  assert.equal(review.approvesVariantSkus, false);
+  assert.equal(review.mergesStock, false);
+  assert.equal(review.save.code, "ownership_save_disabled");
+  assert.equal(review.savePreview.code, "production_context_unverified");
+  assert.equal(review.savePreview.documents, null);
+  assert.equal(review.savePreview.wouldWrite, false);
+  assert.equal(review.excluded[0].productId, jawal);
+  assert.equal(review.excluded[0].deletedFromBrownStore, false);
+  const cliSnapshot = rememberVerifiedSnapshot({
+    productIds: [itLobby, jawal],
+    sourceItemIds: ["6adf9824ef43bcf3ec7d1ee4", "6adf9cf4ef43bcf3ec7daac1"],
+  });
+  const ignored = await prepareOwnershipSelection({ parentSku: "38104", productId: itLobby, confirm: true }, deps);
+  assert.equal(ignored.savePreview.code, "production_context_unverified");
+  const bound = await prepareOwnershipSelection({ parentSku: "38104", productId: itLobby, confirm: true }, { ...deps, productionSnapshot: cliSnapshot });
+  assert.equal(bound.save.code, "ownership_save_disabled");
+  assert.equal(bound.savePreview.documents.owner.status, "approved");
+  assert.equal(bound.savePreview.documents.owner.giniProductId, "");
+  assert.equal(bound.savePreview.documents.owner.productId, itLobby);
+  const excluded = await prepareOwnershipSelection({ parentSku: "38104", productId: jawal, confirm: true }, { ...deps, productionSnapshot: cliSnapshot });
+  assert.equal(excluded.savePreview.code, "pilot_not_authorized");
+  assert.equal(excluded.savePreview.documents, null);
+  assert.equal(excluded.saved, false);
+  const route = fs.readFileSync(new URL("./routes/giniConnection.js", import.meta.url), "utf8");
+  const previewRoute = route.slice(route.indexOf('"/platforms/gini/variant-sync/ownership/preview"'), route.indexOf('"/platforms/gini/variant-sync/ownership/save"'));
+  const saveRoute = route.slice(route.indexOf('"/platforms/gini/variant-sync/ownership/save"'), route.indexOf('"/platforms/gini/variant-sync/changed-preview"'));
+  for (const token of ["rememberVerifiedSnapshot", "readOwnershipReadiness", "verifyOwnershipDatabase", "productionSnapshot", "listIndexes", "performGiniRequest", "create("]) {
+    assert.equal(previewRoute.includes(token), false, token);
+    assert.equal(saveRoute.includes(token), false, token);
+  }
+  assert.equal(saveRoute.includes("req.user"), true);
+  assert.equal(saveRoute.includes("confirmOwnershipSave"), true);
+  const service = fs.readFileSync(new URL("./services/giniVariantOwnershipSelection.js", import.meta.url), "utf8");
+  const saveFn = service.slice(service.indexOf("export async function saveOwnershipSelection"));
+  const commit = service.slice(service.indexOf("async function commitOwnershipSave"), service.indexOf("export async function saveOwnershipSelection"));
+  assert.equal(saveFn.includes("readOwnershipReadiness"), false);
+  assert.equal(commit.includes("listNamedIndexes"), true);
+  assert.ok(commit.indexOf("resolveOwnershipAuthorization") < commit.indexOf("readOwnershipReadiness"));
+  assert.ok(commit.indexOf("readOwnershipReadiness") < commit.indexOf("insertOnce"));
+  assert.ok(commit.indexOf("administratorId") < commit.indexOf("insertOnce"));
+  const client = fs.readFileSync(new URL("../../client/src/api.js", import.meta.url), "utf8");
+  const panel = fs.readFileSync(new URL("../../client/src/components/admin/platform/GiniOwnershipSelectionPanel.jsx", import.meta.url), "utf8");
+  assert.equal(client.includes("/ownership/save"), true);
+  assert.equal(panel.includes("Save ownership"), true);
+  assert.equal(panel.includes("review.saveAvailable !== true"), true);
+  assert.equal(panel.includes("giniVariantOwnershipSave"), true);
+  const reviewClick = panel.slice(panel.indexOf("Review selection") - 400, panel.indexOf("Review selection"));
+  assert.equal(reviewClick.includes("giniVariantOwnershipSave"), false);
+  const touched = [];
+  for (const model of [GiniVariantParentOwner, GiniVariantOwnershipOperation, GiniVariantIdentity]) {
+    for (const name of ["create", "updateOne", "insertOne", "findOneAndUpdate", "bulkWrite", "save"]) {
+      const original = model[name];
+      model[name] = (...args) => {
+        touched.push(`${model.modelName}.${name}`);
+        return original.apply(model, args);
+      };
+    }
+  }
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.user = { _id: "admin-1" };
+    next();
+  });
+  app.use(giniConnectionRouter);
+  const server = await new Promise((resolve) => {
+    const running = app.listen(0, "127.0.0.1", () => resolve(running));
+  });
+  try {
+    for (const productId of [itLobby, jawal, "6adfa1c9b3764a909f69456a"]) {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/platforms/gini/variant-sync/ownership/save`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          parentSku: "38104",
+          productId,
+          vendorId: "it",
+          sourceItemId: "6adf9824ef43bcf3ec7d1ee4",
+          confirm: true,
+          confirmOwnershipSave: true,
+          productionSnapshot: cliSnapshot,
+          administratorId: "forged-admin",
+        }),
+      });
+      assert.equal(response.status, 409);
+      const body = await response.json();
+      assert.equal(body.code, "ownership_save_disabled");
+      assert.equal(body.saved, false);
+      assert.equal(body.sentToGini, 0);
+      assert.equal(body.databaseRechecked, false);
+      assert.deepEqual(body.writes, []);
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+  assert.deepEqual(touched, []);
+  assert.equal(writes, 0);
+  assert.equal(OWNERSHIP_SAVE_RELEASED, false);
+  assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
+  assert.equal(mongoose.connection.readyState, 0);
 });

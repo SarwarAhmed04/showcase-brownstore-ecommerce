@@ -10,6 +10,18 @@ function indexKeys(index) {
   return Object.keys(index?.key || {});
 }
 
+export function liveOwnershipIndexesAllowSave(parentIndexes = [], operationIndexes = []) {
+  const namedUnique = (indexes, name, field) => {
+    const index = (indexes || []).find((item) => item?.name === name);
+    if (!index || index.unique !== true || index.sparse === true || index.partialFilterExpression) return false;
+    const keys = Object.keys(index.key || {});
+    return keys.length === 1 && Number(index.key[field]) === 1;
+  };
+  return namedUnique(operationIndexes, "operationKey_1", "operationKey")
+    && namedUnique(operationIndexes, "skuKey_1", "skuKey")
+    && namedUnique(parentIndexes, "skuKey_1", "skuKey");
+}
+
 export function matchingUniqueOwnershipIndex(indexes, field) {
   return (
     (indexes || []).find((index) => {

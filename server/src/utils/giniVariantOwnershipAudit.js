@@ -1,5 +1,5 @@
 import { giniSkuKey } from "./giniSyncOnePlan.js";
-import { acceptFreshProductionSnapshot, OWNERSHIP_PILOT_SKU } from "./giniOwnershipProductionContext.js";
+import { OWNERSHIP_PILOT_SKU, productionSnapshotDecision } from "./giniOwnershipProductionContext.js";
 import { isKnownVariantParent, KNOWN_GINI_VARIANT_PARENTS, publishRemote } from "./giniVariantChangedPlan.js";
 import { resolveOwnershipImageUrls } from "./ownershipImageUrl.js";
 
@@ -211,25 +211,35 @@ export function planOwnershipSelection({ group = null, productId = "", confirm =
 
 export const OWNERSHIP_SAVE_RELEASED = false;
 export const OWNERSHIP_SAVE_INDEXES_READY = false;
-export const OWNERSHIP_SAVE_PILOT = Object.freeze({ parentSku: "", productId: "" });
+export const OWNERSHIP_SAVE_PILOT = Object.freeze({
+  parentSku: "38104",
+  productId: "6adf9ca49dedbaa3dd573cce",
+  sourceItemId: "6adf9824ef43bcf3ec7d1ee4",
+});
+export const OWNERSHIP_SAVE_EXCLUDED = Object.freeze({
+  parentSku: "38104",
+  productId: "6ae08bbd9dedbaa3dd5740d9",
+});
 
 const OWNERSHIP_SAVE_GATES = Object.freeze(["GINI_VARIANT_OWNERSHIP_SAVE_ENABLED", "GINI_ALLOW_OWNERSHIP_SAVE"]);
 
 export function ownershipPilotAuthorization(pilot = OWNERSHIP_SAVE_PILOT) {
   const parentSku = String(pilot?.parentSku || "").trim();
   const productId = String(pilot?.productId || "").trim();
+  const named = Boolean(parentSku && productId);
   return {
-    authorized: Boolean(parentSku && productId),
+    authorized: named && OWNERSHIP_SAVE_RELEASED === true && OWNERSHIP_SAVE_INDEXES_READY === true,
+    named,
     parentSku,
     productId,
     globalSave: false,
-    maxGroups: parentSku && productId ? 1 : 0,
+    maxGroups: named ? 1 : 0,
   };
 }
 
 export function ownershipPilotAllows(parentSku, productId, pilot = OWNERSHIP_SAVE_PILOT) {
   const gate = ownershipPilotAuthorization(pilot);
-  if (!gate.authorized) return false;
+  if (!gate.named) return false;
   return giniSkuKey(parentSku) === giniSkuKey(gate.parentSku) && String(productId || "").trim() === gate.productId;
 }
 
@@ -334,11 +344,14 @@ export function evaluateOwnershipSave({
   expectedFingerprint = "",
   requireFingerprint = false,
   productionSnapshot = null,
+  now = Date.now(),
 } = {}) {
   if (giniSkuKey(parentSku) === giniSkuKey(OWNERSHIP_PILOT_SKU) || giniSkuKey(group?.parentSku) === giniSkuKey(OWNERSHIP_PILOT_SKU)) {
     const candidateIds = (group?.candidates || []).map((row) => String(row?.productId || ""));
-    if (!acceptFreshProductionSnapshot(productionSnapshot, { productIds: candidateIds, productId })) {
-      return closedSave("production_context_unverified");
+    const snapshotCode = productionSnapshotDecision(productionSnapshot, { productIds: candidateIds, productId, now });
+    if (snapshotCode) return { ...closedSave(snapshotCode), deletedFromBrownStore: false };
+    if (!ownershipPilotAllows(parentSku || group?.parentSku, productId)) {
+      return { ...closedSave("pilot_not_authorized"), deletedFromBrownStore: false };
     }
   }
   if (confirm !== true || confirmOwnershipSave !== true) return closedSave("approval_required");
@@ -579,14 +592,16 @@ export function previewOwnershipSaveDocuments({
   confirm = false,
   confirmOwnershipSave = false,
   productionSnapshot = null,
+  now = Date.now(),
 } = {}) {
   if (giniSkuKey(parentSku) === giniSkuKey(OWNERSHIP_PILOT_SKU) || giniSkuKey(group?.parentSku) === giniSkuKey(OWNERSHIP_PILOT_SKU)) {
     const candidateIds = (group?.candidates || []).map((row) => String(row?.productId || ""));
-    if (!acceptFreshProductionSnapshot(productionSnapshot, { productIds: candidateIds, productId })) {
+    const snapshotCode = productionSnapshotDecision(productionSnapshot, { productIds: candidateIds, productId, now });
+    if (snapshotCode || !ownershipPilotAllows(parentSku || group?.parentSku, productId)) {
       return {
         readOnly: true,
         stopped: true,
-        code: "production_context_unverified",
+        code: snapshotCode || "pilot_not_authorized",
         saved: false,
         wouldWrite: false,
         wouldInsert: [],
@@ -618,6 +633,7 @@ export function previewOwnershipSaveDocuments({
     owners,
     operations,
     productionSnapshot,
+    now,
   });
   const selected = group?.candidates?.find((row) => String(row.productId) === String(productId || "")) || null;
   const remainingBlockers = (selected?.blockers || []).filter((code) => !OWNERSHIP_BLOCKERS.has(code));

@@ -308,6 +308,19 @@ export const api = {
         confirm: body?.confirm === true,
       }),
     }),
+  giniVariantOwnershipSave: (body) =>
+    request("/api/admin/platforms/gini/variant-sync/ownership/save", {
+      method: "POST",
+      body: JSON.stringify({
+        parentSku: body?.parentSku,
+        productId: body?.productId,
+        vendorId: body?.vendorId,
+        sourceItemId: body?.sourceItemId,
+        snapshotId: body?.snapshotId,
+        confirm: body?.confirm === true,
+        confirmOwnershipSave: body?.confirmOwnershipSave === true,
+      }),
+    }),
   giniVariantPricePilotApprove: (body) =>
     request("/api/admin/platforms/gini/variant-sync/price-pilot/approve", {
       method: "POST",

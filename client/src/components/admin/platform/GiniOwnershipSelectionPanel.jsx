@@ -13,6 +13,9 @@ const PREVIEW_TEXT = {
   conflicting_owner: "This SKU has conflicting owner records. No selection was prepared.",
   already_owner: "This product is already the recorded owner.",
   selection_prepared_not_saved: "Selection prepared. Nothing was saved or sent.",
+  production_context_unverified: "Production context was not verified. Nothing was saved.",
+  ownership_indexes_not_ready: "The ownership indexes are not ready. Nothing was saved.",
+  pilot_not_authorized: "This product is outside the IT Lobby ownership pilot. Nothing was saved.",
 };
 
 function OwnershipImage({ url }) {
@@ -48,6 +51,28 @@ export default function GiniOwnershipSelectionPanel() {
   const [busy, setBusy] = useState(false);
   const [choices, setChoices] = useState({});
   const [reviews, setReviews] = useState({});
+
+  async function saveOwnership(groupKey, review) {
+    if (review?.saveAvailable !== true || !review.authorizationSnapshot?.id || !review.selected) return;
+    setBusy(true);
+    setError("");
+    try {
+      const saved = await api.giniVariantOwnershipSave({
+        parentSku: review.parentSku,
+        productId: review.selected.productId,
+        vendorId: review.selected.vendorId,
+        sourceItemId: review.selected.sourceItemId,
+        snapshotId: review.authorizationSnapshot.id,
+        confirm: true,
+        confirmOwnershipSave: true,
+      });
+      setReviews((current) => ({ ...current, [groupKey]: { ...review, saveResult: saved } }));
+    } catch (err) {
+      setError(err.message || "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function load(nextPage = page, nextQuery = appliedQuery) {
     setBusy(true);
@@ -231,7 +256,28 @@ export default function GiniOwnershipSelectionPanel() {
                       <p className="mt-1">Pilot authorization: {review.savePreview.pilot?.authorized ? "one named SKU" : "off"}.</p>
                     </div>
                   ) : null}
-                  <p className="mt-1">Database rechecked: {review.databaseRechecked ? "yes" : "no"}. Owner save authorization: off.</p>
+                  <p className="mt-1">
+                    Production review: {review.productionReview?.verified ? "verified" : "unverified"}.
+                    Database rechecked: {review.databaseRechecked ? "yes" : "no"}.
+                    Live indexes: {review.productionReview?.liveIndexesReady ? "ready" : "not ready"}.
+                  </p>
+                  {review.selected ? (
+                    <div className="mt-3 rounded-xl bg-white p-3 ring-1 ring-brown/10">
+                      <p className="font-semibold text-brown">Save ownership confirmation</p>
+                      <p className="mt-1">SKU {review.parentSku}. Vendor {review.selected.vendor}. Product {review.selected.productId}.</p>
+                      <p className="mt-1">This would record a BrownStore owner only. It does not send the product to GINI, approve variant SKUs, merge stock, or delete the other vendor.</p>
+                      <button
+                        type="button"
+                        disabled={busy || review.saveAvailable !== true}
+                        className="mt-3 rounded-full bg-brown px-4 py-2 text-sm font-semibold text-cream disabled:bg-brown/30"
+                        onClick={() => saveOwnership(group.parentSkuKey, review)}
+                      >
+                        Save ownership
+                      </button>
+                      {review.saveAvailable !== true ? <p className="mt-2">Save ownership is off. The release gates are disabled.</p> : null}
+                    </div>
+                  ) : null}
+                  <p className="mt-1">Owner save authorization: {review.saveAvailable ? "on" : "off"}.</p>
                 </div>
               ) : null}
             </article>

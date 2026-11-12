@@ -124,8 +124,8 @@ test("the ownership index migration refuses duplicates, conflicts, and the wrong
   assert.equal(OWNERSHIP_SKUKEY_INDEX_MIGRATION_RELEASED, false);
   assert.equal(OWNERSHIP_SAVE_RELEASED, false);
   assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
-  assert.equal(OWNERSHIP_SAVE_PILOT.parentSku, "");
-  assert.equal(OWNERSHIP_SAVE_PILOT.productId, "");
+  assert.equal(OWNERSHIP_SAVE_PILOT.parentSku, "38104");
+  assert.equal(OWNERSHIP_SAVE_PILOT.productId, "6adf9ca49dedbaa3dd573cce");
   const missingCollection = decideOwnershipIndexMigration(observed({
     collectionExists: false,
     operationIndexes: [],
@@ -314,8 +314,8 @@ test("the one-shot production migration refuses this desktop and preserves docum
   assert.equal(desktop.releasedAfter, false);
   assert.equal(desktop.gates.released, false);
   assert.equal(desktop.gates.indexesReady, false);
-  assert.equal(desktop.gates.pilotParentSku, "");
-  assert.equal(desktop.gates.pilotProductId, "");
+  assert.equal(desktop.gates.pilotParentSku, "38104");
+  assert.equal(desktop.gates.pilotProductId, "6adf9ca49dedbaa3dd573cce");
   assert.equal(connected, 0);
   const missingToken = await runProductionOwnershipIndexMigration({
     argv: ["--execute", "--confirm-production", "--allow-verified-production-loopback", "--confirm-ownership-index-migration", "--backup-dir", "/var/backups/ownership"],

@@ -7,8 +7,9 @@ import { MongoClient, ObjectId } from "mongodb";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import test from "node:test";
-import { evaluateOwnershipSave, previewOwnershipSaveDocuments, OWNERSHIP_SAVE_INDEXES_READY, OWNERSHIP_SAVE_PILOT, OWNERSHIP_SAVE_RELEASED } from "./utils/giniVariantOwnershipAudit.js";
-import { acceptFreshProductionSnapshot, OWNERSHIP_PRODUCTION_PREVIEW } from "./utils/giniOwnershipProductionContext.js";
+import { evaluateOwnershipSave, previewOwnershipSaveDocuments, OWNERSHIP_SAVE_EXCLUDED, OWNERSHIP_SAVE_INDEXES_READY, OWNERSHIP_SAVE_PILOT, OWNERSHIP_SAVE_RELEASED } from "./utils/giniVariantOwnershipAudit.js";
+import { acceptFreshProductionSnapshot, OWNERSHIP_PRODUCTION_PREVIEW, rememberVerifiedSnapshot } from "./utils/giniOwnershipProductionContext.js";
+import { saveOwnershipSelection } from "./services/giniVariantOwnershipSelection.js";
 import {
   ownershipDuplicatePipelines,
   readOwnershipReadiness,
@@ -49,8 +50,8 @@ function guardCollection(collection) {
 test("ownership readiness pipelines and gates cannot write or authorize a save", () => {
   assert.equal(OWNERSHIP_SAVE_RELEASED, false);
   assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
-  assert.equal(OWNERSHIP_SAVE_PILOT.parentSku, "");
-  assert.equal(OWNERSHIP_SAVE_PILOT.productId, "");
+  assert.equal(OWNERSHIP_SAVE_PILOT.parentSku, "38104");
+  assert.equal(OWNERSHIP_SAVE_PILOT.productId, PRODUCTION_IT);
   const pipelines = JSON.stringify(ownershipDuplicatePipelines());
   assert.equal(pipelines.includes('"$out"'), false);
   assert.equal(pipelines.includes('"$merge"'), false);
@@ -106,8 +107,16 @@ test("a memory database read does not create the ownership operation collection"
     assert.equal(report.gates.anyOpen, false);
     assert.equal(report.migration.executedByThisAudit, false);
     assert.equal(report.sentToGini, 0);
-    assert.equal(JSON.stringify(report).includes(String(productA)), false);
-    assert.equal(JSON.stringify(report).includes("38104"), false);
+    assert.equal(report.gates.pilotParentSku, "38104");
+    assert.equal(report.gates.pilotProductId, PRODUCTION_IT);
+    assert.equal(report.gates.released, false);
+    assert.equal(report.gates.indexesReady, false);
+    const { gates, ...unread } = report;
+    const unreadJson = JSON.stringify(unread);
+    assert.equal(unreadJson.includes(String(productA)), false);
+    assert.equal(unreadJson.includes("38104"), false);
+    assert.equal(unreadJson.includes(PRODUCTION_IT), false);
+    assert.equal(unreadJson.includes(PRODUCTION_JAWAL), false);
     const conflicted = summarizeOwnershipReadiness({
       parentCollection: "ginivariantparentowners",
       parentIndexes: [{ key: { skuKey: 1 }, unique: true }],
@@ -274,11 +283,115 @@ test("an unverified desktop database cannot be reported as the production pilot"
     assert.deepEqual(authorized.writes, []);
     assert.equal(OWNERSHIP_SAVE_RELEASED, false);
     assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
-    assert.equal(OWNERSHIP_SAVE_PILOT.parentSku, "");
-    assert.equal(OWNERSHIP_SAVE_PILOT.productId, "");
+    assert.equal(OWNERSHIP_SAVE_PILOT.parentSku, "38104");
+    assert.equal(OWNERSHIP_SAVE_PILOT.productId, PRODUCTION_IT);
+    assert.equal(authorized.documents.owner.status, "approved");
+    assert.equal(authorized.documents.owner.giniProductId, "");
+    assert.equal(authorized.approvesVariantSkus, false);
+    assert.equal(authorized.mergesStock, false);
+    assert.deepEqual(authorized.documents.operation.excludedProductIds, [PRODUCTION_JAWAL]);
   } finally {
     await client.close();
     await memory.stop();
   }
   assert.equal(mongoose.connection.readyState, 0);
+});
+
+test("the IT Lobby ownership pilot rejects the wrong product, an expired snapshot, a duplicate, and disabled gates", async () => {
+  const snapshot = rememberVerifiedSnapshot({
+    productIds: [PRODUCTION_IT, PRODUCTION_JAWAL],
+    sourceItemIds: ["6adf9824ef43bcf3ec7d1ee4", "6adf9cf4ef43bcf3ec7daac1"],
+  });
+  const group = {
+    parentSku: "38104",
+    candidates: [
+      { productId: PRODUCTION_IT, vendorId: "it", sourceItemId: "6adf9824ef43bcf3ec7d1ee4", parentSku: "38104" },
+      { productId: PRODUCTION_JAWAL, vendorId: "jf", sourceItemId: "6adf9cf4ef43bcf3ec7daac1", parentSku: "38104" },
+    ],
+  };
+  const request = {
+    group,
+    parentSku: "38104",
+    vendorId: "it",
+    sourceItemId: "6adf9824ef43bcf3ec7d1ee4",
+    confirm: true,
+    confirmOwnershipSave: true,
+    productionSnapshot: snapshot,
+  };
+  const jawal = evaluateOwnershipSave({
+    ...request,
+    productId: PRODUCTION_JAWAL,
+    vendorId: "jf",
+    sourceItemId: "6adf9cf4ef43bcf3ec7daac1",
+  });
+  assert.equal(jawal.code, "pilot_not_authorized");
+  assert.equal(jawal.saved, false);
+  assert.equal(jawal.deletedFromBrownStore, false);
+  assert.equal(jawal.sentToGini, 0);
+  assert.equal(jawal.approvesVariantSkus, false);
+  assert.equal(jawal.mergesStock, false);
+  assert.equal(jawal.writes.length, 0);
+  assert.equal(OWNERSHIP_SAVE_EXCLUDED.productId, PRODUCTION_JAWAL);
+  const desktop = evaluateOwnershipSave({ ...request, productId: DESKTOP_IT });
+  assert.equal(desktop.code, "pilot_not_authorized");
+  assert.equal(desktop.saved, false);
+  const expired = evaluateOwnershipSave({
+    ...request,
+    productId: PRODUCTION_IT,
+    now: Date.parse(snapshot.capturedAt) + 15 * 60 * 1000 + 1,
+  });
+  assert.equal(expired.code, "production_snapshot_expired");
+  assert.equal(expired.saved, false);
+  assert.deepEqual(expired.writes, []);
+  const ready = evaluateOwnershipSave({ ...request, productId: PRODUCTION_IT });
+  assert.equal(ready.code, "ownership_save_ready");
+  assert.equal(ready.documents.owner.status, "approved");
+  assert.equal(ready.documents.owner.giniProductId, "");
+  assert.notEqual(ready.documents.owner.status, "verified_remote");
+  const duplicate = evaluateOwnershipSave({
+    ...request,
+    productId: PRODUCTION_IT,
+    owners: [ready.record],
+    operations: [ready.operation],
+  });
+  assert.equal(duplicate.code, "ownership_already_recorded");
+  assert.equal(duplicate.idempotent, true);
+  assert.equal(duplicate.saved, false);
+  assert.equal(duplicate.documents.owner.status, "approved");
+  assert.equal(duplicate.documents.owner.giniProductId, "");
+  const conflict = evaluateOwnershipSave({
+    ...request,
+    productId: PRODUCTION_IT,
+    owners: [{ parentSku: "38104", productId: PRODUCTION_JAWAL, vendorId: "jf", status: "approved" }],
+  });
+  assert.equal(conflict.code, "owner_already_approved");
+  assert.equal(conflict.saved, false);
+  let writes = 0;
+  const disabled = await saveOwnershipSelection({
+    parentSku: "38104",
+    productId: PRODUCTION_IT,
+    vendorId: "it",
+    sourceItemId: "6adf9824ef43bcf3ec7d1ee4",
+    confirm: true,
+    confirmOwnershipSave: true,
+    administratorId: "admin-1",
+    productionSnapshot: snapshot,
+  }, {
+    env: {
+      GINI_VARIANT_OWNERSHIP_SAVE_ENABLED: "true",
+      GINI_ALLOW_OWNERSHIP_SAVE: "true",
+    },
+    ownerModel: { create() { writes += 1; } },
+    operationModel: { create() { writes += 1; } },
+    loadCatalog: async () => {
+      writes += 1;
+      return { products: [] };
+    },
+  });
+  assert.equal(disabled.code, "ownership_save_disabled");
+  assert.equal(disabled.saved, false);
+  assert.equal(disabled.sentToGini, 0);
+  assert.equal(writes, 0);
+  assert.equal(OWNERSHIP_SAVE_RELEASED, false);
+  assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
 });

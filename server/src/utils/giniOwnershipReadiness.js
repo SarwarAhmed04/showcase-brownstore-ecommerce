@@ -226,7 +226,7 @@ export function summarizeOwnershipReadiness({
   if (!indexes.collectionExists) missing.push("ginivariantownershipoperations collection");
   if (!indexes.operationKeyEnforced) missing.push("unique operationKey index");
   if (!indexes.skuKeyEnforced) missing.push("unique ownership-operation skuKey index");
-  const gatesOpen = OWNERSHIP_SAVE_RELEASED === true || OWNERSHIP_SAVE_INDEXES_READY === true || Boolean(OWNERSHIP_SAVE_PILOT.parentSku || OWNERSHIP_SAVE_PILOT.productId);
+  const gatesOpen = OWNERSHIP_SAVE_RELEASED === true || OWNERSHIP_SAVE_INDEXES_READY === true;
   return {
     readOnly: true,
     operations: READ_OPERATIONS,
@@ -274,7 +274,7 @@ export function stoppedOwnershipReport() {
       indexesReady: OWNERSHIP_SAVE_INDEXES_READY === true,
       pilotParentSku: OWNERSHIP_SAVE_PILOT.parentSku,
       pilotProductId: OWNERSHIP_SAVE_PILOT.productId,
-      anyOpen: OWNERSHIP_SAVE_RELEASED === true || OWNERSHIP_SAVE_INDEXES_READY === true || Boolean(OWNERSHIP_SAVE_PILOT.parentSku || OWNERSHIP_SAVE_PILOT.productId),
+      anyOpen: OWNERSHIP_SAVE_RELEASED === true || OWNERSHIP_SAVE_INDEXES_READY === true,
     },
     indexes: null,
     conflicts: null,
