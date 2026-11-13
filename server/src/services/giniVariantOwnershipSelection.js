@@ -4,6 +4,14 @@ import { GiniVariantParentOwner } from "../models/GiniVariantParentOwner.js";
 import { loadVariantCatalog } from "./giniVariantSync.js";
 import { giniSkuKey } from "../utils/giniSyncOnePlan.js";
 import { liveOwnershipIndexesAllowSave, OWNERSHIP_OPERATION_COLLECTION, OWNERSHIP_PARENT_COLLECTION } from "../utils/giniOwnershipIndexPlan.js";
+import {
+  claimOwnershipSave,
+  closeOwnershipWindow,
+  dashboardOwnershipSaveAvailable,
+  ownershipWindowAllowsSave,
+  ownershipWindowBlockCode,
+  ownershipWindowPermitsInsert,
+} from "../utils/giniOwnershipAuthorizationWindow.js";
 import { describeFirstLiveOwnershipSaveAuthorization, firstLiveInsertAllowed, firstLivePairDecision } from "../utils/giniOwnershipFirstSaveProcedure.js";
 import { readOwnershipReadiness } from "../utils/giniOwnershipReadiness.js";
 import {
@@ -292,7 +300,18 @@ async function reviewVerifiedSelection(input, deps) {
     databaseRechecked: true,
     productionReview,
     gates,
-    saveAvailable: false,
+    saveAvailable: dashboardOwnershipSaveAvailable({
+      released: gates.released === true,
+      indexesReady: gates.indexesReady === true,
+      environmentEnabled: gates.environmentEnabled === true,
+      liveIndexesReady: gates.liveIndexesReady === true,
+      confirm: input.confirm === true,
+      administratorId,
+      snapshot: authorizationSnapshot,
+      selected,
+      pairCode: firstLivePairDecision(group?.candidates || []),
+      windowOpen: ownershipWindowAllowsSave(),
+    }),
     authorizationSnapshot,
     selected: selectedFields(selected),
     excluded: decision.ok ? excludedCandidates(group, productId) : [],
@@ -477,6 +496,9 @@ export async function commitOwnershipSave(input, deps = {}) {
   if (!firstLiveInsertAllowed(documents)) {
     return { ...held, ok: false, code: "pilot_not_authorized", saved: false, writes: [] };
   }
+  if (!unit && !ownershipWindowPermitsInsert()) {
+    return { ...held, ok: false, code: ownershipWindowBlockCode(), saved: false, writes: [] };
+  }
   let ownerInsert;
   try {
     ownerInsert = await insertOnce(ownerModel, {
@@ -529,7 +551,18 @@ export async function commitOwnershipSave(input, deps = {}) {
 export async function saveOwnershipSelection(input = {}, deps = {}) {
   const authorization = ownershipSaveAuthorization(deps.env);
   if (authorization.enabled !== true || OWNERSHIP_SAVE_RELEASED !== true || OWNERSHIP_SAVE_INDEXES_READY !== true) {
-    return { ...attemptFutureOwnershipSave(input, deps.env), databaseRechecked: false };
+    return { ...attemptFutureOwnershipSave(input, deps.env), databaseRechecked: false, windowClosed: false };
   }
-  return commitOwnershipSave(input, deps);
+  const claim = claimOwnershipSave();
+  if (!claim.ok) {
+    return { ...attemptFutureOwnershipSave(input, deps.env), code: claim.code, databaseRechecked: false, windowClosed: false };
+  }
+  try {
+    const result = await commitOwnershipSave(input, deps);
+    const closed = closeOwnershipWindow(result?.saved === true ? "success" : "failure");
+    return { ...result, windowClosed: closed.windowClosed === true, sentToGini: 0 };
+  } catch (err) {
+    closeOwnershipWindow("failure");
+    throw err;
+  }
 }

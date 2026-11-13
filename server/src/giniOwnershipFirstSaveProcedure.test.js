@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import express from "express";
 import mongoose from "mongoose";
 import { MongoMemoryServer } from "mongodb-memory-server";
@@ -9,9 +12,22 @@ import { giniConnectionRouter } from "./routes/giniConnection.js";
 import { commitOwnershipSave, OWNERSHIP_COMMIT_TEST } from "./services/giniVariantOwnershipSelection.js";
 import { OWNERSHIP_PRODUCTION_PREVIEW, clearOwnershipAuthorizations } from "./utils/giniOwnershipProductionContext.js";
 import {
+  CLOSED_LOCK_LINES,
+  OPEN_LOCK_LINES,
+  acceptFirstLivePreview,
+  assessFirstLivePreflight,
+  decideSingleUse,
   describeFirstLiveOwnershipSaveAuthorization,
+  evidenceScriptIsReadOnly,
   firstLiveInsertAllowed,
   firstLivePairDecision,
+  firstLiveSaveBody,
+  hostingerOpenSourceProgram,
+  hostingerReadOnlyEvidenceScript,
+  planEmergencyStop,
+  planHostingerFirstLive,
+  rewriteOwnershipSourceLocks,
+  verifyFirstLiveEvidence,
 } from "./utils/giniOwnershipFirstSaveProcedure.js";
 import {
   OWNERSHIP_SAVE_EXCLUDED,
@@ -94,6 +110,14 @@ test("the first live ownership save procedure stays closed and reversible", () =
   assert.equal(procedure.forbidden.includes("gini_send"), true);
   assert.equal(procedure.forbidden.includes("variant_sku_approval"), true);
   assert.equal(procedure.forbidden.includes("stock_merge"), true);
+  assert.equal(procedure.forbidden.includes("sed"), true);
+  assert.equal(procedure.forbidden.includes("source_backup_file"), true);
+  assert.equal(procedure.rollback.executed, false);
+  assert.equal(procedure.rollback.method, "git-restore-recorded-sha");
+  assert.equal(procedure.rollback.createsBackupFile, false);
+  assert.equal(procedure.rollback.usesSed, false);
+  assert.equal(procedure.open.steps.join("\n").includes("sed -"), false);
+  assert.equal(procedure.close.steps.some((step) => step.includes("git restore --source")), true);
   const partial = describeFirstLiveOwnershipSaveAuthorization(ENABLED);
   assert.equal(partial.enabled, false);
   assert.equal(partial.writesPermitted, false);
@@ -271,5 +295,238 @@ test("production review refuses a renamed vendor or a third SKU 38104 product an
     await new Promise((resolve) => server.close(resolve));
     await mongoose.disconnect();
     await memory.stop();
+  }
+});
+
+const CLOSED_SHA = "2cc9810d627170a4e2567d578ddee0f42cfbf522";
+
+function readyObservation(extra = {}) {
+  return {
+    gitSha: CLOSED_SHA,
+    branch: "main",
+    porcelain: "",
+    auditMatchesHead: true,
+    releasedLine: CLOSED_LOCK_LINES.OWNERSHIP_SAVE_RELEASED,
+    indexesLine: CLOSED_LOCK_LINES.OWNERSHIP_SAVE_INDEXES_READY,
+    envEnabled: "",
+    envAllow: "",
+    databaseName: "brownstore",
+    mongoHost: "127.0.0.1",
+    ownerCount: 0,
+    operationCount: 0,
+    conflicts: 0,
+    liveIndexesReady: true,
+    backupCompleted: true,
+    singleApiProcess: true,
+    itLobbyUpdatedAt: "2026-11-13T12:00:00.000Z",
+    jawalUpdatedAt: "2026-11-13T12:00:01.000Z",
+    itLobbyProductId: IT,
+    itLobbySourceItemId: IT_SOURCE,
+    itLobbyVendor: "IT Lobby",
+    jawalProductId: JAWAL,
+    jawalSourceItemId: JAWAL_SOURCE,
+    jawalPresent: true,
+    inFlight: false,
+    ...extra,
+  };
+}
+
+function acceptedPreview() {
+  return {
+    code: "selection_prepared_not_saved",
+    saved: false,
+    sentToGini: 0,
+    productionReview: { verified: true, liveIndexesReady: true },
+    selected: {
+      vendor: "IT Lobby",
+      vendorId: "it-lobby",
+      productId: IT,
+      sourceItemId: IT_SOURCE,
+    },
+    authorizationSnapshot: {
+      id: "snapshot-1",
+      administratorId: "admin-1",
+      productId: IT,
+      sourceItemId: IT_SOURCE,
+      vendorId: "it-lobby",
+    },
+    excluded: [{
+      productId: JAWAL,
+      vendor: "Jawal Flex",
+      sourceItemId: JAWAL_SOURCE,
+      deletedFromBrownStore: false,
+    }],
+  };
+}
+
+test("the Hostinger plan stays unexecuted until preflight matches the closed production baseline", () => {
+  const plan = planHostingerFirstLive(readyObservation());
+  assert.equal(plan.phase, "planned_not_started");
+  assert.equal(plan.execute, false);
+  assert.equal(plan.authorizedToRunNow, false);
+  assert.equal(plan.writesPermitted, false);
+  assert.equal(plan.recordedSha, CLOSED_SHA);
+  assert.equal(plan.editMethod, "exact-line-replace");
+  assert.equal(plan.rollbackMethod, "git-restore-recorded-sha");
+  assert.equal(plan.singleUse, true);
+  assert.deepEqual(plan.forbiddenMethods, ["sed", "source-backup-file", ".bak"]);
+  assert.equal(plan.openProgram.includes("sed"), false);
+  assert.equal(plan.openProgram.includes(".bak"), false);
+  assert.equal(plan.rollback.command, `git restore --source=${CLOSED_SHA} -- server/src/utils/giniVariantOwnershipAudit.js`);
+  assert.equal(plan.rollback.createsBackupFile, false);
+  assert.equal(plan.emergencyStop.usesSed, false);
+  assert.equal(plan.previewBody.productId, IT);
+  assert.equal(plan.previewBody.confirm, true);
+  const dirty = planHostingerFirstLive(readyObservation({ porcelain: " M server/src/utils/giniVariantOwnershipAudit.js" }));
+  assert.equal(dirty.phase, "refused");
+  assert.equal(dirty.openProgram, "");
+  assert.equal(dirty.execute, false);
+  assert.equal(dirty.failures.includes("working_tree_dirty"), true);
+  const openGate = planHostingerFirstLive(readyObservation({ envAllow: "true" }));
+  assert.equal(openGate.failures.includes("allow_gate_open"), true);
+  const busy = planHostingerFirstLive(readyObservation({ inFlight: true }));
+  assert.equal(busy.failures.includes("concurrent_request_refused"), true);
+  const owned = planHostingerFirstLive(readyObservation({ ownerCount: 1 }));
+  assert.equal(owned.failures.includes("owner_count"), true);
+});
+
+test("preview acceptance builds one save body and drops every other candidate", () => {
+  const preview = acceptedPreview();
+  assert.equal(acceptFirstLivePreview(preview), "");
+  const body = firstLiveSaveBody(preview);
+  assert.deepEqual(body, {
+    parentSku: "38104",
+    productId: IT,
+    vendorId: "it-lobby",
+    sourceItemId: IT_SOURCE,
+    snapshotId: "snapshot-1",
+    confirm: true,
+    confirmOwnershipSave: true,
+  });
+  assert.equal(Object.hasOwn(body, "administratorId"), false);
+  assert.equal(firstLiveSaveBody({ ...preview, selected: { ...preview.selected, vendor: "Jawal Flex" } }), null);
+  assert.equal(acceptFirstLivePreview({ ...preview, sentToGini: 1 }), "gini_send");
+  assert.deepEqual(decideSingleUse({ inFlight: true }), { ok: false, code: "concurrent_request_refused" });
+  assert.equal(decideSingleUse({ consumed: true }).code, "run_already_used");
+  assert.equal(decideSingleUse({ operationCount: 1 }).code, "conflicting_owner");
+  assert.equal(decideSingleUse({ ownerCount: 0, operationCount: 0 }).ok, true);
+});
+
+test("verification requires one approved owner, one journal, unchanged products, and sentToGini 0", () => {
+  const before = { itLobbyUpdatedAt: "2026-11-13T12:00:00.000Z", jawalUpdatedAt: "2026-11-13T12:00:01.000Z" };
+  const after = {
+    ownerCount: 1,
+    operationCount: 1,
+    owner: { productId: IT, parentSku: "38104", status: "approved", giniProductId: "" },
+    operation: { productId: IT, sourceItemId: IT_SOURCE, status: "recorded", excludedProductIds: [JAWAL] },
+    jawalPresent: true,
+    jawalSourceItemId: JAWAL_SOURCE,
+    jawalVendor: "Jawal Flex",
+    itLobbyUpdatedAt: before.itLobbyUpdatedAt,
+    jawalUpdatedAt: before.jawalUpdatedAt,
+    otherSkuOwnerDelta: 0,
+    otherSkuOperationDelta: 0,
+    gatesClosed: true,
+    disabledSave: { code: "ownership_save_disabled", sentToGini: 0 },
+  };
+  const response = {
+    saved: true,
+    code: "ownership_recorded",
+    sentToGini: 0,
+    canSend: false,
+    approvesVariantSkus: false,
+    mergesStock: false,
+    publishesToGini: false,
+  };
+  assert.equal(verifyFirstLiveEvidence(before, after, response).ok, true);
+  assert.equal(verifyFirstLiveEvidence(before, after, { ...response, sentToGini: 1 }).failures.includes("sent_to_gini"), true);
+  assert.equal(verifyFirstLiveEvidence(before, { ...after, jawalUpdatedAt: "2026-11-13T12:00:02.000Z" }, response).failures.includes("jawal_updated_at"), true);
+  assert.equal(verifyFirstLiveEvidence(before, { ...after, itLobbyUpdatedAt: "2026-11-13T12:00:02.000Z" }, response).failures.includes("it_lobby_updated_at"), true);
+  assert.equal(verifyFirstLiveEvidence(before, { ...after, gatesClosed: false }, response).failures.includes("gates_open"), true);
+  assert.equal(verifyFirstLiveEvidence(before, { ...after, ownerCount: 2 }, response).failures.includes("owner_count"), true);
+  const script = hostingerReadOnlyEvidenceScript();
+  assert.equal(evidenceScriptIsReadOnly(script), true);
+  assert.equal(script.includes(IT), true);
+  assert.equal(script.includes(JAWAL), true);
+  assert.equal(evidenceScriptIsReadOnly(`${script}\ndb.products.updateOne({}, {})`), false);
+});
+
+test("exact line replacement round-trips the audit file and refuses a damaged source line", () => {
+  const auditUrl = new URL("./utils/giniVariantOwnershipAudit.js", import.meta.url);
+  const original = fs.readFileSync(auditUrl, "utf8");
+  const opened = rewriteOwnershipSourceLocks(original, "open");
+  assert.equal(opened.ok, true);
+  assert.equal(opened.text.includes(OPEN_LOCK_LINES.OWNERSHIP_SAVE_RELEASED), true);
+  assert.equal(opened.text.includes(OPEN_LOCK_LINES.OWNERSHIP_SAVE_INDEXES_READY), true);
+  assert.equal(opened.text.includes(CLOSED_LOCK_LINES.OWNERSHIP_SAVE_RELEASED), false);
+  const closed = rewriteOwnershipSourceLocks(opened.text, "close");
+  assert.equal(closed.ok, true);
+  assert.equal(closed.text, original);
+  assert.equal(fs.readFileSync(auditUrl, "utf8"), original);
+  assert.equal(rewriteOwnershipSourceLocks(original.replace(CLOSED_LOCK_LINES.OWNERSHIP_SAVE_RELEASED, `${CLOSED_LOCK_LINES.OWNERSHIP_SAVE_RELEASED} // touched`), "open").code, "source_lock_not_exact");
+  assert.equal(OWNERSHIP_SAVE_RELEASED, false);
+  assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
+});
+
+test("git restore of the recorded closed commit rolls back an open edit and a later commit without a backup file", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bs-ownership-rollback-"));
+  const relative = "server/src/utils/giniVariantOwnershipAudit.js";
+  const file = path.join(root, relative);
+  const git = (args) => execFileSync("git", ["-c", "core.autocrlf=false", ...args], { cwd: root, encoding: "utf8" });
+  try {
+    git(["init", "--quiet"]);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const original = `${CLOSED_LOCK_LINES.OWNERSHIP_SAVE_RELEASED}\n${CLOSED_LOCK_LINES.OWNERSHIP_SAVE_INDEXES_READY}\n`;
+    fs.writeFileSync(file, original);
+    git(["add", "--", relative]);
+    git(["-c", "user.email=procedure@brownstore.test", "-c", "user.name=procedure", "commit", "-m", "closed", "--quiet"]);
+    const sha = git(["rev-parse", "HEAD"]).trim();
+    const opened = rewriteOwnershipSourceLocks(fs.readFileSync(file, "utf8"), "open");
+    fs.writeFileSync(file, opened.text);
+    assert.equal(fs.readdirSync(path.dirname(file)).some((name) => name.includes(".bak") || name.includes("backup")), false);
+    git(["restore", `--source=${sha}`, "--", relative]);
+    assert.equal(fs.readFileSync(file, "utf8"), original);
+
+    fs.writeFileSync(file, opened.text);
+    git(["add", "--", relative]);
+    git(["-c", "user.email=procedure@brownstore.test", "-c", "user.name=procedure", "commit", "-m", "opened by mistake", "--quiet"]);
+    assert.notEqual(git(["rev-parse", "HEAD"]).trim(), sha);
+    const stop = planEmergencyStop({
+      recordedSha: sha,
+      releasedLine: OPEN_LOCK_LINES.OWNERSHIP_SAVE_RELEASED,
+      indexesLine: OPEN_LOCK_LINES.OWNERSHIP_SAVE_INDEXES_READY,
+    });
+    assert.equal(stop.restore, true);
+    assert.equal(stop.createsBackupFile, false);
+    assert.equal(stop.command, `git restore --source=${sha} -- server/src/utils/giniVariantOwnershipAudit.js`);
+    git(["restore", `--source=${sha}`, "--", relative]);
+    assert.equal(fs.readFileSync(file, "utf8"), original);
+    assert.equal(fs.existsSync(`${file}.bak`), false);
+    assert.equal(planEmergencyStop({ recordedSha: "missing" }).code, "recorded_sha_mismatch");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the Hostinger open program writes only the two lock lines and creates no backup", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "bs-ownership-open-"));
+  const relative = "server/src/utils/giniVariantOwnershipAudit.js";
+  const file = path.join(root, relative);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const original = `before\n${CLOSED_LOCK_LINES.OWNERSHIP_SAVE_RELEASED}\nmiddle\n${CLOSED_LOCK_LINES.OWNERSHIP_SAVE_INDEXES_READY}\nafter\n`;
+    fs.writeFileSync(file, original);
+    const program = hostingerOpenSourceProgram();
+    assert.equal(program.includes("sed"), false);
+    assert.equal(program.includes(".bak"), false);
+    execFileSync(process.execPath, ["--input-type=module", "-e", program], { cwd: root, encoding: "utf8" });
+    const written = fs.readFileSync(file, "utf8");
+    assert.equal(written, `before\n${OPEN_LOCK_LINES.OWNERSHIP_SAVE_RELEASED}\nmiddle\n${OPEN_LOCK_LINES.OWNERSHIP_SAVE_INDEXES_READY}\nafter\n`);
+    assert.equal(fs.readdirSync(path.dirname(file)).filter((name) => name !== "giniVariantOwnershipAudit.js").length, 0);
+    assert.throws(() => execFileSync(process.execPath, ["--input-type=module", "-e", program], { cwd: root, encoding: "utf8", stdio: "pipe" }));
+    assert.equal(fs.readFileSync(file, "utf8"), written);
+    assert.equal(assessFirstLivePreflight(readyObservation()).authorizedToRunNow, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

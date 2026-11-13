@@ -66,9 +66,16 @@ export default function GiniOwnershipSelectionPanel() {
         confirm: true,
         confirmOwnershipSave: true,
       });
-      setReviews((current) => ({ ...current, [groupKey]: { ...review, saveResult: saved } }));
+      setReviews((current) => ({
+        ...current,
+        [groupKey]: { ...review, saveAvailable: false, saveResult: saved, sentToGini: saved?.sentToGini ?? 0 },
+      }));
     } catch (err) {
       setError(err.message || "Save failed");
+      setReviews((current) => ({
+        ...current,
+        [groupKey]: { ...review, saveAvailable: false, sentToGini: 0 },
+      }));
     } finally {
       setBusy(false);
     }
@@ -103,7 +110,7 @@ export default function GiniOwnershipSelectionPanel() {
             Every duplicate parent SKU is listed here. Choose one BrownStore product per unresolved group. The other product is excluded from GINI ownership and stays in BrownStore. Order, stock, and product id are not a recommendation.
           </p>
         </div>
-        <p className="text-sm font-semibold text-brown">Sending is off. Saving is off.</p>
+        <p className="text-sm font-semibold text-brown">Sending to GINI is off.</p>
       </div>
       <p className="mt-3 text-sm text-brown/80">
         Duplicate groups {data?.uniqueDuplicateSkuGroups ?? "—"}. Verified owners {data?.groupsWithVerifiedOwner ?? "—"}. Unresolved groups {data?.groupsAwaitingSelection ?? "—"}.
@@ -274,7 +281,11 @@ export default function GiniOwnershipSelectionPanel() {
                       >
                         Save ownership
                       </button>
-                      {review.saveAvailable !== true ? <p className="mt-2">Save ownership is off. The release gates are disabled.</p> : null}
+                      {review.saveAvailable !== true ? (
+                        <p className="mt-2">Save ownership is off until the IT Lobby SKU 38104 gates, a fresh production snapshot, and your confirmation are all valid.</p>
+                      ) : (
+                        <p className="mt-2">Save ownership is available for this IT Lobby product until the authorization window closes.</p>
+                      )}
                     </div>
                   ) : null}
                   <p className="mt-1">Owner save authorization: {review.saveAvailable ? "on" : "off"}.</p>

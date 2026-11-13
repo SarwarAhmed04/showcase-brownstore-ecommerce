@@ -19,6 +19,8 @@ import { seedPartners } from "./seedPartners.js";
 import { Product } from "./models/Product.js";
 import { Category } from "./models/Category.js";
 import { startIbsherAutoSync } from "./utils/ibsherAutoSync.js";
+import { maybeArmOwnershipWindow } from "./utils/giniOwnershipAuthorizationWindow.js";
+import { OWNERSHIP_SAVE_INDEXES_READY, OWNERSHIP_SAVE_RELEASED } from "./utils/giniVariantOwnershipAudit.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -74,6 +76,15 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ message: "Server error" });
 });
 
+function armClosedOwnershipWindow() {
+  const ownershipWindow = maybeArmOwnershipWindow({
+    supervise: OWNERSHIP_SAVE_RELEASED === true && OWNERSHIP_SAVE_INDEXES_READY === true,
+  });
+  if (ownershipWindow.armed === true) {
+    console.log(`Ownership save window closes at ${ownershipWindow.expiresAt}`);
+  }
+}
+
 async function connectDatabase() {
   const { setMongoMode } = await import("./utils/dbMode.js");
   const configured = process.env.MONGO_URL || process.env.MONGODB_URI || "";
@@ -122,6 +133,7 @@ async function importFileCache() {
 }
 
 async function start() {
+  armClosedOwnershipWindow();
   if (isProd && (!process.env.JWT_SECRET || process.env.JWT_SECRET === "change-this-to-a-long-random-secret")) {
     throw new Error("Set a strong JWT_SECRET before running in production");
   }
