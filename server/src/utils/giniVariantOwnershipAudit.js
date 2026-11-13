@@ -215,13 +215,17 @@ export const OWNERSHIP_SAVE_PILOT = Object.freeze({
   parentSku: "38104",
   productId: "6adf9ca49dedbaa3dd573cce",
   sourceItemId: "6adf9824ef43bcf3ec7d1ee4",
+  vendorName: "IT Lobby",
 });
 export const OWNERSHIP_SAVE_EXCLUDED = Object.freeze({
   parentSku: "38104",
   productId: "6ae08bbd9dedbaa3dd5740d9",
+  sourceItemId: "6adf9cf4ef43bcf3ec7daac1",
+  vendorName: "Jawal Flex",
 });
 
-const OWNERSHIP_SAVE_GATES = Object.freeze(["GINI_VARIANT_OWNERSHIP_SAVE_ENABLED", "GINI_ALLOW_OWNERSHIP_SAVE"]);
+const OWNERSHIP_SAVE_SOURCE_LOCKS = Object.freeze(["OWNERSHIP_SAVE_RELEASED", "OWNERSHIP_SAVE_INDEXES_READY"]);
+const OWNERSHIP_SAVE_ENVIRONMENT_GATES = Object.freeze(["GINI_VARIANT_OWNERSHIP_SAVE_ENABLED", "GINI_ALLOW_OWNERSHIP_SAVE"]);
 
 export function ownershipPilotAuthorization(pilot = OWNERSHIP_SAVE_PILOT) {
   const parentSku = String(pilot?.parentSku || "").trim();
@@ -247,13 +251,17 @@ export function ownershipSaveAuthorization(env = process.env) {
   const explicitGate = env?.GINI_VARIANT_OWNERSHIP_SAVE_ENABLED === "true";
   const allowGate = env?.GINI_ALLOW_OWNERSHIP_SAVE === "true";
   const released = OWNERSHIP_SAVE_RELEASED === true;
+  const indexesReady = OWNERSHIP_SAVE_INDEXES_READY === true;
   return {
     released,
+    indexesReady,
     explicitGate,
     allowGate,
-    enabled: released && explicitGate && allowGate,
+    enabled: released && indexesReady && explicitGate && allowGate,
     enabledByDefault: false,
     requiresAdministratorConfirmation: true,
+    sourceLocks: [...OWNERSHIP_SAVE_SOURCE_LOCKS],
+    environmentGates: [...OWNERSHIP_SAVE_ENVIRONMENT_GATES],
   };
 }
 
@@ -276,8 +284,10 @@ export function designFutureOwnershipSave() {
       enabledByDefault: false,
       released: authorization.released,
       requiresAdministratorConfirmation: true,
-      bothGatesRequired: [...OWNERSHIP_SAVE_GATES],
+      bothGatesRequired: [...OWNERSHIP_SAVE_ENVIRONMENT_GATES],
+      sourceLocks: [...OWNERSHIP_SAVE_SOURCE_LOCKS],
       releaseLock: "OWNERSHIP_SAVE_RELEASED",
+      indexLock: "OWNERSHIP_SAVE_INDEXES_READY",
     },
     uniquenessChecks: [
       "Require a fresh snapshot from a verified Hostinger production read in this process. A desktop catalog cannot authorize the ownership pilot.",

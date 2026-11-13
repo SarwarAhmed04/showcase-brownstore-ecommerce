@@ -4,6 +4,7 @@ import { GiniVariantParentOwner } from "../models/GiniVariantParentOwner.js";
 import { loadVariantCatalog } from "./giniVariantSync.js";
 import { giniSkuKey } from "../utils/giniSyncOnePlan.js";
 import { liveOwnershipIndexesAllowSave, OWNERSHIP_OPERATION_COLLECTION, OWNERSHIP_PARENT_COLLECTION } from "../utils/giniOwnershipIndexPlan.js";
+import { describeFirstLiveOwnershipSaveAuthorization, firstLiveInsertAllowed, firstLivePairDecision } from "../utils/giniOwnershipFirstSaveProcedure.js";
 import { readOwnershipReadiness } from "../utils/giniOwnershipReadiness.js";
 import {
   OWNERSHIP_PILOT_SKU,
@@ -240,6 +241,7 @@ async function reviewVerifiedSelection(input, deps) {
     saveAvailable: false,
     save: attemptFutureOwnershipSave(),
     futureSave: designFutureOwnershipSave(),
+    firstLiveSave: describeFirstLiveOwnershipSaveAuthorization(),
     parentSku: group?.parentSku || OWNERSHIP_PILOT_SKU,
     selected: selectedFields(selected),
     authorizationSnapshot: null,
@@ -251,7 +253,7 @@ async function reviewVerifiedSelection(input, deps) {
     && selected.productId === OWNERSHIP_SAVE_PILOT.productId
     && selected.sourceItemId === OWNERSHIP_SAVE_PILOT.sourceItemId
     && giniSkuKey(selected.parentSku || group?.parentSku) === giniSkuKey(OWNERSHIP_SAVE_PILOT.parentSku);
-  if (!livePilot || productId === OWNERSHIP_SAVE_EXCLUDED.productId) {
+  if (!livePilot || productId === OWNERSHIP_SAVE_EXCLUDED.productId || firstLivePairDecision(group?.candidates || []) !== "") {
     return {
       ...base,
       ok: false,
@@ -433,6 +435,9 @@ export async function commitOwnershipSave(input, deps = {}) {
   if (!selected || selected.sourceItemId !== authorization.snapshot.sourceItemId || selected.vendorId !== authorization.snapshot.vendorId) {
     return refusedSave("stale_identity", { databaseRechecked: true });
   }
+  if (firstLivePairDecision(group?.candidates || []) !== "") {
+    return refusedSave("pilot_not_authorized", { databaseRechecked: true });
+  }
   const decision = evaluateOwnershipSave({
     group,
     parentSku: input.parentSku,
@@ -468,6 +473,9 @@ export async function commitOwnershipSave(input, deps = {}) {
   const documents = decision.documents;
   if (!documents || documents.owner.status !== "approved" || documents.owner.giniProductId || documents.operation?.status !== "recorded") {
     return { ...held, ok: false, code: "remote_verification_missing", saved: false, writes: [] };
+  }
+  if (!firstLiveInsertAllowed(documents)) {
+    return { ...held, ok: false, code: "pilot_not_authorized", saved: false, writes: [] };
   }
   let ownerInsert;
   try {
