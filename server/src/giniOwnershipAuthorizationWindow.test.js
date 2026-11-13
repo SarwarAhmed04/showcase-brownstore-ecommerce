@@ -68,6 +68,10 @@ function validDashboard(extra = {}) {
 }
 
 function waitFor(read, timeoutMs = 4000) {
+  return waitUntil(read, timeoutMs, "timed out waiting for the ownership window");
+}
+
+function waitUntil(read, timeoutMs, label) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
     const timer = setInterval(() => {
@@ -78,7 +82,7 @@ function waitFor(read, timeoutMs = 4000) {
           resolve(value);
         } else if (Date.now() - started > timeoutMs) {
           clearInterval(timer);
-          reject(new Error("timed out waiting for the ownership window"));
+          reject(new Error(label));
         }
       } catch (err) {
         clearInterval(timer);
@@ -202,7 +206,6 @@ test("the independent supervisor restores the committed file on timeout and leav
 import { disableOwnershipEnvironmentGates } from ${JSON.stringify(pathToFileUrl(new URL("./utils/giniOwnershipAuthorizationWindow.js", import.meta.url)))};
 process.env.GINI_VARIANT_OWNERSHIP_SAVE_ENABLED = "true";
 process.env.GINI_ALLOW_OWNERSHIP_SAVE = "true";
-writeFileSync(process.argv[2], String(process.pid));
 let closed = false;
 setInterval(() => {
   if (closed) return;
@@ -218,14 +221,24 @@ setInterval(() => {
     // The supervisor writes the close signal after restoring the committed file.
   }
 }, 20);
+writeFileSync(process.argv[2], JSON.stringify({ pid: process.pid, ready: true }));
 `);
-  const parent = spawn(process.execPath, [parentScript, path.join(repo.root, "parent.pid"), proof, signal], { stdio: "ignore" });
+  const parentLog = [];
+  const parent = spawn(process.execPath, [parentScript, path.join(repo.root, "parent.pid"), proof, signal], { stdio: ["ignore", "pipe", "pipe"] });
+  parent.stdout.on("data", (chunk) => parentLog.push(chunk));
+  parent.stderr.on("data", (chunk) => parentLog.push(chunk));
   try {
     openLocks(repo.file);
-    const pid = Number(await waitFor(() => {
+    const ready = JSON.parse(await waitUntil(() => {
+      if (parent.exitCode != null) {
+        throw new Error(`parent exited ${parent.exitCode} before it was ready\n${Buffer.concat(parentLog).toString("utf8")}`);
+      }
       const pidFile = path.join(repo.root, "parent.pid");
       return fs.existsSync(pidFile) ? fs.readFileSync(pidFile, "utf8") : "";
-    }));
+    }, 30_000, "parent process did not become ready"));
+    assert.equal(ready.ready, true);
+    const pid = ready.pid;
+    assert.equal(Number.isInteger(pid), true);
     const supervisor = spawn(process.execPath, [
       fileURLToPath(new URL("./scripts/giniOwnershipWindowSupervisor.js", import.meta.url)),
       "--repo", repo.root,
@@ -239,7 +252,11 @@ setInterval(() => {
       supervisor.once("exit", (code) => (code === 0 ? resolve() : reject(new Error(`supervisor exit ${code}`))));
       supervisor.once("error", reject);
     });
-    const environment = JSON.parse(await waitFor(() => (fs.existsSync(proof) ? fs.readFileSync(proof, "utf8") : "")));
+    const environment = JSON.parse(await waitUntil(
+      () => (fs.existsSync(proof) ? fs.readFileSync(proof, "utf8") : ""),
+      15_000,
+      "parent process did not acknowledge the supervisor shutdown"
+    ));
     assert.equal(environment.enabled, false);
     assert.equal(environment.explicitGate, false);
     assert.equal(environment.allowGate, false);
