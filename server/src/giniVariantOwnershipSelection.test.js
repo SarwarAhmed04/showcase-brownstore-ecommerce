@@ -539,6 +539,22 @@ test("a reviewed selection stays read-only and does not prefer a vendor", async 
   assert.equal(unconfirmed.saved, false);
 });
 
+test("a catalog updatedAt change does not stale the selected vendor or source item", () => {
+  const earlier = openShareGroup();
+  const later = openShareGroup();
+  later.candidates = later.candidates.map((candidate) => ({
+    ...candidate,
+    updatedAt: "2026-11-13T20:00:32.798Z",
+  }));
+  const before = evaluateOwnershipSave(explicitSave({ group: earlier }));
+  const after = evaluateOwnershipSave(explicitSave({ group: later }));
+  assert.equal(before.code, "ownership_save_ready");
+  assert.equal(after.code, before.code);
+  assert.equal(after.saved, false);
+  assert.equal(evaluateOwnershipSave(explicitSave({ group: later, vendorId: "it-lobby-old" })).code, "stale_identity");
+  assert.equal(evaluateOwnershipSave(explicitSave({ group: later, sourceItemId: "item-old" })).code, "stale_identity");
+});
+
 test("ownership save rejects duplicate owners, concurrent selections, stale identities, and verified parents", () => {
   const group = openShareGroup();
   const duplicate = evaluateOwnershipSave(explicitSave({

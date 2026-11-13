@@ -60,6 +60,15 @@ test("production keeps automatic sync and ignores the development opt-in", () =>
   }
 });
 
+test("each production process start requests one immediate catalog sync", () => {
+  const first = harness({ NODE_ENV: "production" });
+  const restarted = harness({ NODE_ENV: "production", IBSHER_AUTO_SYNC_ENABLED: "false" });
+  assert.deepEqual(first.calls, ["sync"]);
+  assert.deepEqual(restarted.calls, ["sync"]);
+  assert.equal(first.timers[0].interval, 60 * 60 * 1000);
+  assert.equal(restarted.timers[0].interval, 60 * 60 * 1000);
+});
+
 test("startup uses the guard and the manual admin sync route is unchanged", () => {
   const index = fs.readFileSync(new URL("./index.js", import.meta.url), "utf8");
   const admin = fs.readFileSync(new URL("./routes/admin.js", import.meta.url), "utf8");

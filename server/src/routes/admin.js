@@ -733,6 +733,35 @@ adminRouter.patch("/banners/:slot", async (req, res) => {
 
 let activeSync = null;
 
+function catalogValue(value) {
+  if (value == null) return null;
+  if (value instanceof Date) return { $date: value.toISOString() };
+  if (typeof value === "object" && typeof value.toHexString === "function") return { $id: value.toHexString() };
+  if (Array.isArray(value)) return value.map(catalogValue);
+  if (typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) out[key] = catalogValue(value[key]);
+    return out;
+  }
+  return value;
+}
+
+function sameCatalogValue(left, right) {
+  return JSON.stringify(catalogValue(left)) === JSON.stringify(catalogValue(right));
+}
+
+export function productSyncTouchesContent(prior, $set) {
+  if (!prior) return true;
+  for (const [key, value] of Object.entries($set)) {
+    if (key === "lastSyncedAt") continue;
+    const current = key.startsWith("overrides.")
+      ? prior.overrides?.[key.slice("overrides.".length)]
+      : prior[key];
+    if (!sameCatalogValue(current, value)) return true;
+  }
+  return false;
+}
+
 export async function upsertProducts(items, syncedAt) {
   const mappedItems = [];
   for (const item of items) {
@@ -745,11 +774,11 @@ export async function upsertProducts(items, syncedAt) {
 
   const existing = await Product.find({
     ibsherId: { $in: mappedItems.map((item) => item.ibsherId) },
-  })
-    .select("ibsherId discountPrice ibsherDiscountPrice overrides.discountPrice")
-    .lean();
+  }).lean();
   const previous = new Map(existing.map((doc) => [doc.ibsherId, doc]));
 
+  let updated = 0;
+  let refreshed = 0;
   const ops = mappedItems.map((mapped) => {
     const prior = previous.get(mapped.ibsherId);
     const $set = { ...mapped };
@@ -760,6 +789,19 @@ export async function upsertProducts(items, syncedAt) {
       prior?.ibsherDiscountPrice,
     ]);
     if (clearImportedDiscount) $set["overrides.discountPrice"] = null;
+    const contentChanged = productSyncTouchesContent(prior, $set);
+    if (prior && !contentChanged) {
+      refreshed += 1;
+      return {
+        updateOne: {
+          filter: { ibsherId: mapped.ibsherId },
+          update: { $set: { lastSyncedAt: mapped.lastSyncedAt } },
+          upsert: false,
+          timestamps: false,
+        },
+      };
+    }
+    if (prior) updated += 1;
     const update = { $set };
     if (!clearImportedDiscount) {
       update.$setOnInsert = { overrides: emptyOverrides() };
@@ -774,14 +816,12 @@ export async function upsertProducts(items, syncedAt) {
   });
 
   let inserted = 0;
-  let updated = 0;
   for (let i = 0; i < ops.length; i += 200) {
     const write = await Product.bulkWrite(ops.slice(i, i + 200), { ordered: false });
     inserted += write.upsertedCount || 0;
-    updated += write.modifiedCount || 0;
   }
 
-  return { inserted, updated };
+  return { inserted, updated, refreshed };
 }
 
 function ibsherProductId(item) {
@@ -818,6 +858,7 @@ function logCatalogSync(summary, aborted = "") {
   console.log(`Local total after sync: ${diagnostics.localTotalAfterSync}`);
   console.log(`Inserted: ${summary.inserted}`);
   console.log(`Updated: ${summary.updated}`);
+  console.log(`Refreshed without content change: ${Number(summary.refreshed) || 0}`);
   console.log(`Removed: ${summary.removed}`);
   if (aborted) console.error(`Catalog sync aborted: ${aborted}`);
 }
@@ -828,6 +869,7 @@ async function runCatalogSync() {
   const pagesFetched = new Set();
   let inserted = 0;
   let updated = 0;
+  let refreshed = 0;
   let receivedRows = 0;
   let pageMeta = { totalPages: 0, remoteTotal: 0 };
 
@@ -848,6 +890,7 @@ async function runCatalogSync() {
       const write = await upsertProducts(fresh, syncedAt);
       inserted += write.inserted;
       updated += write.updated;
+      refreshed += write.refreshed;
     });
   } catch (err) {
     const reason = String(err.message || "Catalog sync failed");
@@ -863,6 +906,7 @@ async function runCatalogSync() {
       uniqueProducts: seen.size,
       inserted,
       updated,
+      refreshed,
       removed: 0,
       localTotalAfterSync: await Product.countDocuments(),
     };
@@ -885,6 +929,7 @@ async function runCatalogSync() {
     pagesCompleted: Number(result.pagesCompleted) || 0,
     inserted,
     updated,
+    refreshed,
   };
 
   const incomplete =
