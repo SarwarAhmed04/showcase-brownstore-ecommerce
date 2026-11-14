@@ -392,6 +392,47 @@ async function insertOnce(model, doc) {
   }
 }
 
+export function ownershipInsertFailure(err) {
+  const name = typeof err?.name === "string" ? err.name : "";
+  const numeric = Number(err?.code);
+  return {
+    mongoErrorName: /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(name) ? name : "Error",
+    mongoErrorCode: Number.isSafeInteger(numeric) ? numeric : null,
+  };
+}
+
+export function ownershipSaveRefusalLog(result, failure = null) {
+  const code = String(result?.code || "");
+  const entry = {
+    event: "ownership_save_refused",
+    code,
+    windowClosed: result?.windowClosed === true,
+    databaseRechecked: result?.databaseRechecked === true,
+    saved: false,
+  };
+  if (code === "ownership_save_failed" && failure) {
+    const safe = ownershipInsertFailure({
+      name: failure.mongoErrorName || failure.name,
+      code: failure.mongoErrorCode ?? failure.code,
+    });
+    entry.mongoErrorName = safe.mongoErrorName;
+    entry.mongoErrorCode = safe.mongoErrorCode;
+  }
+  return entry;
+}
+
+export function reportOwnershipSaveRefusal(result, failure = null) {
+  if (result?.saved === true && result?.ok === true) return result;
+  console.warn(JSON.stringify(ownershipSaveRefusalLog(result, failure || result?.insertFailure || null)));
+  return result;
+}
+
+export function refuseOwnershipInsert(held, err) {
+  const refused = { ...held, ok: false, code: "ownership_save_failed", saved: false, writes: [] };
+  Object.defineProperty(refused, "insertFailure", { value: ownershipInsertFailure(err), enumerable: false });
+  return refused;
+}
+
 function refusedSave(code, extra = {}) {
   return {
     ok: false,
@@ -505,8 +546,8 @@ export async function commitOwnershipSave(input, deps = {}) {
       ...documents.owner,
       approvedAt: new Date(),
     });
-  } catch {
-    return { ...held, ok: false, code: "ownership_save_failed", saved: false, writes: [] };
+  } catch (err) {
+    return refuseOwnershipInsert(held, err);
   }
   const existingOwner = ownerInsert.duplicate ? await ownerModel.findOne({ skuKey: documents.owner.skuKey }).lean() : null;
   const ownerConflict = interpretOwnershipIndexConflict({
@@ -551,16 +592,17 @@ export async function commitOwnershipSave(input, deps = {}) {
 export async function saveOwnershipSelection(input = {}, deps = {}) {
   const authorization = ownershipSaveAuthorization(deps.env);
   if (authorization.enabled !== true || OWNERSHIP_SAVE_RELEASED !== true || OWNERSHIP_SAVE_INDEXES_READY !== true) {
-    return { ...attemptFutureOwnershipSave(input, deps.env), databaseRechecked: false, windowClosed: false };
+    return reportOwnershipSaveRefusal({ ...attemptFutureOwnershipSave(input, deps.env), databaseRechecked: false, windowClosed: false });
   }
   const claim = claimOwnershipSave();
   if (!claim.ok) {
-    return { ...attemptFutureOwnershipSave(input, deps.env), code: claim.code, databaseRechecked: false, windowClosed: false };
+    return reportOwnershipSaveRefusal({ ...attemptFutureOwnershipSave(input, deps.env), code: claim.code, databaseRechecked: false, windowClosed: false });
   }
   try {
     const result = await commitOwnershipSave(input, deps);
+    const failure = result?.insertFailure || null;
     const closed = closeOwnershipWindow(result?.saved === true ? "success" : "failure");
-    return { ...result, windowClosed: closed.windowClosed === true, sentToGini: 0 };
+    return reportOwnershipSaveRefusal({ ...result, windowClosed: closed.windowClosed === true, sentToGini: 0 }, failure);
   } catch (err) {
     closeOwnershipWindow("failure");
     throw err;

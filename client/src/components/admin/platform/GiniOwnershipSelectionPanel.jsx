@@ -32,6 +32,39 @@ function OwnershipImage({ url }) {
   );
 }
 
+function saveResponseFields(response) {
+  return {
+    code: response?.code || "",
+    message: typeof response?.message === "string" ? response.message : "",
+    windowClosed: response?.windowClosed,
+    databaseRechecked: response?.databaseRechecked,
+  };
+}
+
+function yesNo(value) {
+  if (value === true) return "yes";
+  if (value === false) return "no";
+  return "—";
+}
+
+function SaveResponseDetails({ response }) {
+  if (!response) return null;
+  const fields = saveResponseFields({
+    code: response.code,
+    message: typeof response.apiMessage === "string" ? response.apiMessage : response.message,
+    windowClosed: response.windowClosed,
+    databaseRechecked: response.databaseRechecked,
+  });
+  return (
+    <div className="mt-2 text-sm">
+      <p>Save response code: {fields.code || "—"}</p>
+      <p>Save response message: {fields.message || "—"}</p>
+      <p>Window closed: {yesNo(fields.windowClosed)}</p>
+      <p>Database rechecked: {yesNo(fields.databaseRechecked)}</p>
+    </div>
+  );
+}
+
 function nextGateLabel(gate) {
   return {
     missing_size_attribute: "Missing Size attribute",
@@ -71,10 +104,16 @@ export default function GiniOwnershipSelectionPanel() {
         [groupKey]: { ...review, saveAvailable: false, saveResult: saved, sentToGini: saved?.sentToGini ?? 0 },
       }));
     } catch (err) {
-      setError(err.message || "Save failed");
+      const saveResult = saveResponseFields({
+        code: err.code,
+        message: err.apiMessage,
+        windowClosed: err.windowClosed,
+        databaseRechecked: err.databaseRechecked,
+      });
+      setError(saveResult);
       setReviews((current) => ({
         ...current,
-        [groupKey]: { ...review, saveAvailable: false, sentToGini: 0 },
+        [groupKey]: { ...review, saveAvailable: false, saveResult, sentToGini: 0 },
       }));
     } finally {
       setBusy(false);
@@ -136,7 +175,11 @@ export default function GiniOwnershipSelectionPanel() {
           Search
         </button>
       </form>
-      {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
+      {error ? (
+        <div className="mt-3 text-sm text-red-700">
+          {typeof error === "string" ? <p>{error}</p> : <SaveResponseDetails response={error} />}
+        </div>
+      ) : null}
       {busy && !data ? <p className="mt-3 text-sm text-brown/60">Loading ownership groups…</p> : null}
       <div className="mt-4 space-y-4">
         {groups.map((group) => {
@@ -286,6 +329,7 @@ export default function GiniOwnershipSelectionPanel() {
                       ) : (
                         <p className="mt-2">Save ownership is available for this IT Lobby product until the authorization window closes.</p>
                       )}
+                      <SaveResponseDetails response={review.saveResult} />
                     </div>
                   ) : null}
                   <p className="mt-1">Owner save authorization: {review.saveAvailable ? "on" : "off"}.</p>

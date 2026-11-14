@@ -308,9 +308,11 @@ export const api = {
         confirm: body?.confirm === true,
       }),
     }),
-  giniVariantOwnershipSave: (body) =>
-    request("/api/admin/platforms/gini/variant-sync/ownership/save", {
+  giniVariantOwnershipSave: async (body) => {
+    const res = await fetch(apiUrl("/api/admin/platforms/gini/variant-sync/ownership/save"), {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify({
         parentSku: body?.parentSku,
         productId: body?.productId,
@@ -320,7 +322,19 @@ export const api = {
         confirm: body?.confirm === true,
         confirmOwnershipSave: body?.confirmOwnershipSave === true,
       }),
-    }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(json.message || `Request failed (${res.status})`);
+      err.status = res.status;
+      err.code = json.code;
+      err.apiMessage = typeof json.message === "string" ? json.message : "";
+      err.windowClosed = json.windowClosed;
+      err.databaseRechecked = json.databaseRechecked;
+      throw err;
+    }
+    return json;
+  },
   giniVariantPricePilotApprove: (body) =>
     request("/api/admin/platforms/gini/variant-sync/price-pilot/approve", {
       method: "POST",

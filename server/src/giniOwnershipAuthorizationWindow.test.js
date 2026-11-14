@@ -18,6 +18,7 @@ import {
 } from "./utils/giniOwnershipAuthorizationWindow.js";
 import { CLOSED_LOCK_LINES, OPEN_LOCK_LINES } from "./utils/giniOwnershipFirstSaveProcedure.js";
 import { OWNERSHIP_SAVE_INDEXES_READY, OWNERSHIP_SAVE_RELEASED, ownershipSaveAuthorization } from "./utils/giniVariantOwnershipAudit.js";
+import { saveOwnershipSelection } from "./services/giniVariantOwnershipSelection.js";
 
 const IT = "6adf9ca49dedbaa3dd573cce";
 const IT_SOURCE = "6adf9824ef43bcf3ec7d1ee4";
@@ -412,5 +413,70 @@ server.listen(0, "127.0.0.1", () => {
     try { pm2(["kill"]); } catch { /* isolated daemon */ }
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("a failure close consumes the window and a second ownership save writes nothing", async () => {
+  resetOwnershipWindowForTests();
+  const repo = tempRepo();
+  const env = {
+    GINI_VARIANT_OWNERSHIP_SAVE_ENABLED: "true",
+    GINI_ALLOW_OWNERSHIP_SAVE: "true",
+  };
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (line) => warnings.push(String(line));
+  const writes = [];
+  try {
+    openLocks(repo.file);
+    const armed = armOwnershipWindow({ repoRoot: repo.root, sha: repo.sha, env, ttlMs: 60_000, supervise: false });
+    assert.equal(armed.armed, true);
+    assert.equal(claimOwnershipSave().ok, true);
+    const closed = closeOwnershipWindow("failure");
+    assert.equal(closed.windowClosed, true);
+    assert.equal(closed.reason, "failure");
+    assert.equal(env.GINI_VARIANT_OWNERSHIP_SAVE_ENABLED, undefined);
+    assert.equal(env.GINI_ALLOW_OWNERSHIP_SAVE, undefined);
+    assert.equal(fs.readFileSync(repo.file, "utf8"), repo.closed);
+    const input = {
+      parentSku: "38104",
+      productId: IT,
+      vendorId: "it",
+      sourceItemId: IT_SOURCE,
+      confirm: true,
+      confirmOwnershipSave: true,
+      administratorId: "admin-1",
+    };
+    const deps = {
+      env,
+      ownerModel: { async create() { writes.push("owner"); } },
+      operationModel: { async create() { writes.push("operation"); } },
+    };
+    const firstPromise = saveOwnershipSelection(input, deps);
+    const secondPromise = saveOwnershipSelection(input, deps);
+    const lines = warnings.map((line) => JSON.parse(line));
+    console.warn = original;
+    const first = await firstPromise;
+    const second = await secondPromise;
+    assert.equal(first.code, "ownership_save_disabled");
+    assert.equal(first.saved, false);
+    assert.equal(first.windowClosed, false);
+    assert.equal(first.databaseRechecked, false);
+    assert.deepEqual(first.writes, []);
+    assert.equal(second.code, "ownership_save_disabled");
+    assert.equal(second.saved, false);
+    assert.deepEqual(second.writes, []);
+    assert.deepEqual(writes, []);
+    assert.equal(claimOwnershipSave().code, "ownership_window_closed");
+    assert.equal(armOwnershipWindow({ repoRoot: repo.root, sha: repo.sha, env, supervise: false }).code, "run_already_used");
+    assert.equal(lines.length, 2);
+    assert.equal(lines.every((line) => line.code === "ownership_save_disabled" && line.saved === false && line.windowClosed === false && line.databaseRechecked === false), true);
+    assert.equal(JSON.stringify(lines).includes(IT), false);
+    assert.equal(OWNERSHIP_SAVE_RELEASED, false);
+    assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
+  } finally {
+    console.warn = original;
+    resetOwnershipWindowForTests();
+    fs.rmSync(repo.root, { recursive: true, force: true });
   }
 });

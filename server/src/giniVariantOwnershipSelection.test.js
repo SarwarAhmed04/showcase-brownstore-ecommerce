@@ -26,7 +26,15 @@ import {
   previewOwnershipSaveDocuments,
   protectedReconciledParentSkus,
 } from "./utils/giniVariantOwnershipAudit.js";
-import { listOwnershipGroups, prepareOwnershipSelection, saveOwnershipSelection } from "./services/giniVariantOwnershipSelection.js";
+import {
+  listOwnershipGroups,
+  ownershipInsertFailure,
+  ownershipSaveRefusalLog,
+  prepareOwnershipSelection,
+  refuseOwnershipInsert,
+  reportOwnershipSaveRefusal,
+  saveOwnershipSelection,
+} from "./services/giniVariantOwnershipSelection.js";
 import { rememberVerifiedSnapshot } from "./utils/giniOwnershipProductionContext.js";
 import { OWNERSHIP_IMAGE_FALLBACK, ownershipImageSrc } from "../../client/src/components/admin/platform/ownershipImage.js";
 
@@ -1008,4 +1016,109 @@ test("the SKU 38104 API review does not register a snapshot and save stays disab
   assert.equal(OWNERSHIP_SAVE_RELEASED, false);
   assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
   assert.equal(mongoose.connection.readyState, 0);
+});
+
+test("ownership save refusals report the response code without documents or secrets", async () => {
+  const secret = "Bearer token and the full product document";
+  const failure = Object.assign(new Error(secret), { name: "MongoServerError", code: 121, errmsg: secret });
+  const refused = refuseOwnershipInsert({
+    databaseRechecked: true,
+    sentToGini: 0,
+    canSend: false,
+    writes: [],
+  }, failure);
+  const published = JSON.stringify(refused);
+  assert.equal(published.includes(secret), false);
+  assert.equal(published.includes("MongoServerError"), false);
+  assert.equal(published.includes("insertFailure"), false);
+  assert.equal(refused.code, "ownership_save_failed");
+  assert.equal(refused.saved, false);
+  assert.deepEqual(refused.writes, []);
+  const logged = ownershipSaveRefusalLog({ ...refused, windowClosed: true }, refused.insertFailure);
+  assert.deepEqual(logged, {
+    event: "ownership_save_refused",
+    code: "ownership_save_failed",
+    windowClosed: true,
+    databaseRechecked: true,
+    saved: false,
+    mongoErrorName: "MongoServerError",
+    mongoErrorCode: 121,
+  });
+  assert.equal(JSON.stringify(logged).includes(secret), false);
+  const unnamed = ownershipInsertFailure({ name: secret, code: "ECONNREFUSED", message: secret });
+  assert.equal(unnamed.mongoErrorName, "Error");
+  assert.equal(unnamed.mongoErrorCode, null);
+
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (line) => warnings.push(String(line));
+  const writes = [];
+  const input = {
+    parentSku: "38104",
+    productId: "6adf9ca49dedbaa3dd573cce",
+    vendorId: "it",
+    sourceItemId: "6adf9824ef43bcf3ec7d1ee4",
+    confirm: true,
+    confirmOwnershipSave: true,
+    administratorId: "admin-1",
+  };
+  const deps = {
+    env: {
+      GINI_VARIANT_OWNERSHIP_SAVE_ENABLED: "true",
+      GINI_ALLOW_OWNERSHIP_SAVE: "true",
+    },
+    ownerModel: { create() { writes.push("owner"); } },
+    operationModel: { create() { writes.push("operation"); } },
+  };
+  try {
+    const firstPromise = saveOwnershipSelection(input, deps);
+    const secondPromise = saveOwnershipSelection(input, deps);
+    const lines = warnings.map((line) => JSON.parse(line));
+    reportOwnershipSaveRefusal({ ok: true, saved: true, code: "ownership_recorded" });
+    assert.equal(warnings.length, 2);
+    console.warn = original;
+    const first = await firstPromise;
+    const second = await secondPromise;
+    assert.equal(first.code, "ownership_save_disabled");
+    assert.equal(first.windowClosed, false);
+    assert.equal(first.databaseRechecked, false);
+    assert.equal(first.saved, false);
+    assert.equal(second.code, "ownership_save_disabled");
+    assert.equal(second.windowClosed, false);
+    assert.equal(second.databaseRechecked, false);
+    assert.deepEqual(first.writes, []);
+    assert.deepEqual(second.writes, []);
+    assert.deepEqual(writes, []);
+    assert.equal(lines.length, 2);
+    assert.deepEqual(lines[0], {
+      event: "ownership_save_refused",
+      code: "ownership_save_disabled",
+      windowClosed: false,
+      databaseRechecked: false,
+      saved: false,
+    });
+    assert.deepEqual(lines[1], lines[0]);
+  } finally {
+    console.warn = original;
+  }
+
+  const panel = fs.readFileSync(new URL("../../client/src/components/admin/platform/GiniOwnershipSelectionPanel.jsx", import.meta.url), "utf8");
+  const client = fs.readFileSync(new URL("../../client/src/api.js", import.meta.url), "utf8");
+  for (const label of ["Save response code:", "Save response message:", "Window closed:", "Database rechecked:"]) {
+    assert.equal(panel.includes(label), true, label);
+  }
+  assert.equal(panel.includes("err.apiMessage"), true);
+  assert.equal(panel.includes("err.windowClosed"), true);
+  assert.equal(panel.includes("err.databaseRechecked"), true);
+  const saveClient = client.slice(client.indexOf("giniVariantOwnershipSave:"), client.indexOf("giniVariantPricePilotApprove"));
+  assert.equal(saveClient.includes("err.code = json.code"), true);
+  assert.equal(saveClient.includes("err.windowClosed = json.windowClosed"), true);
+  assert.equal(saveClient.includes("err.databaseRechecked = json.databaseRechecked"), true);
+  assert.equal(saveClient.includes("json.message"), true);
+  const service = fs.readFileSync(new URL("./services/giniVariantOwnershipSelection.js", import.meta.url), "utf8");
+  const saveFn = service.slice(service.indexOf("export async function saveOwnershipSelection"));
+  assert.equal(saveFn.includes('closeOwnershipWindow(result?.saved === true ? "success" : "failure")'), true);
+  assert.equal(saveFn.includes("reportOwnershipSaveRefusal"), true);
+  assert.equal(OWNERSHIP_SAVE_RELEASED, false);
+  assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
 });
