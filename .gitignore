@@ -8,5 +8,6 @@ Thumbs.db
 .vite
 coverage/
 server/data/
+server/ibsher-catalog-sync.paused
 _design-ref/
 

@@ -35,6 +35,8 @@ import {
   sanitizeBannerLink,
   toAdminBanner,
 } from "../models/Banner.js";
+import { applyCatalogAbsence } from "../utils/catalogStaleGuard.js";
+import { defaultPauseFileExists, manualCatalogSyncAllowed } from "../utils/ibsherAutoSync.js";
 import {
   BROWNSTORE_PRODUCTS_PATH,
   catalogSyncMeta,
@@ -859,6 +861,9 @@ function logCatalogSync(summary, aborted = "") {
   console.log(`Inserted: ${summary.inserted}`);
   console.log(`Updated: ${summary.updated}`);
   console.log(`Refreshed without content change: ${Number(summary.refreshed) || 0}`);
+  console.log(`Quarantined without deletion: ${Number(summary.quarantined) || 0}`);
+  console.log(`Awaiting deletion approval: ${Number(summary.awaitingApproval) || 0}`);
+  console.log(`Catalog absence mode: ${summary.absenceMode || "none"}`);
   console.log(`Removed: ${summary.removed}`);
   if (aborted) console.error(`Catalog sync aborted: ${aborted}`);
 }
@@ -950,13 +955,18 @@ async function runCatalogSync() {
   }
 
   const categoryResult = await upsertRemoteCategories(result.categories);
-  const removed = await Product.deleteMany({
-    $or: [{ lastSyncedAt: { $lt: syncedAt } }, { lastSyncedAt: { $exists: false } }],
+  const absence = await applyCatalogAbsence({
+    seenIds: [...seen],
+    remoteTotal,
+    syncedAt,
   });
   const summary = {
     ...report,
     categories: categoryResult.categories,
-    removed: removed.deletedCount || 0,
+    removed: absence.removed,
+    quarantined: absence.quarantined,
+    awaitingApproval: absence.awaitingApproval,
+    absenceMode: absence.mode,
     localTotalAfterSync: await Product.countDocuments(),
   };
   logCatalogSync(summary);
@@ -1045,6 +1055,18 @@ adminRouter.get("/sync/status", (_req, res) => {
 });
 
 adminRouter.post("/sync", async (req, res) => {
+  const decision = manualCatalogSyncAllowed({
+    pauseFileExists: defaultPauseFileExists,
+    body: req.body,
+  });
+  if (!decision.allowed) {
+    console.warn("IBSHER catalog sync is paused. Refresh Products was refused.");
+    res.status(409).json({
+      message: "IBSHER catalog sync is paused. Refresh Products was not run.",
+      paused: true,
+    });
+    return;
+  }
   try {
     const result = await syncFromIbsher();
     await logActivity(req, "catalog.sync", {

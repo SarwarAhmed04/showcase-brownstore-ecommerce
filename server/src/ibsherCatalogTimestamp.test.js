@@ -217,16 +217,20 @@ test("one bulk write can insert, refresh, and update separate products", async (
   assert.ok(created.updatedAt);
 });
 
-test("stale deletion still runs only after a complete catalog sync", () => {
+test("stale deletion is quarantined and runs only after a complete catalog sync", () => {
   const admin = fs.readFileSync(new URL("./routes/admin.js", import.meta.url), "utf8");
+  const guard = fs.readFileSync(new URL("./utils/catalogStaleGuard.js", import.meta.url), "utf8");
   const incomplete = admin.indexOf("if (incomplete)");
-  const deletion = admin.indexOf("Product.deleteMany", incomplete);
+  const deletion = admin.indexOf("applyCatalogAbsence", incomplete);
   assert.ok(incomplete > 0);
   assert.ok(deletion > incomplete);
+  assert.equal(admin.includes("Product.deleteMany"), false);
   assert.match(admin, /Incomplete catalog sync:/);
   assert.match(admin, /Stale products were kept/);
-  assert.match(admin, /lastSyncedAt: \{ \$lt: syncedAt \}/);
   assert.match(admin, /removed: 0/);
+  assert.match(guard, /CATALOG_DELETE_CONFIRMATIONS = 3/);
+  assert.match(guard, /mode: "shrink_hold"/);
+  assert.match(guard, /mode: "outage"/);
 });
 
 test("a refreshed product stays newer than the stale-catalog deletion cutoff", async () => {
