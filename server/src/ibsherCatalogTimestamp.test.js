@@ -225,6 +225,8 @@ test("stale deletion is quarantined and runs only after a complete catalog sync"
   assert.ok(incomplete > 0);
   assert.ok(deletion > incomplete);
   assert.equal(admin.includes("Product.deleteMany"), false);
+  assert.equal(admin.includes("Category.deleteMany"), false);
+  assert.equal(admin.includes("approveCategoryDeletions"), false);
   assert.match(admin, /Incomplete catalog sync:/);
   assert.match(admin, /Stale products were kept/);
   assert.match(admin, /removed: 0/);

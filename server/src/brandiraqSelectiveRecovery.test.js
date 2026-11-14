@@ -21,6 +21,7 @@ import {
   BRANDIRAQ_VENDOR_BEFORE,
   productionInputsAllowed,
   reportPathAllowed,
+  recoveryExecutionOk,
   runBrandiraqSelectiveRecovery,
   sameProductDocument,
   selectBsonDocuments,
@@ -121,6 +122,21 @@ function executeInput(fixture, store, extra = {}) {
     ...extra,
   };
 }
+
+test("a changed side collection explains execute ok false after the 27 documents verify", () => {
+  const execution = recoveryExecutionOk({
+    verification: { ok: true, verifiedCount: 27, failed: [] },
+    collectionChanges: [{ collection: "activities", before: 4, after: 5, expected: 4 }],
+    stopReason: "",
+  });
+  assert.equal(execution.ok, false);
+  assert.equal(execution.okReason, "collection_counts_changed");
+  assert.equal(recoveryExecutionOk({
+    verification: { ok: true, verifiedCount: 27, failed: [] },
+    collectionChanges: [],
+    stopReason: "",
+  }).okReason, "verified");
+});
 
 test("the expected production totals and paths stay fixed", () => {
   assert.equal(BRANDIRAQ_PRODUCTS_BEFORE + BRANDIRAQ_RECOVERY_COUNT, BRANDIRAQ_PRODUCTS_AFTER);

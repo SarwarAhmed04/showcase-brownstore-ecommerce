@@ -135,7 +135,11 @@ test("startup uses the guard and paused refresh is refused before sync", () => {
   assert.match(admin, /adminRouter\.post\("\/sync"/);
   assert.match(admin, /manualCatalogSyncAllowed/);
   assert.ok(admin.indexOf("manualCatalogSyncAllowed") < admin.indexOf("const result = await syncFromIbsher()"));
+  assert.ok(admin.indexOf("manualCatalogSyncAllowed") < admin.indexOf("const result = await syncCategoriesFromIbsher()"));
   assert.match(admin, /Refresh Products was refused/);
+  assert.match(admin, /Category refresh was refused/);
+  assert.match(admin, /catalog\.sync_refused/);
+  assert.equal(admin.includes("Category.deleteMany"), false);
   assert.equal(admin.includes("ibsherAutoSyncEnabled"), false);
   assert.match(client, /sync: \(\) => request\("\/api\/admin\/sync", \{ method: "POST" \}\)/);
   assert.equal(client.includes(PAUSED_CATALOG_SYNC_AUTHORIZATION), false);

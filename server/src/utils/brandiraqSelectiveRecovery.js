@@ -285,6 +285,14 @@ function catalogAccepted(catalog) {
     && catalog?.recoveryCount === BRANDIRAQ_RECOVERY_COUNT;
 }
 
+export function recoveryExecutionOk({ verification, collectionChanges = [], stopReason = "" } = {}) {
+  const changes = Array.isArray(collectionChanges) ? collectionChanges : [];
+  if (stopReason) return { ok: false, okReason: String(stopReason) };
+  if (!verification?.ok) return { ok: false, okReason: "documents_not_verified" };
+  if (changes.length) return { ok: false, okReason: "collection_counts_changed" };
+  return { ok: true, okReason: "verified" };
+}
+
 function countsUnchangedExceptProducts(before, after, insertedCount) {
   const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
   const changes = [];
@@ -560,12 +568,13 @@ export async function runBrandiraqSelectiveRecovery({
     finalSnapshot.collectionCounts || {},
     inserted,
   );
-  const verified = verification.ok && collectionChanges.length === 0 && !stopReason;
+  const execution = recoveryExecutionOk({ verification, collectionChanges, stopReason });
   return {
     ...base,
-    ok: verified,
+    ok: execution.ok,
+    okReason: execution.okReason,
     readyForAuthorizedInsert: false,
-    verified,
+    verified: execution.ok,
     verification: { ...verification, collectionChanges },
     writes: inserted,
     inserted,

@@ -36,6 +36,7 @@ import {
   toAdminBanner,
 } from "../models/Banner.js";
 import { applyCatalogAbsence } from "../utils/catalogStaleGuard.js";
+import { syncRemoteCategories } from "../utils/categoryCatalogSync.js";
 import { defaultPauseFileExists, manualCatalogSyncAllowed } from "../utils/ibsherAutoSync.js";
 import {
   BROWNSTORE_PRODUCTS_PATH,
@@ -504,11 +505,32 @@ adminRouter.put("/categories/order", async (req, res) => {
 });
 
 adminRouter.post("/categories/sync", async (req, res) => {
+  const decision = manualCatalogSyncAllowed({
+    pauseFileExists: defaultPauseFileExists,
+    body: req.body,
+  });
+  if (!decision.allowed) {
+    console.warn("IBSHER catalog sync is paused. Category refresh was refused.");
+    await logActivity(req, "catalog.sync_refused", {
+      paused: true,
+      authorized: false,
+      route: "categories",
+    });
+    res.status(409).json({
+      message: "IBSHER catalog sync is paused. Category refresh was not run.",
+      paused: true,
+    });
+    return;
+  }
   try {
     const result = await syncCategoriesFromIbsher();
     await logActivity(req, "category.sync", {
       categories: result.categories,
       removed: result.removed,
+      quarantined: result.quarantined,
+      referenced: result.referenced,
+      pausedAuthorization: decision.authorized,
+      actorId: String(req.user?._id || ""),
     });
     const [categories, settings] = await Promise.all([
       adminCategoryQuery(),
@@ -518,6 +540,10 @@ adminRouter.post("/categories/sync", async (req, res) => {
       message: "Sync complete",
       synced: result.categories,
       removed: result.removed,
+      quarantined: result.quarantined,
+      awaitingApproval: result.awaitingApproval,
+      referenced: result.referenced,
+      absenceMode: result.absenceMode,
       layout: settings.categoryLayout || "mosaic",
       categoryLimit: Number(settings.categoryLimit) || 0,
       categories: categories.map(toAdminCategory),
@@ -865,6 +891,9 @@ function logCatalogSync(summary, aborted = "") {
   console.log(`Awaiting deletion approval: ${Number(summary.awaitingApproval) || 0}`);
   console.log(`Catalog absence mode: ${summary.absenceMode || "none"}`);
   console.log(`Removed: ${summary.removed}`);
+  console.log(`Categories quarantined without deletion: ${Number(summary.categoriesQuarantined) || 0}`);
+  console.log(`Categories awaiting deletion approval: ${Number(summary.categoriesAwaitingApproval) || 0}`);
+  console.log(`Categories kept because products reference them: ${Number(summary.categoriesReferenced) || 0}`);
   if (aborted) console.error(`Catalog sync aborted: ${aborted}`);
 }
 
@@ -963,6 +992,10 @@ async function runCatalogSync() {
   const summary = {
     ...report,
     categories: categoryResult.categories,
+    categoriesQuarantined: categoryResult.quarantined,
+    categoriesAwaitingApproval: categoryResult.awaitingApproval,
+    categoriesReferenced: categoryResult.referenced,
+    categoryAbsenceMode: categoryResult.absenceMode,
     removed: absence.removed,
     quarantined: absence.quarantined,
     awaitingApproval: absence.awaitingApproval,
@@ -990,46 +1023,7 @@ function adminCategoryQuery() {
 }
 
 async function upsertRemoteCategories(categories) {
-  return withCategoryWrite(async () => {
-    const existing = await Category.find().select("ibsherId displayOrder");
-    const known = new Set(existing.map((doc) => doc.ibsherId));
-    let nextOrder = existing.reduce((max, doc) => Math.max(max, Number(doc.displayOrder) || 0), 0);
-    const seen = new Set();
-    for (const cat of categories || []) {
-      const id = String(cat?._id || "");
-      if (!id || seen.has(id) || cat.isActive === false) continue;
-      seen.add(id);
-      const update = {
-        $set: {
-          ibsherId: id,
-          name: cat.name,
-          images: cat.images || [],
-          isActive: cat.isActive !== false,
-        },
-      };
-      if (!known.has(id)) {
-        nextOrder += 1;
-        update.$setOnInsert = { displayOrder: nextOrder };
-      }
-      await Category.updateOne({ ibsherId: id }, update, { upsert: true });
-    }
-
-    if (!seen.size) {
-      throw new Error("Category sync returned no categories");
-    }
-
-    const stale = await Category.find({ ibsherId: { $nin: [...seen] } }).select(
-      "ibsherId overrides"
-    );
-    for (const category of stale) {
-      removeLocalCategoryImage(category.overrides?.image);
-    }
-    if (stale.length) {
-      await Category.deleteMany({ _id: { $in: stale.map((category) => category._id) } });
-    }
-
-    return { categories: seen.size, removed: stale.length };
-  });
+  return withCategoryWrite(() => syncRemoteCategories(categories));
 }
 
 export function syncCategoriesFromIbsher() {
@@ -1061,6 +1055,11 @@ adminRouter.post("/sync", async (req, res) => {
   });
   if (!decision.allowed) {
     console.warn("IBSHER catalog sync is paused. Refresh Products was refused.");
+    await logActivity(req, "catalog.sync_refused", {
+      paused: true,
+      authorized: false,
+      route: "catalog",
+    });
     res.status(409).json({
       message: "IBSHER catalog sync is paused. Refresh Products was not run.",
       paused: true,
@@ -1075,6 +1074,8 @@ adminRouter.post("/sync", async (req, res) => {
       source: result.source,
       remoteTotal: result.remoteTotal,
       limited: result.limited,
+      pausedAuthorization: decision.authorized,
+      actorId: String(req.user?._id || ""),
     });
     res.json({
       message: "Sync complete",
