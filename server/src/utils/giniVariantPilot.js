@@ -207,12 +207,13 @@ export function buildPilotView({
   writesEnabled = false,
   categoryCounts = null,
   catalogSummary = null,
+  slots = GINI_VARIANT_PILOT_SLOTS,
 } = {}) {
   const body = attribute?.data && typeof attribute.data === "object" ? attribute.data : attribute || {};
   const labels = giniColorValueLabels(body);
   const attributeOk = String(body.id || "") === GINI_VARIANT_PILOT_COLOR_ATTRIBUTE_ID && body.name === "Color" && labels.length > 0;
   const operationByProduct = new Map((operations || []).map((row) => [String(row.productId), row.status || ""]));
-  const assessed = GINI_VARIANT_PILOT_SLOTS.map((slot) => {
+  const assessed = slots.map((slot) => {
     const candidates = (products || []).filter((row) => giniSkuKey(row.parentSku) === giniSkuKey(slot.parentSku));
     const active = slot.productId ? candidates.find((row) => row.productId === slot.productId) : activeCandidate(candidates);
     return assessSlot({
@@ -229,7 +230,7 @@ export function buildPilotView({
   });
   let stopped = false;
   let stopCode = "";
-  const slots = assessed.map((slot) => {
+  const queued = assessed.map((slot) => {
     if (slot.verified) return { ...slot, queue: stopped ? "waiting" : "verified", queueCode: stopped ? stopCode : "" };
     if (stopped) return { ...slot, queue: "waiting", queueCode: stopCode, stageAReady: false, stageBReady: false };
     const uncertain = slot.blockers.some((code) => UNCERTAIN.has(code));
@@ -261,7 +262,7 @@ export function buildPilotView({
   }));
   return {
     ok: true,
-    limit: GINI_VARIANT_PILOT_LIMIT,
+    limit: slots.length,
     sentToGini: 0,
     canSend: false,
     bulkSyncEnabled: false,
@@ -281,6 +282,6 @@ export function buildPilotView({
       "Confirm Stage B for that same product and wait until a GET shows every variant.",
       "Repeat for the next product. An uncertain result stops the pilot and is not retried.",
     ],
-    products: slots,
+    products: queued,
   };
 }

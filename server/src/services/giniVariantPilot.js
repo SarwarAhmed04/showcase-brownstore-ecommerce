@@ -104,7 +104,15 @@ function closed(code) {
   return { ok: false, sent: false, sentToGini: 0, code, writeMethods: [], canSend: false, bulkSyncEnabled: false };
 }
 
+export const IT_LOBBY_38104_STAGE = Object.freeze({
+  order: 1,
+  parentSku: "38104",
+  productId: "6adf9ca49dedbaa3dd573cce",
+  variantSkus: Object.freeze(["38104-BLACK", "38104-BLUE"]),
+});
+
 export async function previewGiniVariantPilot(deps = {}) {
+  const slots = Array.isArray(deps.slots) && deps.slots.length ? deps.slots : GINI_VARIANT_PILOT_SLOTS;
   const perform = readOnly(deps.perform || performGiniRequest);
   const loadCatalog = deps.loadCatalog || loadVariantCatalog;
   const catalog = await loadCatalog({ force: true });
@@ -140,9 +148,9 @@ export async function previewGiniVariantPilot(deps = {}) {
   }
   const remoteBySku = { ...(deps.remoteBySku || {}) };
   if (!deps.remoteBySku) {
-    for (const slot of GINI_VARIANT_PILOT_SLOTS) remoteBySku[slot.parentSku] = await readRemote(perform, slot.parentSku);
+    for (const slot of slots) remoteBySku[slot.parentSku] = await readRemote(perform, slot.parentSku);
   }
-  const ids = (catalog.products || []).filter((row) => GINI_VARIANT_PILOT_SLOTS.some((slot) => giniSkuKey(slot.parentSku) === giniSkuKey(row.parentSku))).map((row) => row.productId);
+  const ids = (catalog.products || []).filter((row) => slots.some((slot) => giniSkuKey(slot.parentSku) === giniSkuKey(row.parentSku) && (!slot.productId || slot.productId === row.productId))).map((row) => row.productId);
   const texts = { ...(deps.texts || {}) };
   if (!deps.texts && ids.length) {
     const docs = await Product.find({ _id: { $in: ids } }).select("name description").lean();
@@ -164,7 +172,30 @@ export async function previewGiniVariantPilot(deps = {}) {
     writesEnabled: giniVariantSyncWritesEnabled(deps.env || process.env),
     categoryCounts,
     catalogSummary: catalog.summary || null,
+    slots,
   });
+}
+
+export async function previewGiniVariant38104(deps = {}) {
+  return previewGiniVariantPilot({ ...deps, slots: [IT_LOBBY_38104_STAGE] });
+}
+
+function approved38104Skus(slot) {
+  const skus = (slot?.combinations || []).map((row) => String(row.proposedSku || ""));
+  return skus.length === IT_LOBBY_38104_STAGE.variantSkus.length
+    && IT_LOBBY_38104_STAGE.variantSkus.every((sku) => skus.includes(sku));
+}
+
+export async function runGiniVariant38104Stage({ stage, confirm = false } = {}, deps = {}) {
+  if (deps.productId && String(deps.productId) !== IT_LOBBY_38104_STAGE.productId) return closed("not_in_pilot");
+  const preview = deps.preview || await previewGiniVariant38104(deps);
+  const slot = (preview.products || []).find((item) => item.productId === IT_LOBBY_38104_STAGE.productId);
+  if (!slot || giniSkuKey(slot.parentSku) !== giniSkuKey(IT_LOBBY_38104_STAGE.parentSku)) return closed("not_in_pilot");
+  if (!approved38104Skus(slot)) return closed("approval_mismatch");
+  return runGiniVariantPilotStage(
+    { productId: IT_LOBBY_38104_STAGE.productId, stage, confirm },
+    { ...deps, preview }
+  );
 }
 
 function matchesConfirmed(parent, rows, slot) {

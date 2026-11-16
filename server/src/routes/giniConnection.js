@@ -31,7 +31,7 @@ import { getLatestGiniResyncJob, reconcileGiniResync, runGiniResyncPreview, star
 import { previewGiniSkuCreate, sendGiniSkuCreate } from "../services/giniSkuCreate.js";
 import { loadVariantTestImageBytes, mongoVariantTestOperation, previewGiniVariantTest, runGiniVariantTestStage } from "../services/giniVariantTest.js";
 import { approveParentOwner, approveVariantSkus, variantCatalogPage } from "../services/giniVariantSync.js";
-import { previewGiniVariantPilot, runGiniVariantPilotStage } from "../services/giniVariantPilot.js";
+import { previewGiniVariant38104, previewGiniVariantPilot, runGiniVariant38104Stage, runGiniVariantPilotStage } from "../services/giniVariantPilot.js";
 import { previewVariantChangedSync } from "../services/giniVariantChangedSync.js";
 import { listOwnershipGroups, prepareOwnershipSelection, saveOwnershipSelection } from "../services/giniVariantOwnershipSelection.js";
 import { approveVariantPricePilot } from "../services/giniVariantPricePilot.js";
@@ -557,6 +557,26 @@ giniConnectionRouter.post("/platforms/gini/variant-sync/pilot/stage", async (req
     }), ""));
   } catch (err) {
     fail(res, err, "Failed to run the GINI variant pilot stage");
+  }
+});
+
+giniConnectionRouter.get("/platforms/gini/variant-sync/38104", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await previewGiniVariant38104(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to preview the IT Lobby 38104 variant sync");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/variant-sync/38104/stage", async (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json(assertNoSecretLeak(await runGiniVariant38104Stage({
+      stage: body.stage,
+      confirm: body.confirm === true,
+    }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to run the IT Lobby 38104 variant stage");
   }
 });
 
