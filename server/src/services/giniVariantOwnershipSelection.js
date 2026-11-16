@@ -590,16 +590,17 @@ export async function commitOwnershipSave(input, deps = {}) {
 }
 
 export async function saveOwnershipSelection(input = {}, deps = {}) {
-  const authorization = ownershipSaveAuthorization(deps.env);
+  const env = deps.env || process.env;
+  const authorization = ownershipSaveAuthorization(env);
   if (authorization.enabled !== true || OWNERSHIP_SAVE_RELEASED !== true || OWNERSHIP_SAVE_INDEXES_READY !== true) {
-    return reportOwnershipSaveRefusal({ ...attemptFutureOwnershipSave(input, deps.env), databaseRechecked: false, windowClosed: false });
+    return reportOwnershipSaveRefusal({ ...attemptFutureOwnershipSave(input, env), databaseRechecked: false, windowClosed: false });
   }
   const claim = claimOwnershipSave();
   if (!claim.ok) {
-    return reportOwnershipSaveRefusal({ ...attemptFutureOwnershipSave(input, deps.env), code: claim.code, databaseRechecked: false, windowClosed: false });
+    return reportOwnershipSaveRefusal({ ...attemptFutureOwnershipSave(input, env), code: claim.code, databaseRechecked: false, windowClosed: false });
   }
   try {
-    const result = await commitOwnershipSave(input, deps);
+    const result = await commitOwnershipSave(input, { ...deps, env });
     const failure = result?.insertFailure || null;
     const closed = closeOwnershipWindow(result?.saved === true ? "success" : "failure");
     return reportOwnershipSaveRefusal({ ...result, windowClosed: closed.windowClosed === true, sentToGini: 0 }, failure);
