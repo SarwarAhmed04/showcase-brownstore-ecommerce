@@ -48,6 +48,7 @@ import {
   inspectElryanSendAttempt,
   previewElryanSyncOne,
   searchElryanSyncProducts,
+  sendElryanProductionOne,
   sendElryanSyncOne,
 } from "../services/elryanSyncOne.js";
 import {
@@ -526,6 +527,27 @@ elryanConnectionRouter.get("/platforms/elryan/sync-one/send-attempt", async (req
     res.json(await inspectElryanSendAttempt(req.query.productId));
   } catch (err) {
     fail(res, err, "Failed to inspect the Elryan send attempt");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/sync-one/production-create", async (req, res) => {
+  try {
+    const result = assertNoElryanSecretLeak(
+      await sendElryanProductionOne({
+        productId: req.body?.productId,
+        confirm: req.body?.confirm === true,
+        previewToken: req.body?.previewToken,
+      }),
+      ""
+    );
+    const status = result.ok
+      ? 200
+      : result.httpStatus >= 400 && result.httpStatus < 600
+        ? result.httpStatus
+        : 403;
+    res.status(status).json(result);
+  } catch (err) {
+    fail(res, err, "Failed to create the Elryan Production product");
   }
 });
 

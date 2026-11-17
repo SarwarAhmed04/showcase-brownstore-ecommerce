@@ -8,6 +8,10 @@ import { ElryanValueMapping } from "./models/ElryanValueMapping.js";
 import { ElryanCategoryCatalogSnapshot } from "./models/ElryanCategoryCatalogSnapshot.js";
 import { ElryanCollectionDimension } from "./models/ElryanCollectionDimension.js";
 import { ElryanStagingDimensionCheck } from "./models/ElryanStagingDimensionCheck.js";
+import { ElryanStagingPriceApproval } from "./models/ElryanStagingPriceApproval.js";
+import { ElryanSendAttempt } from "./models/ElryanSendAttempt.js";
+import { ElryanConfirmedSend } from "./models/ElryanConfirmedSend.js";
+import { ElryanSyncOnePreview } from "./models/ElryanSyncOnePreview.js";
 import { PlatformTaxonomyConfig } from "./models/PlatformTaxonomyConfig.js";
 import { encryptApiKey } from "./utils/partnerAuth.js";
 import { setElryanFetch } from "./services/elryanClient.js";
@@ -16,7 +20,14 @@ import { saveElryanVerifiedMapping } from "./services/elryanMappingSave.js";
 import { upsertElryanValueMapping } from "./services/elryanAttributeMapping.js";
 import { saveElryanProductWarrantyMapping } from "./services/elryanWarrantyMapping.js";
 import { confirmElryanStagingDimensions } from "./services/elryanStagingInput.js";
-import { approveElryanStagingPrice, previewElryanSyncOne, sendElryanSyncOne } from "./services/elryanSyncOne.js";
+import { elryanCreateProduct } from "./services/elryanCatalog.js";
+import { startElryanSyncAll } from "./services/elryanSyncAll.js";
+import {
+  approveElryanStagingPrice,
+  previewElryanSyncOne,
+  sendElryanProductionOne,
+  sendElryanSyncOne,
+} from "./services/elryanSyncOne.js";
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || "elryan-production-preview-test-secret";
 delete process.env.ELRYAN_PRODUCT_WRITES_ENABLED;
@@ -42,6 +53,12 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
   let warrantyMode;
   let posts;
   let freshReads;
+  let createMode;
+  let skuReads;
+  let createdBody;
+  let failNextSku;
+  let hangPromise;
+  let writeCalls;
 
   before(async () => {
     memory = await MongoMemoryServer.create();
@@ -58,6 +75,12 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     warrantyMode = "fresh-kenwood";
     posts = 0;
     freshReads = 0;
+    createMode = "";
+    skuReads = 0;
+    createdBody = null;
+    failNextSku = false;
+    hangPromise = Promise.resolve();
+    writeCalls = [];
     __resetElryanAttributeValueCatalogCacheForTests();
     delete process.env.ELRYAN_PRODUCT_WRITES_ENABLED;
     delete process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES;
@@ -68,6 +91,10 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
       ElryanCategoryCatalogSnapshot.deleteMany({}),
       ElryanCollectionDimension.deleteMany({}),
       ElryanStagingDimensionCheck.deleteMany({}),
+      ElryanStagingPriceApproval.deleteMany({}),
+      ElryanSendAttempt.deleteMany({}),
+      ElryanConfirmedSend.deleteMany({}),
+      ElryanSyncOnePreview.deleteMany({}),
       PlatformTaxonomyConfig.deleteMany({}),
     ]);
     await ElryanConnection.create({
@@ -108,9 +135,37 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     setElryanFetch(async (url, options = {}) => {
       const method = String(options.method || "GET").toUpperCase();
       const target = String(url);
-      assert.equal(method === "POST" || method === "PUT" || method === "PATCH", false);
       assert.equal(target.includes("staging-marketplace-api.elryan.com"), false);
       assert.equal(target.includes("https://marketplace-api.elryan.com/api"), true);
+      if (method !== "GET" && method !== "HEAD") writeCalls.push(`${method} ${target}`);
+      if (target.includes("/sku-exists")) {
+        skuReads += 1;
+        if (createMode === "duplicate" || (createMode === "timeout-taken" && skuReads > 1)) {
+          return mockResponse(409, {
+            success: false,
+            error: { code: "CONFLICT", message: "SKU already used" },
+            data: { id: "elr-existing", sku: "OWCH180002", status: "in_review" },
+          });
+        }
+        if (failNextSku) {
+          throw new Error("sku check failed");
+        }
+        return mockResponse(200, { success: true, data: { available: true } });
+      }
+      if (method === "POST" && target.endsWith("/v1/products")) {
+        assert.equal(target, "https://marketplace-api.elryan.com/api/v1/products");
+        posts += 1;
+        createdBody = JSON.parse(options.body || "{}");
+        if (createMode === "hang") await hangPromise;
+        if (createMode === "timeout" || createMode === "timeout-taken" || createMode === "timeout-uncheckable") {
+          if (createMode === "timeout-uncheckable") failNextSku = true;
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          throw err;
+        }
+        return mockResponse(201, { data: { id: "elr-prod-1", status: "in_review" } });
+      }
+      assert.equal(method === "POST" || method === "PUT" || method === "PATCH", false);
       if (method !== "GET") posts += 1;
       if (target.includes("/v1/warranty")) {
         const fresh = new URL(target).searchParams.get("fresh");
@@ -328,5 +383,275 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     assert.equal(sent.code, "staging_only");
     assert.equal(sent.published, false);
     assert.equal(posts, 0);
+  });
+
+  async function prepareReady() {
+    await saveElryanProductWarrantyMapping({ productId, sku: "OWCH180002", confirm: true });
+    await ElryanCategoryCatalogSnapshot.create({
+      environment: "staging",
+      status: "complete",
+      coverage: "complete",
+      categories: [{ id: 999, name: "Staging only", hierarchy: "Staging", isParent: false }],
+    });
+    await ElryanCategoryCatalogSnapshot.create({
+      environment: "production",
+      status: "complete",
+      coverage: "complete",
+      categories: [{ id: 340, name: "Chopper", hierarchy: "Appliances : Chopper", isParent: false }],
+    });
+    await saveElryanVerifiedMapping({ brownCollectionId: "choppers", categoryId: "340", confirm: true });
+    await PlatformTaxonomyConfig.updateOne(
+      { partner: "elryan", brownCollectionId: "choppers" },
+      { $set: { "values.environments.production.attributes": { plug_type: 5 } } }
+    );
+    await upsertElryanValueMapping({
+      kind: "brand",
+      environment: "production",
+      brownKey: "kenwood-brand",
+      brownLabel: "Kenwood",
+      elryanId: "276",
+      elryanLabel: "Kenwood",
+    });
+    await upsertElryanValueMapping({
+      kind: "color",
+      environment: "production",
+      brownKey: "white",
+      brownLabel: "White",
+      elryanId: "59",
+      elryanLabel: "White",
+    });
+    await confirmElryanStagingDimensions({
+      environment: "production",
+      productId,
+      sku: "OWCH180002",
+      unit: "cm",
+      width: 20,
+      height: 30,
+      depth: 40,
+      axesConfirmed: true,
+      confirm: true,
+    });
+    await approveElryanStagingPrice({ productId, confirm: true });
+    return previewElryanSyncOne({ productId });
+  }
+
+  it("creates OWCH180002 in Production and reports the listing id and status", async () => {
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    createMode = "success";
+    const ready = await prepareReady();
+    assert.equal(ready.readiness, "READY");
+    assert.equal(ready.product.stock, 10);
+    assert.equal(ready.pricing.proposedElryanPrice, 66500);
+    const sent = await sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(sent.ok, true);
+    assert.equal(sent.environment, "production");
+    assert.equal(sent.elryanProductId, "elr-prod-1");
+    assert.equal(sent.listingStatus, "in_review");
+    assert.equal(sent.sku, "OWCH180002");
+    assert.equal(posts, 1);
+    assert.equal(skuReads, 1);
+    assert.equal(createdBody.sku, "OWCH180002");
+    assert.equal(createdBody.price, 66500);
+    assert.equal(createdBody.quantity, 10);
+    assert.equal(createdBody.cost, undefined);
+  });
+
+  it("stops when the Production SKU already exists and shows the listing", async () => {
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    createMode = "duplicate";
+    const ready = await prepareReady();
+    const sent = await sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(sent.ok, false);
+    assert.equal(sent.code, "sku_already_exists");
+    assert.equal(sent.listing.id, "elr-existing");
+    assert.equal(sent.listing.status, "in_review");
+    assert.equal(sent.listing.sku, "OWCH180002");
+    assert.equal(posts, 0);
+  });
+
+  it("checks the SKU again after a create timeout before another attempt", async () => {
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    createMode = "timeout";
+    const ready = await prepareReady();
+    const timedOut = await sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(timedOut.code, "create_timeout");
+    assert.equal(posts, 1);
+    assert.equal(skuReads, 2);
+    const again = await previewElryanSyncOne({ productId });
+    createMode = "success";
+    const sent = await sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: again.previewToken,
+    });
+    assert.equal(sent.ok, true);
+    assert.equal(sent.elryanProductId, "elr-prod-1");
+    assert.equal(posts, 2);
+    assert.ok(skuReads >= 3);
+  });
+
+  it("blocks Production create without write permission, confirmation, readiness, or the pilot SKU", async () => {
+    const ready = await prepareReady();
+    const closed = await sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(closed.code, "writes_disabled");
+    assert.equal(posts, 0);
+
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    const partial = await sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(partial.code, "writes_gated");
+
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const unconfirmed = await sendElryanProductionOne({
+      productId,
+      confirm: false,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(unconfirmed.code, "confirm_required");
+
+    await ElryanConnection.updateOne({ singletonKey: "default" }, { $set: { environment: "staging" } });
+    const staging = await sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(staging.code, "production_required");
+    await ElryanConnection.updateOne({ singletonKey: "default" }, { $set: { environment: "production" } });
+
+    const other = await sendElryanProductionOne({
+      productId: otherId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(other.code, "first_test_sku_only");
+
+    await ElryanStagingPriceApproval.deleteMany({});
+    const notReady = await previewElryanSyncOne({ productId });
+    const blocked = await sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: notReady.previewToken,
+    });
+    assert.equal(blocked.code, "pricing_unverified");
+    assert.equal(posts, 0);
+  });
+
+  it("keeps a timed-out create blocked when the follow-up SKU check fails", async () => {
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const ready = await prepareReady();
+    createMode = "timeout-uncheckable";
+    const timedOut = await sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(timedOut.code, "create_uncertain");
+    assert.equal(posts, 1);
+    failNextSku = false;
+    const again = await previewElryanSyncOne({ productId });
+    const second = await sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: again.previewToken,
+    });
+    assert.equal(second.code, "send_uncertain");
+    assert.equal(posts, 1);
+    assert.equal(writeCalls.filter((line) => line.startsWith("POST")).length, 1);
+  });
+
+  it("lets both write flags create only OWCH180002 and refuses bulk, update, and other Production writes", async () => {
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const ready = await prepareReady();
+    const bulk = await startElryanSyncAll({ confirm: true, strategy: "full" });
+    assert.equal(bulk.ok, false);
+    assert.equal(bulk.sentToElryan, 0);
+    const stagingSend = await sendElryanSyncOne({
+      productId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(stagingSend.code, "staging_only");
+    await assert.rejects(
+      () => elryanCreateProduct({ sku: "OWCH180002", price: 66500 }),
+      (error) => error.code === "staging_only"
+    );
+    const other = await sendElryanProductionOne({
+      productId: otherId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(other.code, "first_test_sku_only");
+    assert.equal(posts, 0);
+    assert.equal(writeCalls.some((line) => line.includes("/batch/")), false);
+    assert.equal(writeCalls.some((line) => line.startsWith("PUT") || line.startsWith("PATCH")), false);
+
+    createMode = "success";
+    const sent = await sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(sent.ok, true);
+    assert.equal(sent.sku, "OWCH180002");
+    assert.equal(posts, 1);
+    assert.deepEqual(
+      writeCalls.filter((line) => line.startsWith("POST")),
+      ["POST https://marketplace-api.elryan.com/api/v1/products"]
+    );
+  });
+
+  it("does not send a second POST for an overlapping Production confirmation", async () => {
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const ready = await prepareReady();
+    const secondPreview = await previewElryanSyncOne({ productId });
+    let release = () => {};
+    hangPromise = new Promise((resolve) => {
+      release = resolve;
+    });
+    createMode = "hang";
+    const first = sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    for (let i = 0; i < 40 && posts < 1; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    const overlapped = await sendElryanProductionOne({
+      productId,
+      confirm: true,
+      previewToken: secondPreview.previewToken,
+    });
+    assert.equal(overlapped.code, "send_in_progress");
+    release();
+    const created = await first;
+    assert.equal(created.ok, true);
+    assert.equal(posts, 1);
+    assert.equal(writeCalls.filter((line) => line.startsWith("POST")).length, 1);
   });
 });

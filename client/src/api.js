@@ -626,6 +626,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  elryanProductionCreate: (body) =>
+    request("/api/admin/platforms/elryan/sync-one/production-create", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   elryanSyncAllStatus: () => request("/api/admin/platforms/elryan/sync-all"),
   elryanSyncAllPreview: (strategy = "full") =>
     request("/api/admin/platforms/elryan/sync-all/preview", {

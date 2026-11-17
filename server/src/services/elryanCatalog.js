@@ -1,4 +1,9 @@
-import { ELRYAN_PATHS, elryanProductWritesEnabled } from "../utils/elryanConstants.js";
+import {
+  ELRYAN_ENVIRONMENTS,
+  ELRYAN_PATHS,
+  elryanLiveProductWritesEnabled,
+  elryanProductWritesEnabled,
+} from "../utils/elryanConstants.js";
 import { collectElryanWarrantyRows } from "../utils/elryanWarranty.js";
 import { interpretElryanSkuAvailability } from "../utils/elryanSku.js";
 import {
@@ -305,6 +310,45 @@ export async function elryanCreateProduct(body) {
   }
   return elryanRequest({
     baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    path: ELRYAN_PATHS.products,
+    method: "POST",
+    body,
+    classification: "WRITE",
+    retries: 0,
+  });
+}
+
+/**
+ * WRITE — POST /v1/products on the Production host.
+ * Requires the saved Production connection and both write flags. Does not retry.
+ */
+export async function elryanCreateProductionProduct(body) {
+  if (!elryanProductWritesEnabled()) {
+    throw new ElryanClientError("Elryan product publishing is disabled.", {
+      status: 403,
+      code: "writes_disabled",
+      classification: "WRITE",
+    });
+  }
+  if (!elryanLiveProductWritesEnabled()) {
+    throw new ElryanClientError("Live Elryan product writes are not enabled.", {
+      status: 403,
+      code: "writes_gated",
+      classification: "WRITE",
+    });
+  }
+  const config = await resolveElryanConfig();
+  const productionBase = ELRYAN_ENVIRONMENTS.production.baseUrl;
+  if (config.environment !== "production" || config.baseUrl !== productionBase) {
+    throw new ElryanClientError("Production create requires the active Production connection.", {
+      status: 403,
+      code: "production_required",
+      classification: "WRITE",
+    });
+  }
+  return elryanRequest({
+    baseUrl: productionBase,
     apiKey: config.apiKey,
     path: ELRYAN_PATHS.products,
     method: "POST",

@@ -3,6 +3,9 @@ import { api } from "../../../api";
 import { tName } from "../../../i18n";
 import {
   describeElryanSendResult,
+  elryanProductionConfirmFacts,
+  elryanProductionSendGate,
+  elryanProductionSendRequest,
   elryanStagingSendConfirmFacts,
   elryanStagingSendGate,
   elryanStagingSendRequest,
@@ -25,6 +28,8 @@ export default function ElryanSyncOneProduct({ t, lang }) {
   const [sendResult, setSendResult] = useState(null);
   const [attemptView, setAttemptView] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [productionConfirm, setProductionConfirm] = useState(null);
+  const [productionResult, setProductionResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [gateNote, setGateNote] = useState("");
@@ -34,6 +39,8 @@ export default function ElryanSyncOneProduct({ t, lang }) {
   const [axesConfirmed, setAxesConfirmed] = useState(false);
 
   const sendGate = elryanStagingSendGate({ preview, writesGate, localHold });
+  const productionGate = elryanProductionSendGate({ preview, writesGate, localHold });
+  const productionFacts = productionConfirm ? elryanProductionConfirmFacts(productionConfirm) : null;
   const confirmFacts = preview ? elryanStagingSendConfirmFacts(preview) : null;
   const showAttempt =
     localHold === "uncertain" ||
@@ -139,6 +146,51 @@ export default function ElryanSyncOneProduct({ t, lang }) {
         message: err.message || "",
         published: false,
       });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onAskProductionSend() {
+    if (!elryanProductionSendGate({ preview, writesGate, localHold }).enabled) return;
+    setBusy(true);
+    setError("");
+    try {
+      const fresh = await api.elryanSyncOnePreview(selected.id, { investigateCommission: true });
+      setPreview(fresh);
+      setWritesGate(fresh.writesGate || writesGate);
+      const gate = elryanProductionSendGate({ preview: fresh, writesGate: fresh.writesGate || writesGate, localHold });
+      if (!gate.enabled) {
+        setError(t.elryanProductionSendDisabled || "Production create is not ready.");
+        return;
+      }
+      setProductionConfirm(fresh);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onConfirmProductionSend() {
+    const body = elryanProductionSendRequest({
+      preview: productionConfirm,
+      writesGate,
+      localHold,
+      confirm: true,
+    });
+    if (!body) return;
+    setBusy(true);
+    setError("");
+    try {
+      const data = await api.elryanProductionCreate(body);
+      const view = describeElryanSendResult(data);
+      if (view.hold) setLocalHold(view.hold);
+      setProductionResult({ ...view, ...data });
+      setProductionConfirm(null);
+      if (view.tokenConsumed) setPreview((current) => (current ? { ...current, previewToken: "" } : current));
+    } catch (err) {
+      setProductionResult({ kind: "other", message: err.message });
     } finally {
       setBusy(false);
     }
@@ -434,7 +486,65 @@ export default function ElryanSyncOneProduct({ t, lang }) {
           >
             {t.elryanConfirmProductionDimensions}
           </button>
+          <button
+            type="button"
+            className={BUTTON}
+            disabled={busy || !productionGate.enabled}
+            title={productionGate.enabled ? t.elryanSendProduction : t.elryanProductionSendDisabled}
+            onClick={onAskProductionSend}
+          >
+            {t.elryanSendProduction}
+          </button>
+          {productionResult ? (
+            <div className="rounded-2xl bg-white p-3 text-sm text-brown">
+              <p className="font-semibold">{productionResult.message || t.elryanProductionSendResult}</p>
+              {productionResult.elryanProductId ? (
+                <p>
+                  {t.elryanListingId}: {productionResult.elryanProductId}
+                  {productionResult.listingStatus ? ` · ${productionResult.listingStatus}` : ""}
+                </p>
+              ) : null}
+              {productionResult.listing?.id ? (
+                <p>
+                  {t.elryanExistingListing}: {productionResult.listing.id}
+                  {productionResult.listing.status ? ` · ${productionResult.listing.status}` : ""}
+                  {productionResult.listing.sku ? ` · ${productionResult.listing.sku}` : ""}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </form>
+      ) : null}
+
+      {productionFacts ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-brown/40 p-4 sm:items-center" role="dialog" aria-modal="true">
+          <div className="w-full max-w-lg space-y-4 rounded-3xl bg-white p-5">
+            <p className="text-lg font-semibold text-brown">{t.elryanSendProductionConfirmTitle}</p>
+            <p className="text-sm text-red-800">{t.elryanSendProductionConfirmWarning}</p>
+            <dl className="grid gap-2 text-sm">
+              <div>
+                <dt className="text-brown/45">SKU</dt>
+                <dd className="font-semibold">{productionFacts.sku}</dd>
+              </div>
+              <div>
+                <dt className="text-brown/45">{t.elryanApprovedPrice}</dt>
+                <dd className="font-semibold">{productionFacts.price} IQD</dd>
+              </div>
+              <div>
+                <dt className="text-brown/45">{t.elryanLiveStock}</dt>
+                <dd className="font-semibold">{productionFacts.stock}</dd>
+              </div>
+            </dl>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className={GHOST} onClick={() => setProductionConfirm(null)}>
+                {t.elryanSendCancel}
+              </button>
+              <button type="button" className={BUTTON} disabled={busy} onClick={onConfirmProductionSend}>
+                {t.elryanSendProductionConfirmAction}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {preview ? (

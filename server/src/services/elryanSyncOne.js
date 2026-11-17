@@ -15,6 +15,7 @@ import {
   resolveElryanDimensions,
 } from "../utils/elryanDimensionResolve.js";
 import {
+  ELRYAN_ENVIRONMENTS,
   elryanLiveProductWritesEnabled,
   elryanProductWritesEnabled,
   ELRYAN_READINESS,
@@ -34,6 +35,7 @@ import {
 import { assessElryanSellableUnits } from "../utils/elryanVariations.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import { sanitizeElryanText } from "../utils/elryanRedact.js";
+import { elryanListingFromSkuConflict } from "../utils/elryanSku.js";
 import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platformTaxonomy.js";
 import {
   brownColourKeyFromResolved,
@@ -45,6 +47,7 @@ import {
   elryanAttributeSetForCategory,
   elryanCalculateCommission,
   elryanCreateProduct,
+  elryanCreateProductionProduct,
   elryanListWarranties,
   elryanSkuExists,
 } from "./elryanCatalog.js";
@@ -383,7 +386,10 @@ export async function previewElryanSyncOne({ productId, origin = "", investigate
   );
 
   const dimensions = assembled.dimensions;
-  const sendAttempt = await inspectElryanSendAttempt(assembled.productKey);
+  const sendAttempt = await inspectElryanSendAttempt(
+    assembled.productKey,
+    assembled.connection?.environment
+  );
   const writesGate = getElryanWritesGatePublic();
   return {
     ok: true,
@@ -488,6 +494,8 @@ function blockedSend(code, message, extra = {}) {
     blockers: extra.blockers || [],
     readiness: extra.readiness || ELRYAN_READINESS.NOT_READY,
     elryanProductId: extra.elryanProductId || "",
+    ...(extra.listingStatus != null && extra.listingStatus !== "" ? { listingStatus: extra.listingStatus } : {}),
+    ...(extra.listing ? { listing: extra.listing } : {}),
   };
 }
 
@@ -509,15 +517,16 @@ function heldAttemptMessage(row) {
   return "";
 }
 
-export async function inspectElryanSendAttempt(productId) {
+export async function inspectElryanSendAttempt(productId, environment = "staging") {
   const key = String(productId || "");
+  const env = environment === "production" ? "production" : "staging";
   const row = key
-    ? await ElryanSendAttempt.findOne({ environment: "staging", productId: key }).lean()
+    ? await ElryanSendAttempt.findOne({ environment: env, productId: key }).lean()
     : null;
   const status = row?.status || "";
   return {
     classification: "READ",
-    environment: "staging",
+    environment: env,
     productId: key,
     found: Boolean(row),
     status,
@@ -857,6 +866,337 @@ export async function sendElryanSyncOne({ productId, confirm, previewToken } = {
       httpStatus: result.httpStatus,
       blockers: assembled.validation.blockers,
     });
+  } finally {
+    inflightSends.delete(localKey);
+  }
+}
+
+async function claimProductionAttempt({ productId, sku, hash }) {
+  const existing = await ElryanSendAttempt.findOne({ environment: "production", productId });
+  if (existing && ["succeeded", "uncertain", "in_progress"].includes(existing.status)) {
+    const code =
+      existing.status === "succeeded"
+        ? "already_sent"
+        : existing.status === "uncertain"
+          ? "send_uncertain"
+          : "send_in_progress";
+    return { ok: false, code, elryanProductId: existing.elryanProductId || "" };
+  }
+  if (!existing) {
+    await ElryanSendAttempt.create({
+      environment: "production",
+      productId,
+      sku,
+      status: "in_progress",
+      payloadHash: hash,
+      startedAt: new Date(),
+      finishedAt: null,
+    });
+    return { ok: true };
+  }
+  const updated = await ElryanSendAttempt.updateOne(
+    { _id: existing._id, status: existing.status },
+    {
+      $set: {
+        status: "in_progress",
+        sku,
+        payloadHash: hash,
+        startedAt: new Date(),
+        finishedAt: null,
+        errorCode: "",
+        errorMessage: "",
+        httpStatus: 0,
+        published: false,
+        elryanProductId: "",
+      },
+    }
+  );
+  if (updated.modifiedCount !== 1) return { ok: false, code: "send_in_progress" };
+  return { ok: true };
+}
+
+async function settleProductionAttempt(productId, fields) {
+  await ElryanSendAttempt.updateOne(
+    { environment: "production", productId },
+    { $set: { ...fields, finishedAt: fields.finishedAt || new Date() } }
+  );
+}
+
+function productionListingResult(skuState) {
+  const listing = elryanListingFromSkuConflict(skuState?.raw);
+  return blockedSend(
+    "sku_already_exists",
+    listing.id
+      ? `SKU OWCH180002 already exists in Production as listing ${listing.id}${listing.status ? ` (${listing.status})` : ""}. No product was created.`
+      : "SKU OWCH180002 already exists in Production. No product was created.",
+    {
+      httpStatus: skuState?.httpStatus || 409,
+      elryanProductId: listing.id,
+      listingStatus: listing.status,
+      listing,
+    }
+  );
+}
+
+async function reconcileProductionTimeout(productId, sku, apiKey, message) {
+  let followUp = null;
+  try {
+    followUp = await elryanSkuExists(sku);
+  } catch (err) {
+    const text = `${message} The SKU could not be checked again. No second create was sent.`;
+    await settleProductionAttempt(productId, {
+      status: "uncertain",
+      errorCode: "create_uncertain",
+      errorMessage: sanitizeElryanText(text, [apiKey]),
+      httpStatus: 0,
+      published: false,
+    });
+    return blockedSend("create_uncertain", text, { httpStatus: 409 });
+  }
+  if (followUp.exists || followUp.available === false) {
+    await settleProductionAttempt(productId, {
+      status: "failed",
+      errorCode: "sku_already_exists",
+      errorMessage: "The create timed out and the SKU is now taken. No second create was sent.",
+      httpStatus: followUp.httpStatus || 409,
+      published: false,
+      elryanProductId: elryanListingFromSkuConflict(followUp.raw).id,
+    });
+    return productionListingResult(followUp);
+  }
+  const text = `${message} The SKU was checked again and is still available. No second create was sent in this request.`;
+  await settleProductionAttempt(productId, {
+    status: "failed",
+    errorCode: "create_timeout",
+    errorMessage: sanitizeElryanText(text, [apiKey]),
+    httpStatus: 0,
+    published: false,
+  });
+  return blockedSend("create_timeout", text, { httpStatus: 504 });
+}
+
+/**
+ * Production create for SKU OWCH180002 only.
+ * Rebuilds the preview, requires READY, and checks the Production SKU before POST /v1/products.
+ */
+export async function sendElryanProductionOne({ productId, confirm, previewToken } = {}) {
+  if (!elryanProductWritesEnabled()) {
+    return blockedSend(
+      "writes_disabled",
+      "Elryan product publishing is disabled. Both write flags must be true before a Production create."
+    );
+  }
+  if (!liveWritesEnabled()) {
+    return blockedSend(
+      "writes_gated",
+      "Live Elryan product writes require both ELRYAN_PRODUCT_WRITES_ENABLED=true and ELRYAN_ALLOW_LIVE_PRODUCT_WRITES=true. No product was sent."
+    );
+  }
+  if (confirm !== true) {
+    return blockedSend("confirm_required", "Production create requires explicit confirm=true.");
+  }
+  const token = String(previewToken || "").trim();
+  if (!token) return blockedSend("preview_required", "Production create requires the preview confirmation token.");
+
+  const localKey = `production:${String(productId || "")}`;
+  if (inflightSends.has(localKey)) {
+    return blockedSend("send_in_progress", "A Production create for this product is already running. No second create was sent.");
+  }
+  inflightSends.add(localKey);
+  try {
+    const config = await resolveElryanConfig();
+    if (config.environment !== "production" || config.baseUrl !== ELRYAN_ENVIRONMENTS.production.baseUrl) {
+      return blockedSend(
+        "production_required",
+        "Production create requires the active Production connection. No product was sent."
+      );
+    }
+
+    const assembled = await assembleElryanSyncOne({ productId, investigateCommission: true });
+    if (assembled.config.environment !== "production") {
+      return blockedSend("production_required", "The rebuilt preview is not Production. No product was sent.");
+    }
+    const sku = String(assembled.resolved?.sku || "");
+    if (sku !== ELRYAN_FIRST_STAGING_CREATE_SKU) {
+      return blockedSend(
+        "first_test_sku_only",
+        "Production create is limited to SKU OWCH180002. No product was sent."
+      );
+    }
+    if (assembled.pricingApproval?.valid !== true) {
+      return blockedSend(
+        "pricing_unverified",
+        "The saved Production price approval does not match this SKU, product, and payload. No product was sent.",
+        { blockers: assembled.validation.blockers, readiness: assembled.validation.readiness }
+      );
+    }
+    if (!assembled.validation.ready) {
+      return blockedSend("not_ready", "The product is not READY. No product was sent.", {
+        blockers: assembled.validation.blockers,
+        readiness: assembled.validation.readiness,
+      });
+    }
+    if (assembled.dimensions.confirmed !== true) {
+      return blockedSend("dimensions_unverified", "Production dimensions are not confirmed. No product was sent.", {
+        blockers: assembled.validation.blockers,
+        readiness: assembled.validation.readiness,
+      });
+    }
+
+    const preview = await ElryanSyncOnePreview.findOne({ tokenHash: hashToken(token) }).lean();
+    if (!preview || preview.productId !== assembled.productKey || preview.payloadHash !== assembled.hash) {
+      return blockedSend("preview_mismatch", "The preview token does not match this rebuilt Production payload. No product was sent.");
+    }
+    if (preview.consumedAt) {
+      return blockedSend("preview_used", "This preview token was already used. No product was sent.");
+    }
+    if (new Date(preview.expiresAt).getTime() <= Date.now() || preview.readiness !== ELRYAN_READINESS.READY) {
+      return blockedSend("preview_expired", "The preview is expired or was not READY. No product was sent.");
+    }
+
+    const prior = await ElryanConfirmedSend.findOne({
+      environment: "production",
+      productId: assembled.productKey,
+    }).lean();
+    if (prior?.elryanProductId) {
+      return blockedSend("already_sent", "This Production product was already created. No second create was sent.", {
+        elryanProductId: prior.elryanProductId,
+        httpStatus: 409,
+        listingStatus: prior.published ? "published" : "created",
+      });
+    }
+
+    let skuState;
+    try {
+      skuState = await elryanSkuExists(sku);
+    } catch (err) {
+      return blockedSend(
+        "sku_check_failed",
+        sanitizeElryanText(err?.message || "The Production SKU could not be checked. No product was sent.", [config.apiKey]),
+        { httpStatus: 502 }
+      );
+    }
+    if (skuState.available !== true) {
+      return productionListingResult(skuState);
+    }
+
+    const claim = await claimProductionAttempt({
+      productId: assembled.productKey,
+      sku,
+      hash: assembled.hash,
+    });
+    if (!claim.ok) {
+      return blockedSend(claim.code, "No product was sent.", {
+        elryanProductId: claim.elryanProductId || "",
+        httpStatus: 409,
+      });
+    }
+
+    const consumed = await ElryanSyncOnePreview.findOneAndUpdate(
+      {
+        _id: preview._id,
+        consumedAt: null,
+        expiresAt: { $gt: new Date() },
+        payloadHash: assembled.hash,
+        readiness: ELRYAN_READINESS.READY,
+      },
+      { $set: { consumedAt: new Date() } }
+    );
+    if (!consumed) {
+      await settleProductionAttempt(assembled.productKey, {
+        status: "failed",
+        errorCode: "preview_used",
+        errorMessage: "The preview token was no longer usable.",
+      });
+      return blockedSend("preview_used", "This preview token was already used. No product was sent.");
+    }
+
+    let result;
+    try {
+      result = await elryanCreateProductionProduct(assembled.payload);
+    } catch (err) {
+      const timedOut = err?.code === "timeout" || err?.code === "network_error";
+      if (timedOut) {
+        return reconcileProductionTimeout(
+          assembled.productKey,
+          sku,
+          config.apiKey,
+          sanitizeElryanText(err?.message || "Elryan create timed out.", [config.apiKey])
+        );
+      }
+      await settleProductionAttempt(assembled.productKey, {
+        status: "uncertain",
+        errorCode: "create_uncertain",
+        errorMessage: sanitizeElryanText(err?.message || "Elryan did not return a create response.", [config.apiKey]),
+        published: false,
+      });
+      return blockedSend("create_uncertain", "Elryan did not return a create response. No second create was sent.", {
+        httpStatus: 409,
+      });
+    }
+
+    const publication = elryanPublicationFromCreate(result.json);
+    const definiteClientError = result.httpStatus >= 400 && result.httpStatus < 500 && result.httpStatus !== 409;
+    if (result.ok && publication.elryanProductId) {
+      const listingStatus = publication.reviewStatus || (publication.published ? "published" : "in_review");
+      await ElryanConfirmedSend.findOneAndUpdate(
+        { environment: "production", productId: assembled.productKey },
+        {
+          $setOnInsert: {
+            environment: "production",
+            productId: assembled.productKey,
+            sku,
+            payloadHash: assembled.hash,
+            elryanProductId: publication.elryanProductId,
+            httpStatus: result.httpStatus,
+            published: publication.published === true,
+            confirmedAt: new Date(),
+          },
+        },
+        { upsert: true }
+      );
+      await settleProductionAttempt(assembled.productKey, {
+        status: "succeeded",
+        elryanProductId: publication.elryanProductId,
+        httpStatus: result.httpStatus,
+        published: publication.published === true,
+        errorCode: "",
+        errorMessage: "",
+      });
+      return {
+        ok: true,
+        classification: "WRITE",
+        blocked: false,
+        code: publication.published ? "created_and_published" : "created",
+        message: `Elryan created listing ${publication.elryanProductId} with status ${listingStatus}.`,
+        httpStatus: result.httpStatus,
+        published: publication.published === true,
+        elryanProductId: publication.elryanProductId,
+        listingStatus,
+        sku,
+        environment: "production",
+        payloadHash: assembled.hash,
+      };
+    }
+
+    if (!definiteClientError) {
+      return reconcileProductionTimeout(
+        assembled.productKey,
+        sku,
+        config.apiKey,
+        "Elryan did not return a confirmed product id."
+      );
+    }
+
+    const message = apiErrorMessage(result.json, config.apiKey);
+    await settleProductionAttempt(assembled.productKey, {
+      status: "failed",
+      httpStatus: result.httpStatus,
+      published: false,
+      errorCode: "elryan_rejected",
+      errorMessage: message,
+    });
+    return blockedSend("elryan_rejected", message, { httpStatus: result.httpStatus });
   } finally {
     inflightSends.delete(localKey);
   }

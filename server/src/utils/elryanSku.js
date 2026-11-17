@@ -47,3 +47,16 @@ export function interpretElryanSkuAvailability({ httpStatus = 0, json = null } =
   }
   return { available: null, exists: false, conflict: false };
 }
+
+/** Listing fields present on a sku-exists conflict. Missing fields stay blank; none are invented. */
+export function elryanListingFromSkuConflict(json) {
+  const body = json && typeof json === "object" && !Array.isArray(json) ? json : {};
+  const data = body.data && typeof body.data === "object" && !Array.isArray(body.data) ? body.data : {};
+  const product = data.product && typeof data.product === "object" && !Array.isArray(data.product) ? data.product : data;
+  return {
+    id: String(product.id || product._id || product.productId || "").trim(),
+    sku: String(product.sku || "").trim(),
+    status: String(product.status || product.reviewStatus || product.publishStatus || "").trim(),
+    name: String(product.name || product.title || "").trim(),
+  };
+}

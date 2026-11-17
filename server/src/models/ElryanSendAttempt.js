@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 /** One Staging create attempt per product. Uncertain and in-progress rows stay blocked until a separate reconciliation release. */
 const elryanSendAttemptSchema = new mongoose.Schema(
   {
-    environment: { type: String, required: true, enum: ["staging"] },
+    environment: { type: String, required: true, enum: ["staging", "production"] },
     productId: { type: String, required: true },
     sku: { type: String, default: "" },
     status: {

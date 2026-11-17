@@ -5,6 +5,9 @@ import {
   ELRYAN_STAGING_SEND_SKU,
   buildElryanStagingSendBody,
   describeElryanSendResult,
+  elryanProductionConfirmFacts,
+  elryanProductionSendGate,
+  elryanProductionSendRequest,
   elryanStagingSendConfirmFacts,
   elryanStagingSendGate,
   elryanStagingSendRequest,
@@ -210,6 +213,34 @@ describe("Elryan Sync One send UI gate", () => {
     assert.equal(shouldRetryElryanSend(), false);
   });
 
+  it("confirms Production create with the SKU, approved price, and live stock", () => {
+    const preview = readyPreview({ connection: { environment: "production" } });
+    assert.equal(elryanStagingSendGate({ preview, writesGate: bothOn, now }).reason, "staging_only");
+    const decision = elryanProductionSendGate({ preview, writesGate: bothOn, now });
+    assert.equal(decision.enabled, true);
+    const facts = elryanProductionConfirmFacts(preview);
+    assert.equal(facts.sku, ELRYAN_STAGING_SEND_SKU);
+    assert.equal(facts.price, 66250);
+    assert.equal(facts.stock, 3);
+    assert.deepEqual(elryanProductionSendRequest({ preview, writesGate: bothOn, now, confirm: true }), {
+      productId: preview.product.id,
+      previewToken: "preview-token",
+      confirm: true,
+    });
+    assert.equal(
+      elryanProductionSendGate({ preview: readyPreview(), writesGate: bothOn, now }).reason,
+      "production_required"
+    );
+    assert.equal(
+      elryanProductionSendGate({
+        preview,
+        writesGate: { productWritesEnabled: false, liveWritesAllowed: false },
+        now,
+      }).reason,
+      "writes_disabled"
+    );
+  });
+
   it("does not call Elryan or post a product from the send screen source", () => {
     const ui = fs.readFileSync(
       new URL("../../client/src/components/admin/platform/ElryanSyncOneProduct.jsx", import.meta.url),
@@ -225,6 +256,10 @@ describe("Elryan Sync One send UI gate", () => {
     assert.equal(gateSource.includes("/v1/products"), false);
     assert.equal(gateSource.includes("fetch("), false);
     assert.equal(ui.split("api.elryanSyncOneSend").length - 1, 1);
+    assert.equal(ui.split("api.elryanProductionCreate").length - 1, 1);
+    assert.match(ui, /elryanSendProduction/);
+    assert.match(ui, /elryanApprovedPrice/);
+    assert.match(ui, /elryanLiveStock/);
     const probe = ui.slice(ui.indexOf("async function onProbeWritesGate"), ui.indexOf("function onAskSend"));
     assert.equal(probe.includes("elryanWritesGate"), true);
     assert.equal(probe.includes("elryanSyncOneSend"), false);

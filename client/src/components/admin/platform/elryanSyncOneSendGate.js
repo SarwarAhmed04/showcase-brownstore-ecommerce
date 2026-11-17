@@ -50,6 +50,57 @@ export function elryanStagingSendGate({ preview, writesGate, now = Date.now(), l
  * Send body for the existing Sync One endpoint.
  * A closed gate or a missing explicit confirmation returns null, so the screen does not call send.
  */
+/**
+ * Whether the Production create button may open its confirmation.
+ * The Staging send gate stays closed for a Production preview.
+ */
+export function elryanProductionSendGate({ preview, writesGate, now = Date.now(), localHold = "" } = {}) {
+  const hold = String(localHold || "");
+  if (BLOCKING_ATTEMPT.has(hold)) return { enabled: false, reason: "send_attempt_blocked" };
+  if (!preview) return { enabled: false, reason: "preview_required" };
+  if (String(preview.connection?.environment || "").toLowerCase() !== "production") {
+    return { enabled: false, reason: "production_required" };
+  }
+  const productWritesEnabled = writesGate?.productWritesEnabled === true;
+  const liveWritesAllowed = writesGate?.liveWritesAllowed === true;
+  if (!productWritesEnabled && !liveWritesAllowed) return { enabled: false, reason: "writes_disabled" };
+  if (!productWritesEnabled || !liveWritesAllowed) return { enabled: false, reason: "writes_partial" };
+  if (String(preview.product?.sku || "") !== ELRYAN_STAGING_SEND_SKU) {
+    return { enabled: false, reason: "wrong_sku" };
+  }
+  if (preview.readiness !== "READY") return { enabled: false, reason: "not_ready" };
+  if (!Array.isArray(preview.blockers) || preview.blockers.length > 0) {
+    return { enabled: false, reason: "blockers" };
+  }
+  if (preview.pricingApproval?.valid !== true) return { enabled: false, reason: "pricing_unverified" };
+  const token = String(preview.previewToken || "").trim();
+  if (!token) return { enabled: false, reason: "preview_required" };
+  const expiresAt = new Date(preview.expiresAt).getTime();
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) return { enabled: false, reason: "token_expired" };
+  const attemptStatus = String(preview.sendAttempt?.status || "");
+  if (preview.sendAttempt?.blocked === true || BLOCKING_ATTEMPT.has(attemptStatus)) {
+    return { enabled: false, reason: "send_attempt_blocked" };
+  }
+  return { enabled: true, reason: "" };
+}
+
+export function elryanProductionSendRequest({ preview, writesGate, now, localHold, confirm } = {}) {
+  if (!elryanProductionSendGate({ preview, writesGate, now, localHold }).enabled) return null;
+  if (confirm !== true) return null;
+  const productId = String(preview?.product?.id || "").trim();
+  const previewToken = String(preview?.previewToken || "").trim();
+  if (!productId || !previewToken) return null;
+  return { productId, previewToken, confirm: true };
+}
+
+export function elryanProductionConfirmFacts(preview) {
+  return {
+    sku: String(preview?.product?.sku || ""),
+    price: preview?.pricing?.proposedElryanPrice ?? preview?.proposedPayload?.price ?? null,
+    stock: preview?.product?.stock ?? preview?.proposedPayload?.quantity ?? null,
+  };
+}
+
 export function elryanStagingSendRequest({ preview, writesGate, now, localHold, confirm } = {}) {
   if (!elryanStagingSendGate({ preview, writesGate, now, localHold }).enabled) return null;
   return buildElryanStagingSendBody(preview, confirm);
