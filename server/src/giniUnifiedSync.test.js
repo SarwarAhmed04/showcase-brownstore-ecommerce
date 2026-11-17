@@ -7,13 +7,15 @@ import { Partner } from "./models/Partner.js";
 import { Product } from "./models/Product.js";
 import { PlatformTaxonomyConfig } from "./models/PlatformTaxonomyConfig.js";
 import { GiniSyncSendState } from "./models/GiniSyncSendState.js";
+import { GiniUnifiedSyncItem } from "./models/GiniUnifiedSyncItem.js";
+import { GiniUnifiedSyncJob } from "./models/GiniUnifiedSyncJob.js";
 import { GiniVariantIdentity } from "./models/GiniVariantIdentity.js";
 import { GiniVariantParentOwner } from "./models/GiniVariantParentOwner.js";
 import { normalizeGiniCategories } from "./utils/giniCategoryTree.js";
 import { giniSkuKey } from "./utils/giniSyncOnePlan.js";
 import { proposeVariantSku } from "./utils/giniVariantCatalog.js";
 import { giniUnifiedSyncWritesEnabled } from "./utils/giniUnifiedSyncPlan.js";
-import { previewGiniUnifiedSync, resetGiniUnifiedSyncForTests, resumeGiniUnifiedSync, startGiniUnifiedSync } from "./services/giniUnifiedSync.js";
+import { abandonGiniUnifiedPreviewForTests, getGiniUnifiedSyncStatus, previewGiniUnifiedSync, resetGiniUnifiedSyncForTests, resumeGiniUnifiedSync, startGiniUnifiedSync } from "./services/giniUnifiedSync.js";
 
 const LIVE_TREE = {
   data: [{ id: 1, name: "Home", slug: "home", is_active: 1, subcategories: [{ id: 10, name: "Blenders", slug: "blenders", is_active: 1 }] }],
@@ -252,6 +254,18 @@ function deps(env = ENV) {
   };
 }
 
+async function waitPreview(options) {
+  const started = await previewGiniUnifiedSync(options);
+  const deadline = Date.now() + 10000;
+  let current = started;
+  while (current.job?.status === "scanning") {
+    if (Date.now() > deadline) throw new Error("preview scan timed out");
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    current = await getGiniUnifiedSyncStatus();
+  }
+  return current;
+}
+
 test("production writes stay disabled even when both flags are set", () => {
   assert.equal(giniUnifiedSyncWritesEnabled({ NODE_ENV: "production", GINI_UNIFIED_SYNC_WRITES_ENABLED: "true", GINI_ALLOW_LIVE_UNIFIED_SYNC: "true" }), false);
   assert.equal(giniUnifiedSyncWritesEnabled({ NODE_ENV: "test" }), false);
@@ -285,7 +299,7 @@ test("one job creates and updates a simple product and a multi-variant product, 
   });
   assert.equal(await GiniSyncSendState.countDocuments({ sku: "UPD-SIMPLE" }), 0);
 
-  const preview = await previewGiniUnifiedSync(deps());
+  const preview = await waitPreview(deps());
   const bySku = Object.fromEntries(preview.job.rows.map((row) => [row.sku, row]));
   assert.equal(bySku["NEW-SIMPLE"].action, "CREATE");
   assert.equal(bySku["NEW-SIMPLE"].flow, "simple");
@@ -340,7 +354,7 @@ test("one job creates and updates a simple product and a multi-variant product, 
   await Product.updateOne({ itemCode: "UPD-SIMPLE" }, { $set: { price: 9000 } });
   await makeProduct("NEW-IMPORT", simpleVariant());
   const postsBefore = calls.filter((call) => call.method === "POST").length;
-  const later = await previewGiniUnifiedSync(deps());
+  const later = await waitPreview(deps());
   const laterRows = Object.fromEntries(later.job.rows.map((row) => [row.sku, row]));
   assert.equal(laterRows["NEW-SIMPLE"].action, "UNCHANGED");
   assert.equal(laterRows["NEW-IMPORT"].action, "CREATE");
@@ -382,7 +396,7 @@ test("a restarted job reconciles an uncertain create with GET before it retries"
     }
     return perform(request);
   };
-  const preview = await previewGiniUnifiedSync({ ...deps(), perform: flaky });
+  const preview = await waitPreview({ ...deps(), perform: flaky });
   const first = await startGiniUnifiedSync({ confirm: true, previewJobId: preview.job.id }, { ...deps(), perform: flaky });
   assert.equal(first.job.uncertain, 1);
   assert.equal(calls.filter((call) => call.method === "POST").length, 1);
@@ -390,4 +404,130 @@ test("a restarted job reconciles an uncertain create with GET before it retries"
   assert.equal(second.job.created, 1);
   assert.equal(calls.filter((call) => call.method === "POST").length, 1);
   assert.equal(remote.get("new-simple").id, "901");
+});
+
+test("a slow preview returns its job id before the scan finishes, and refresh reconnects", async () => {
+  await makeProduct("NEW-SIMPLE", simpleVariant());
+  await makeProduct("UPD-SIMPLE", simpleVariant());
+  let release = () => {};
+  const hold = new Promise((resolve) => {
+    release = resolve;
+  });
+  let lookups = 0;
+  const slow = async (request) => {
+    lookups += 1;
+    if (lookups === 1) await hold;
+    if (String(request.path || "").includes("UPD-SIMPLE") && String(request.method || "GET").toUpperCase() === "GET") {
+      return { status: 503, json: { message: "lookup failed" } };
+    }
+    return perform(request);
+  };
+  const first = await previewGiniUnifiedSync({ ...deps(), perform: slow });
+  assert.equal(first.job.status, "scanning");
+  assert.equal(first.productionWritesEnabled, false);
+  assert.equal(first.job.writesEnabled, false);
+  assert.equal(first.sentToGini, 0);
+  assert.equal(first.job.scanned, 0);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  const again = await previewGiniUnifiedSync({ ...deps(), perform: slow });
+  const refreshed = await getGiniUnifiedSyncStatus();
+  assert.equal(again.job.id, first.job.id);
+  assert.equal(refreshed.job.id, first.job.id);
+  assert.equal(refreshed.job.status, "scanning");
+  assert.equal(refreshed.job.scanned < refreshed.job.total, true);
+  assert.equal(calls.some((call) => call.method !== "GET"), false);
+  release();
+  const deadline = Date.now() + 10000;
+  let done = await getGiniUnifiedSyncStatus();
+  while (done.job?.status === "scanning") {
+    if (Date.now() > deadline) throw new Error("preview scan timed out");
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    done = await getGiniUnifiedSyncStatus();
+  }
+  assert.equal(done.job.id, first.job.id);
+  assert.equal(done.job.status, "preview");
+  assert.equal(done.job.scanned, 2);
+  assert.equal(done.job.total, 2);
+  const rows = Object.fromEntries(done.job.rows.map((row) => [row.sku, row]));
+  assert.equal(rows["NEW-SIMPLE"].action, "CREATE");
+  assert.equal(rows["UPD-SIMPLE"].action, "BLOCKED");
+  assert.equal(rows["UPD-SIMPLE"].reasons.includes("lookup_uncertain"), true);
+  assert.equal(calls.some((call) => call.method !== "GET"), false);
+});
+
+test("an API restart resumes the same scanning preview instead of leaving it stuck", async () => {
+  await makeProduct("NEW-SIMPLE", simpleVariant());
+  await makeProduct("UPD-SIMPLE", simpleVariant());
+  let release = () => {};
+  const hold = new Promise((resolve) => {
+    release = resolve;
+  });
+  let held = false;
+  const options = {
+    ...deps(),
+    async afterProduct() {
+      if (!held) {
+        held = true;
+        await hold;
+      }
+    },
+  };
+  const started = await previewGiniUnifiedSync(options);
+  const deadline = Date.now() + 10000;
+  let mid = started;
+  while ((mid.job?.scanned || 0) < 1) {
+    if (Date.now() > deadline) throw new Error("preview did not scan the first product");
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    mid = await getGiniUnifiedSyncStatus(options);
+  }
+  assert.equal(mid.job.id, started.job.id);
+  assert.equal(mid.job.status, "scanning");
+  abandonGiniUnifiedPreviewForTests();
+  const parked = await GiniUnifiedSyncJob.findById(started.job.id).lean();
+  assert.equal(parked.status, "scanning");
+  assert.equal(parked.scanned, 1);
+  const reconnected = await getGiniUnifiedSyncStatus(options);
+  assert.equal(reconnected.job.id, started.job.id);
+  assert.equal(reconnected.job.status, "scanning");
+  assert.equal(reconnected.productionWritesEnabled, false);
+  release();
+  const resumeDeadline = Date.now() + 10000;
+  let done = reconnected;
+  while (done.job?.status === "scanning") {
+    if (Date.now() > resumeDeadline) throw new Error("resumed preview scan timed out");
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    done = await getGiniUnifiedSyncStatus(options);
+  }
+  assert.equal(done.job.status, "preview");
+  assert.equal(done.job.scanned, 2);
+  assert.equal(done.job.create, 1);
+  assert.equal(done.job.update, 1);
+  assert.equal(await GiniUnifiedSyncItem.countDocuments({ jobId: started.job.id }), 2);
+  assert.equal(calls.some((call) => call.method !== "GET"), false);
+  assert.equal(calls.filter((call) => call.method === "GET" && call.path.includes("NEW-SIMPLE")).length, 1);
+});
+
+test("a preview scan records a terminal error without sending", async () => {
+  await makeProduct("NEW-SIMPLE", simpleVariant());
+  const started = await previewGiniUnifiedSync({
+    ...deps(),
+    afterProduct() {
+      const error = new Error("GINI catalog could not be read.");
+      error.code = "catalog_unread";
+      throw error;
+    },
+  });
+  const deadline = Date.now() + 10000;
+  let done = started;
+  while (done.job?.status === "scanning") {
+    if (Date.now() > deadline) throw new Error("preview scan timed out");
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    done = await getGiniUnifiedSyncStatus();
+  }
+  assert.equal(done.job.id, started.job.id);
+  assert.equal(done.job.status, "failed");
+  assert.equal(done.job.errorCode, "catalog_unread");
+  assert.equal(done.job.lastError, "GINI catalog could not be read.");
+  assert.equal(done.productionWritesEnabled, false);
+  assert.equal(calls.some((call) => call.method !== "GET"), false);
 });

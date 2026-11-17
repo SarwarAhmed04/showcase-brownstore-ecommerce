@@ -29,6 +29,10 @@ import { runPreparedVariantStageA, runPreparedVariantStageB } from "./giniVarian
 
 const DONE = new Set(["verified", "unchanged", "blocked", "failed"]);
 let activeJobId = "";
+let previewRunner = "";
+let previewDeps = null;
+let previewRun = 0;
+let scanGeneration = 0;
 
 export class GiniUnifiedSyncError extends Error {
   constructor(message, { status = 409, code = "gini_unified_sync" } = {}) {
@@ -262,6 +266,8 @@ function publicJob(job, items = []) {
     update: job.update,
     unchanged: job.unchanged,
     blocked: job.blocked,
+    scanned: Number(job.scanned) || 0,
+    total: Number(job.total) || 0,
     created: job.created,
     updated: job.updated,
     uncertain: job.uncertain,
@@ -289,68 +295,161 @@ function publicJob(job, items = []) {
   };
 }
 
-export async function getGiniUnifiedSyncStatus() {
-  const job = await GiniUnifiedSyncJob.findOne({ partner: "gini" }).sort({ createdAt: -1 });
-  if (!job) {
-    return { job: null, writesEnabled: giniUnifiedSyncWritesEnabled(), productionWritesEnabled: false, limitations: GINI_UNIFIED_LIMITATIONS };
-  }
-  const items = await GiniUnifiedSyncItem.find({ jobId: job._id }).sort({ sku: 1 }).lean();
-  return { job: publicJob(job, items), writesEnabled: giniUnifiedSyncWritesEnabled(), productionWritesEnabled: false, limitations: GINI_UNIFIED_LIMITATIONS };
-}
-
-export async function previewGiniUnifiedSync(deps = {}) {
-  const perform = deps.perform || livePerform;
-  const reading = async (request) => {
-    if (String(request?.method || "GET").toUpperCase() !== "GET") throw new GiniUnifiedSyncError("Preview only reads GINI.", { code: "preview_write_blocked" });
-    return perform(request);
-  };
-  const context = await loadContext(deps);
-  context.colorContract = await colorContract(reading, deps);
-  const planned = [];
-  for (const doc of context.products) {
-    const flow = selectSellableFlow(doc);
-    const remote = await readRemote(reading, normalizeGiniItemCode(doc.itemCode), flow.flow === "variant");
-    planned.push({ doc, plan: assessOne(doc, context, remote) });
-  }
-  const counts = countsOf(planned.map((row) => row.plan));
-  const job = await GiniUnifiedSyncJob.create({
-    partner: "gini",
-    status: "preview",
-    mode: "preview",
-    ...counts,
-    writesEnabled: false,
-    productionWritesEnabled: false,
-    limitations: [...GINI_UNIFIED_LIMITATIONS],
-  });
-  if (planned.length) {
-    await GiniUnifiedSyncItem.insertMany(planned.map(({ plan }) => ({
-      jobId: job._id,
-      productId: plan.productId,
-      sku: plan.sku,
-      skuKey: plan.skuKey,
-      flow: plan.flow === "variant" || plan.flow === "simple" ? plan.flow : "blocked",
-      action: plan.action,
-      reasons: plan.reasons,
-      messages: plan.messages?.length ? plan.messages : plan.reasons.map(blockerMessage),
-      stage: plan.action === "BLOCKED" ? "blocked" : plan.action === "UNCHANGED" ? "unchanged" : "pending",
-      fingerprint: plan.fingerprint,
-      giniProductId: plan.giniProductId || "",
-      visibility: plan.visibility || "",
-      price: plan.price,
-      quantity: plan.quantity,
-      children: plan.children || [],
-      retryable: plan.retryable === true,
-    })));
-  }
-  const items = await GiniUnifiedSyncItem.find({ jobId: job._id }).lean();
+function previewPayload(job, items, deps) {
   return {
     job: publicJob(job, items),
     dryRun: true,
     sentToGini: 0,
-    writesEnabled: giniUnifiedSyncWritesEnabled(deps.env || process.env),
+    writesEnabled: giniUnifiedSyncWritesEnabled(deps?.env || process.env),
     productionWritesEnabled: false,
-    message: "Preview only. Nothing was created, updated, or published.",
+    message: job.status === "scanning"
+      ? "Preview started. Nothing is created, updated, or published."
+      : "Preview only. Nothing was created, updated, or published.",
   };
+}
+
+function scanError(err) {
+  const errorCode = String(err?.code || "preview_failed").replace(/[^a-z0-9_]/gi, "").slice(0, 80) || "preview_failed";
+  const lastError = String(err?.message || "Unified preview failed.").replace(/\s+/g, " ").slice(0, 300);
+  return { errorCode, lastError };
+}
+
+function itemFromPlan(jobId, plan) {
+  return {
+    jobId,
+    productId: plan.productId,
+    sku: plan.sku,
+    skuKey: plan.skuKey,
+    flow: plan.flow === "variant" || plan.flow === "simple" ? plan.flow : "blocked",
+    action: plan.action,
+    reasons: plan.reasons,
+    messages: plan.messages?.length ? plan.messages : plan.reasons.map(blockerMessage),
+    stage: plan.action === "BLOCKED" ? "blocked" : plan.action === "UNCHANGED" ? "unchanged" : "pending",
+    fingerprint: plan.fingerprint,
+    giniProductId: plan.giniProductId || "",
+    visibility: plan.visibility || "",
+    price: plan.price,
+    quantity: plan.quantity,
+    children: plan.children || [],
+    retryable: plan.retryable === true,
+  };
+}
+
+function launchPreview(jobId, deps) {
+  const id = String(jobId);
+  if (deps) previewDeps = deps;
+  if (previewRunner === id) return false;
+  if (previewRunner) return false;
+  const run = ++previewRun;
+  previewRunner = id;
+  const generation = scanGeneration;
+  const scheduled = (previewDeps && previewDeps.schedule) || ((task) => setImmediate(task));
+  scheduled(() => {
+    void scanPreview(id, previewDeps || {}, generation).finally(() => {
+      if (previewRun === run) previewRunner = "";
+    });
+  });
+  return true;
+}
+
+async function scanPreview(jobId, deps, generation) {
+  const current = () => generation === scanGeneration;
+  try {
+    if (!current()) return;
+    const perform = deps.perform || livePerform;
+    const reading = async (request) => {
+      if (String(request?.method || "GET").toUpperCase() !== "GET") {
+        throw new GiniUnifiedSyncError("Preview only reads GINI.", { code: "preview_write_blocked" });
+      }
+      return perform(request);
+    };
+    const context = await loadContext(deps);
+    if (!current()) return;
+    context.colorContract = deps.colorContract || await colorContract(reading, deps);
+    const products = context.products || [];
+    await GiniUnifiedSyncJob.updateOne({ _id: jobId, status: "scanning" }, { $set: { total: products.length } });
+    const saved = new Set((await GiniUnifiedSyncItem.find({ jobId }).select("productId action").lean()).map((row) => row.productId));
+    if (saved.size) {
+      const existing = await GiniUnifiedSyncItem.find({ jobId }).select("action").lean();
+      await GiniUnifiedSyncJob.updateOne({ _id: jobId, status: "scanning" }, {
+        $set: { ...countsOf(existing), scanned: existing.length },
+      });
+    }
+    for (const doc of products) {
+      if (!current()) return;
+      const state = await GiniUnifiedSyncJob.findById(jobId).select("status").lean();
+      if (state?.status !== "scanning") return;
+      const productId = String(doc._id);
+      if (saved.has(productId)) continue;
+      const flow = selectSellableFlow(doc);
+      const remote = await readRemote(reading, normalizeGiniItemCode(doc.itemCode), flow.flow === "variant");
+      const plan = assessOne(doc, context, remote);
+      try {
+        await GiniUnifiedSyncItem.create(itemFromPlan(jobId, plan));
+      } catch (err) {
+        if (err?.code !== 11000) throw err;
+      }
+      saved.add(productId);
+      const counts = countsOf(await GiniUnifiedSyncItem.find({ jobId }).select("action").lean());
+      await GiniUnifiedSyncJob.updateOne({ _id: jobId, status: "scanning" }, {
+        $set: { ...counts, scanned: saved.size, cursorProductId: productId },
+      });
+      if (deps.afterProduct) await deps.afterProduct({ productId, scanned: saved.size });
+    }
+    if (!current()) return;
+    const items = await GiniUnifiedSyncItem.find({ jobId }).select("action").lean();
+    await GiniUnifiedSyncJob.updateOne({ _id: jobId, status: "scanning" }, {
+      $set: { status: "preview", ...countsOf(items), scanned: items.length, total: products.length, lastError: "", errorCode: "" },
+    });
+  } catch (err) {
+    if (!current()) return;
+    const failure = scanError(err);
+    await GiniUnifiedSyncJob.updateOne({ _id: jobId, status: "scanning" }, {
+      $set: { status: "failed", ...failure },
+    });
+  }
+}
+
+export async function getGiniUnifiedSyncStatus(deps) {
+  const scanning = await GiniUnifiedSyncJob.findOne({ partner: "gini", mode: "preview", status: "scanning" }).sort({ createdAt: -1 });
+  if (scanning) launchPreview(scanning._id, deps);
+  const selected = scanning || await GiniUnifiedSyncJob.findOne({ partner: "gini" }).sort({ createdAt: -1 });
+  if (!selected) {
+    return { job: null, writesEnabled: giniUnifiedSyncWritesEnabled(), productionWritesEnabled: false, limitations: GINI_UNIFIED_LIMITATIONS };
+  }
+  const job = await GiniUnifiedSyncJob.findById(selected._id);
+  const items = await GiniUnifiedSyncItem.find({ jobId: job._id }).sort({ sku: 1 }).lean();
+  return {
+    job: publicJob(job, items),
+    dryRun: job.mode !== "sync",
+    sentToGini: job.mode === "preview" ? 0 : Number(job.created || 0) + Number(job.updated || 0),
+    writesEnabled: giniUnifiedSyncWritesEnabled(),
+    productionWritesEnabled: false,
+    limitations: GINI_UNIFIED_LIMITATIONS,
+  };
+}
+
+export async function previewGiniUnifiedSync(deps = {}) {
+  const active = await GiniUnifiedSyncJob.findOne({ partner: "gini", mode: "preview", status: "scanning" }).sort({ createdAt: -1 });
+  if (active) {
+    launchPreview(active._id, deps);
+    const job = await GiniUnifiedSyncJob.findById(active._id);
+    const items = await GiniUnifiedSyncItem.find({ jobId: active._id }).sort({ sku: 1 }).lean();
+    return previewPayload(job, items, deps);
+  }
+  const total = Array.isArray(deps.products) ? deps.products.length : await Product.countDocuments();
+  const job = await GiniUnifiedSyncJob.create({
+    partner: "gini",
+    status: "scanning",
+    mode: "preview",
+    total,
+    scanned: 0,
+    writesEnabled: false,
+    productionWritesEnabled: false,
+    limitations: [...GINI_UNIFIED_LIMITATIONS],
+  });
+  launchPreview(job._id, deps);
+  return previewPayload(job, [], deps);
 }
 
 async function stillRunning(jobId) {
@@ -968,4 +1067,16 @@ export async function pauseGiniUnifiedSync() {
 
 export function resetGiniUnifiedSyncForTests() {
   activeJobId = "";
+  scanGeneration += 1;
+  previewRun += 1;
+  previewRunner = "";
+  previewDeps = null;
+}
+
+/** Drops the in-memory scanner the way an API restart does. The saved job stays scanning. */
+export function abandonGiniUnifiedPreviewForTests() {
+  scanGeneration += 1;
+  previewRun += 1;
+  previewRunner = "";
+  previewDeps = null;
 }

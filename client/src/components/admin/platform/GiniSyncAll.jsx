@@ -187,10 +187,10 @@ function confirmChangedSync(t, row) {
     .replaceAll("{changes}", changes);
 }
 
-function Stat({ label, value, marker, markerValue }) {
+function Stat({ label, value, marker, markerValue, extra }) {
   const marked = marker ? { [marker]: markerValue ?? "" } : {};
   return (
-    <div className="rounded-2xl bg-cream px-4 py-3" {...marked}>
+    <div className="rounded-2xl bg-cream px-4 py-3" {...marked} {...(extra || {})}>
       <p className="text-[11px] font-semibold tracking-wide text-brown/45 uppercase">{label}</p>
       <p className="mt-1 font-display text-2xl tabular-nums text-brown">{value ?? "—"}</p>
     </div>
@@ -341,7 +341,22 @@ export default function GiniSyncAll({ t }) {
           <p className="mt-1 text-sm text-brown/70" data-gini-unified-local-writes={unified?.writesEnabled === true ? "on" : "off"}>
             {unified?.writesEnabled === true ? t.giniUnifiedLocalOn : t.giniUnifiedLocalOff}
           </p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-4">
+          <p className="mt-3 text-sm text-brown/70" data-gini-unified-status={unified?.job?.status || ""}>
+            {unified?.job?.status === "scanning" ? t.giniUnifiedScanning : ""}
+          </p>
+          {unified?.job?.status === "failed" && unified.job.lastError ? (
+            <p className="mt-2 text-sm text-rose-800" data-gini-unified-error={unified.job.errorCode || "failed"}>
+              {unified.job.lastError}
+            </p>
+          ) : null}
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <Stat
+              label={t.giniUnifiedScanned}
+              value={unified?.job ? `${unified.job.scanned ?? 0}/${unified.job.total ?? 0}` : "—"}
+              marker="data-gini-unified-scanned"
+              markerValue={unified?.job?.scanned ?? 0}
+              extra={{ "data-gini-unified-total": unified?.job?.total ?? 0 }}
+            />
             <Stat label={t.giniUnifiedCreate} value={count(unified?.job?.create)} marker="data-gini-unified-create" markerValue={unified?.job?.create ?? 0} />
             <Stat label={t.giniUnifiedUpdate} value={count(unified?.job?.update)} marker="data-gini-unified-update" markerValue={unified?.job?.update ?? 0} />
             <Stat label={t.giniUnifiedUnchanged} value={count(unified?.job?.unchanged)} marker="data-gini-unified-unchanged" markerValue={unified?.job?.unchanged ?? 0} />
