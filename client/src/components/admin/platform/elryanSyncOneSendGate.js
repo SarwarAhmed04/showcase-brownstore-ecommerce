@@ -209,6 +209,17 @@ export function describeElryanSendResult(result) {
   return { kind: "other", lines: [], retryBlocked: false, hold: "", tokenConsumed: false };
 }
 
+/** Confirm sends the preview identity only. The server rebuilds the dimension patch. */
+export function elryanProductionDimensionUpdateRequest({ updatePreview, confirm } = {}) {
+  if (confirm !== true || updatePreview?.updateAllowed !== true) return null;
+  const productId = String(updatePreview.productId || "").trim();
+  const listingId = String(updatePreview.listingId || "").trim();
+  const previewToken = String(updatePreview.previewToken || "").trim();
+  if (!productId || !listingId || !previewToken) return null;
+  if (String(updatePreview.sku || "") !== ELRYAN_STAGING_SEND_SKU) return null;
+  return { productId, listingId, previewToken, confirm: true };
+}
+
 /** The UI never retries a send on its own. */
 export function shouldRetryElryanSend() {
   return false;

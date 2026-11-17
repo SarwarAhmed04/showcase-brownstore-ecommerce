@@ -52,6 +52,10 @@ import {
   sendElryanSyncOne,
 } from "../services/elryanSyncOne.js";
 import {
+  previewElryanProductionUpdate,
+  updateElryanProductionDimensions,
+} from "../services/elryanProductionUpdate.js";
+import {
   confirmElryanStagingDimensions,
   saveElryanStagingProductOverride,
 } from "../services/elryanStagingInput.js";
@@ -548,6 +552,38 @@ elryanConnectionRouter.post("/platforms/elryan/sync-one/production-create", asyn
     res.status(status).json(result);
   } catch (err) {
     fail(res, err, "Failed to create the Elryan Production product");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/sync-one/production-update/preview", async (req, res) => {
+  try {
+    const result = assertNoElryanSecretLeak(
+      await previewElryanProductionUpdate({
+        productId: req.body?.productId,
+        listingId: req.body?.listingId,
+      }),
+      ""
+    );
+    res.status(result.ok ? 200 : result.httpStatus >= 400 && result.httpStatus < 600 ? result.httpStatus : 403).json(result);
+  } catch (err) {
+    fail(res, err, "Failed to preview the Elryan Production update");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/sync-one/production-update", async (req, res) => {
+  try {
+    const result = assertNoElryanSecretLeak(
+      await updateElryanProductionDimensions({
+        productId: req.body?.productId,
+        listingId: req.body?.listingId,
+        confirm: req.body?.confirm === true,
+        previewToken: req.body?.previewToken,
+      }),
+      ""
+    );
+    res.status(result.ok ? 200 : result.httpStatus >= 400 && result.httpStatus < 600 ? result.httpStatus : 403).json(result);
+  } catch (err) {
+    fail(res, err, "Failed to update the Elryan Production listing");
   }
 });
 

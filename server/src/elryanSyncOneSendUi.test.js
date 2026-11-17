@@ -6,6 +6,7 @@ import {
   buildElryanStagingSendBody,
   describeElryanSendResult,
   elryanProductionConfirmFacts,
+  elryanProductionDimensionUpdateRequest,
   elryanProductionSendGate,
   elryanProductionSendRequest,
   elryanStagingSendConfirmFacts,
@@ -257,6 +258,9 @@ describe("Elryan Sync One send UI gate", () => {
     assert.equal(gateSource.includes("fetch("), false);
     assert.equal(ui.split("api.elryanSyncOneSend").length - 1, 1);
     assert.equal(ui.split("api.elryanProductionCreate").length - 1, 1);
+    assert.equal(ui.split("api.elryanProductionUpdate(").length - 1, 1);
+    assert.match(ui, /elryanCurrentElryan/);
+    assert.match(ui, /elryanProposedBrownStore/);
     assert.match(ui, /elryanSendProduction/);
     assert.match(ui, /elryanApprovedPrice/);
     assert.match(ui, /elryanLiveStock/);
@@ -269,5 +273,26 @@ describe("Elryan Sync One send UI gate", () => {
     assert.match(ui, /role="dialog"/);
     assert.match(api, /elryanSyncOneSend: \(body\) =>\s*request\("\/api\/admin\/platforms\/elryan\/sync-one\/send"/);
     assert.equal(api.includes("/v1/products"), false);
+  });
+
+  it("confirms a Production dimension update without sending the dimension values from the screen", () => {
+    const request = elryanProductionDimensionUpdateRequest({
+      updatePreview: {
+        updateAllowed: true,
+        productId: "6adc7937b3764a909f692978",
+        sku: "OWCH180002",
+        listingId: "elr-existing",
+        previewToken: "update-token",
+        dimensionPatch: { width: 20 },
+      },
+      confirm: true,
+    });
+    assert.deepEqual(request, {
+      productId: "6adc7937b3764a909f692978",
+      listingId: "elr-existing",
+      previewToken: "update-token",
+      confirm: true,
+    });
+    assert.equal("width" in request, false);
   });
 });

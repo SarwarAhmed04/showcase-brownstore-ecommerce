@@ -15,6 +15,9 @@ import { ElryanSyncOnePreview } from "./models/ElryanSyncOnePreview.js";
 import { PlatformTaxonomyConfig } from "./models/PlatformTaxonomyConfig.js";
 import { encryptApiKey } from "./utils/partnerAuth.js";
 import { setElryanFetch } from "./services/elryanClient.js";
+
+const LISTING_ID = "64b7c2e1a9f0d4c3b2a19001";
+const OTHER_LISTING_ID = "64b7c2e1a9f0d4c3b2a19002";
 import { __resetElryanAttributeValueCatalogCacheForTests } from "./services/elryanAttributeValueCatalog.js";
 import { saveElryanVerifiedMapping } from "./services/elryanMappingSave.js";
 import { upsertElryanValueMapping } from "./services/elryanAttributeMapping.js";
@@ -22,6 +25,10 @@ import { saveElryanProductWarrantyMapping } from "./services/elryanWarrantyMappi
 import { confirmElryanStagingDimensions } from "./services/elryanStagingInput.js";
 import { elryanCreateProduct } from "./services/elryanCatalog.js";
 import { startElryanSyncAll } from "./services/elryanSyncAll.js";
+import {
+  previewElryanProductionUpdate,
+  updateElryanProductionDimensions,
+} from "./services/elryanProductionUpdate.js";
 import {
   approveElryanStagingPrice,
   previewElryanSyncOne,
@@ -59,6 +66,10 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
   let failNextSku;
   let hangPromise;
   let writeCalls;
+  let listingBody;
+  let savedListing;
+  let patches;
+  let skuConflictId;
 
   before(async () => {
     memory = await MongoMemoryServer.create();
@@ -81,6 +92,10 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     failNextSku = false;
     hangPromise = Promise.resolve();
     writeCalls = [];
+    listingBody = null;
+    savedListing = null;
+    patches = [];
+    skuConflictId = "elr-existing";
     __resetElryanAttributeValueCatalogCacheForTests();
     delete process.env.ELRYAN_PRODUCT_WRITES_ENABLED;
     delete process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES;
@@ -144,13 +159,41 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
           return mockResponse(409, {
             success: false,
             error: { code: "CONFLICT", message: "SKU already used" },
-            data: { id: "elr-existing", sku: "OWCH180002", status: "in_review" },
+            data: { id: skuConflictId, sku: "OWCH180002", status: "in_review" },
           });
         }
         if (failNextSku) {
           throw new Error("sku check failed");
         }
         return mockResponse(200, { success: true, data: { available: true } });
+      }
+      if (method === "GET" && /\/v1\/products\/[^/?]+$/.test(new URL(target).pathname)) {
+        const id = decodeURIComponent(target.split("/").pop());
+        const body = savedListing || listingBody || {
+          id,
+          sku: "OWCH180002",
+          price: 50000,
+          quantity: 4,
+          categoryId: "340",
+          width: 10,
+          height: 30,
+          depth: 40,
+        };
+        return mockResponse(200, { data: { ...body, id: body.id || id } });
+      }
+      if (method === "PATCH" && /\/v1\/products\/[^/?]+$/.test(new URL(target).pathname)) {
+        const id = decodeURIComponent(target.split("/").pop());
+        const parsed = JSON.parse(options.body || "{}");
+        patches.push({ url: target, body: parsed });
+        const prior = savedListing || listingBody || {
+          id,
+          sku: "OWCH180002",
+          width: 10,
+          height: 30,
+          depth: 40,
+        };
+        savedListing = { ...prior, ...parsed, id, sku: prior.sku || "OWCH180002" };
+        return mockResponse(200, { data: savedListing });
       }
       if (method === "POST" && target.endsWith("/v1/products")) {
         assert.equal(target, "https://marketplace-api.elryan.com/api/v1/products");
@@ -653,5 +696,178 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     assert.equal(created.ok, true);
     assert.equal(posts, 1);
     assert.equal(writeCalls.filter((line) => line.startsWith("POST")).length, 1);
+  });
+
+  it("previews the existing OWCH180002 listing beside the proposed values and updates only differing dimensions", async () => {
+    const ready = await prepareReady();
+    createMode = "duplicate";
+    skuConflictId = LISTING_ID;
+    const preview = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(preview.matched, true);
+    assert.equal(preview.sku, "OWCH180002");
+    assert.equal(preview.listingId, LISTING_ID);
+    assert.equal(preview.dimensionUnit, "cm");
+    assert.deepEqual(preview.dimensionApiFields, ["width", "height", "depth"]);
+    const width = preview.rows.find((row) => row.apiField === "width");
+    const height = preview.rows.find((row) => row.apiField === "height");
+    const depth = preview.rows.find((row) => row.apiField === "depth");
+    assert.equal(width.current, 10);
+    assert.equal(width.proposed, 20);
+    assert.equal(width.differs, true);
+    assert.equal(height.current, 30);
+    assert.equal(height.proposed, 30);
+    assert.equal(height.differs, false);
+    assert.equal(depth.current, 40);
+    assert.equal(depth.proposed, 40);
+    assert.equal(preview.updateAllowed, true);
+    assert.deepEqual(preview.dimensionPatch, { width: 20 });
+    assert.equal(patches.length, 0);
+    assert.equal(posts, 0);
+
+    const refused = await updateElryanProductionDimensions({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: preview.previewToken,
+    });
+    assert.equal(refused.code, "writes_disabled");
+    assert.equal(patches.length, 0);
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const wrongAction = await updateElryanProductionDimensions({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(wrongAction.code, "preview_mismatch");
+    assert.equal(patches.length, 0);
+
+    const updated = await updateElryanProductionDimensions({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: preview.previewToken,
+    });
+    assert.equal(updated.ok, true);
+    assert.equal(patches.length, 1);
+    assert.equal(patches[0].url, `https://marketplace-api.elryan.com/api/v1/products/${LISTING_ID}`);
+    assert.deepEqual(patches[0].body, { width: 20 });
+    assert.equal(patches[0].body.unit, undefined);
+    assert.equal(updated.savedDimensions.unit, "cm");
+    assert.equal(updated.savedDimensions.width, 20);
+    assert.equal(updated.savedDimensions.height, 30);
+    assert.equal(updated.savedDimensions.depth, 40);
+    assert.equal(updated.rows.find((row) => row.apiField === "width").current, 20);
+    assert.equal(posts, 0);
+    assert.equal(writeCalls.some((line) => line.includes("/batch/") || line.startsWith("PUT")), false);
+  });
+
+  it("does not update when the SKU and listing ID disagree or the API dimension fields are absent", async () => {
+    await prepareReady();
+    createMode = "duplicate";
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    skuConflictId = LISTING_ID;
+    const invalid = await previewElryanProductionUpdate({ productId, listingId: "elr-existing" });
+    assert.equal(invalid.code, "listing_id_invalid");
+    const matched = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    const mismatch = await previewElryanProductionUpdate({ productId, listingId: OTHER_LISTING_ID });
+    assert.equal(mismatch.code, "listing_mismatch");
+    assert.equal(mismatch.updateAllowed, false);
+    const mismatchWrite = await updateElryanProductionDimensions({
+      productId,
+      listingId: OTHER_LISTING_ID,
+      confirm: true,
+      previewToken: matched.previewToken,
+    });
+    assert.equal(mismatchWrite.code, "preview_mismatch");
+    assert.equal(patches.length, 0);
+
+    listingBody = { id: LISTING_ID, sku: "OWCH180002", width: 10, height: 30, length: 50 };
+    const foreign = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.deepEqual(foreign.missingApiFields, ["depth"]);
+    assert.equal(foreign.updateAllowed, false);
+    const width = foreign.rows.find((row) => row.field === "width");
+    assert.equal(width.current, 10);
+    assert.equal(width.proposed, 20);
+    const blocked = await updateElryanProductionDimensions({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: foreign.previewToken,
+    });
+    assert.equal(blocked.code, "dimension_fields_missing");
+    assert.equal(patches.length, 0);
+    assert.equal(posts, 0);
+  });
+
+  it("does not patch a listing whose confirmed dimensions already match", async () => {
+    await prepareReady();
+    createMode = "duplicate";
+    skuConflictId = LISTING_ID;
+    listingBody = {
+      id: LISTING_ID,
+      sku: "OWCH180002",
+      width: 20,
+      height: 30,
+      depth: 40,
+    };
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const preview = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(preview.updateAllowed, false);
+    assert.deepEqual(preview.dimensionPatch, {});
+    const same = await updateElryanProductionDimensions({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: preview.previewToken,
+    });
+    assert.equal(same.code, "dimensions_unchanged");
+    assert.equal(patches.length, 0);
+  });
+
+  it("does not PATCH when the reviewed dimensions or the proposed patch change", async () => {
+    await prepareReady();
+    createMode = "duplicate";
+    skuConflictId = LISTING_ID;
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const preview = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.deepEqual(preview.dimensionPatch, { width: 20 });
+    listingBody = {
+      id: LISTING_ID,
+      sku: "OWCH180002",
+      width: 12,
+      height: 30,
+      depth: 40,
+    };
+    const staleDimensions = await updateElryanProductionDimensions({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: preview.previewToken,
+    });
+    assert.equal(staleDimensions.code, "preview_stale");
+    assert.equal(patches.length, 0);
+
+    listingBody = {
+      id: LISTING_ID,
+      sku: "OWCH180002",
+      width: 10,
+      height: 30,
+      depth: 40,
+    };
+    await ElryanStagingDimensionCheck.updateOne({ productId, environment: "production" }, { width: 25 });
+    const stalePatch = await updateElryanProductionDimensions({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: preview.previewToken,
+    });
+    assert.equal(stalePatch.code, "preview_stale");
+    assert.equal(patches.length, 0);
+    assert.equal(posts, 0);
   });
 });

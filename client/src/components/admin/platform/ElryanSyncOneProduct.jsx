@@ -4,6 +4,7 @@ import { tName } from "../../../i18n";
 import {
   describeElryanSendResult,
   elryanProductionConfirmFacts,
+  elryanProductionDimensionUpdateRequest,
   elryanProductionSendGate,
   elryanProductionSendRequest,
   elryanStagingSendConfirmFacts,
@@ -30,6 +31,9 @@ export default function ElryanSyncOneProduct({ t, lang }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [productionConfirm, setProductionConfirm] = useState(null);
   const [productionResult, setProductionResult] = useState(null);
+  const [listingId, setListingId] = useState("");
+  const [updatePreview, setUpdatePreview] = useState(null);
+  const [updateConfirm, setUpdateConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [gateNote, setGateNote] = useState("");
@@ -191,6 +195,41 @@ export default function ElryanSyncOneProduct({ t, lang }) {
       if (view.tokenConsumed) setPreview((current) => (current ? { ...current, previewToken: "" } : current));
     } catch (err) {
       setProductionResult({ kind: "other", message: err.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onPreviewProductionUpdate() {
+    if (!selected?.id || !listingId.trim()) return;
+    setBusy(true);
+    setError("");
+    setUpdateConfirm(false);
+    try {
+      const data = await api.elryanProductionUpdatePreview({
+        productId: selected.id,
+        listingId: listingId.trim(),
+      });
+      setUpdatePreview(data);
+    } catch (err) {
+      setUpdatePreview(null);
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onConfirmDimensionUpdate() {
+    const body = elryanProductionDimensionUpdateRequest({ updatePreview, confirm: true });
+    if (!body) return;
+    setBusy(true);
+    setError("");
+    try {
+      const data = await api.elryanProductionUpdate(body);
+      setUpdatePreview(data.ok ? { ...updatePreview, ...data, updateAllowed: false } : data);
+      setUpdateConfirm(false);
+    } catch (err) {
+      setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -495,6 +534,52 @@ export default function ElryanSyncOneProduct({ t, lang }) {
           >
             {t.elryanSendProduction}
           </button>
+          <div className="space-y-3 rounded-2xl bg-white p-3">
+            <label className="block text-sm text-brown/70">
+              {t.elryanListingId}
+              <input
+                className={`${CONTROL} mt-1`}
+                value={listingId}
+                onChange={(event) => setListingId(event.target.value)}
+                placeholder="elr-existing"
+              />
+            </label>
+            <button type="button" className={GHOST} disabled={busy || !listingId.trim()} onClick={onPreviewProductionUpdate}>
+              {t.elryanPreviewProductionUpdate}
+            </button>
+            {updatePreview?.rows?.length ? (
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="text-brown/45">
+                    <th className="py-1 pr-2">{t.elryanField || "Field"}</th>
+                    <th className="py-1 pr-2">{t.elryanCurrentElryan}</th>
+                    <th className="py-1">{t.elryanProposedBrownStore}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {updatePreview.rows.map((row) => (
+                    <tr key={row.field} className={row.differs ? "font-semibold text-brown" : "text-brown/80"}>
+                      <td className="py-1 pr-2">{row.apiField}</td>
+                      <td className="py-1 pr-2">{row.presentOnListing ? String(row.current ?? "") : "—"}</td>
+                      <td className="py-1">{row.proposed == null ? "—" : String(row.proposed)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : null}
+            {updatePreview?.message ? <p className="text-sm text-brown/70">{updatePreview.message}</p> : null}
+            {updatePreview?.savedDimensions ? (
+              <p className="text-sm font-semibold text-brown">
+                {t.elryanSavedDimensions}: {updatePreview.savedDimensions.width} × {updatePreview.savedDimensions.height} ×{" "}
+                {updatePreview.savedDimensions.depth} {updatePreview.savedDimensions.unit}
+              </p>
+            ) : null}
+            {updatePreview?.updateAllowed ? (
+              <button type="button" className={BUTTON} disabled={busy} onClick={() => setUpdateConfirm(true)}>
+                {t.elryanUpdateDimensions}
+              </button>
+            ) : null}
+          </div>
           {productionResult ? (
             <div className="rounded-2xl bg-white p-3 text-sm text-brown">
               <p className="font-semibold">{productionResult.message || t.elryanProductionSendResult}</p>
@@ -514,6 +599,39 @@ export default function ElryanSyncOneProduct({ t, lang }) {
             </div>
           ) : null}
         </form>
+      ) : null}
+
+      {updateConfirm ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-brown/40 p-4 sm:items-center" role="dialog" aria-modal="true">
+          <div className="w-full max-w-lg space-y-4 rounded-3xl bg-white p-5">
+            <p className="text-lg font-semibold text-brown">{t.elryanUpdateDimensions}</p>
+            <p className="text-sm text-red-800">{t.elryanDimensionUpdateWarning}</p>
+            <dl className="grid gap-2 text-sm">
+              <div>
+                <dt className="text-brown/45">SKU</dt>
+                <dd className="font-semibold">{updatePreview?.sku}</dd>
+              </div>
+              <div>
+                <dt className="text-brown/45">{t.elryanListingId}</dt>
+                <dd className="font-semibold">{updatePreview?.listingId}</dd>
+              </div>
+              {Object.entries(updatePreview?.dimensionPatch || {}).map(([field, value]) => (
+                <div key={field}>
+                  <dt className="text-brown/45">{field}</dt>
+                  <dd className="font-semibold">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className={GHOST} onClick={() => setUpdateConfirm(false)}>
+                {t.elryanSendCancel}
+              </button>
+              <button type="button" className={BUTTON} disabled={busy} onClick={onConfirmDimensionUpdate}>
+                {t.elryanUpdateDimensions}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {productionFacts ? (

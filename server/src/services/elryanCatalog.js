@@ -5,6 +5,7 @@ import {
   elryanProductWritesEnabled,
 } from "../utils/elryanConstants.js";
 import { collectElryanWarrantyRows } from "../utils/elryanWarranty.js";
+import { ELRYAN_PACKAGE_DIMENSION_FIELDS, elryanProductIdValid } from "../utils/elryanDimensionCompare.js";
 import { interpretElryanSkuAvailability } from "../utils/elryanSku.js";
 import {
   normalizeElryanAttributeValueList,
@@ -353,6 +354,90 @@ export async function elryanCreateProductionProduct(body) {
     path: ELRYAN_PATHS.products,
     method: "POST",
     body,
+    classification: "WRITE",
+    retries: 0,
+  });
+}
+
+/** READ — GET /v1/products/{id} on the active connection. */
+export async function elryanGetProduct(id) {
+  const result = await read(ELRYAN_PATHS.productById(id));
+  return { classification: "READ", httpStatus: result.httpStatus, product: asObject(result.json), raw: result.json };
+}
+
+/**
+ * WRITE — PATCH /v1/products/{id}.
+ * Marketplace v1 allows GET and PATCH on this path. The id is 24 hex characters.
+ * width, height, and depth are packed centimetre numbers. The body has no unit field.
+ * Does not retry and does not send any other product field.
+ */
+export async function elryanUpdateProductionDimensions(listingId, body) {
+  if (!elryanProductWritesEnabled()) {
+    throw new ElryanClientError("Elryan product publishing is disabled.", {
+      status: 403,
+      code: "writes_disabled",
+      classification: "WRITE",
+    });
+  }
+  if (!elryanLiveProductWritesEnabled()) {
+    throw new ElryanClientError("Live Elryan product writes are not enabled.", {
+      status: 403,
+      code: "writes_gated",
+      classification: "WRITE",
+    });
+  }
+  const config = await resolveElryanConfig();
+  const productionBase = ELRYAN_ENVIRONMENTS.production.baseUrl;
+  if (config.environment !== "production" || config.baseUrl !== productionBase) {
+    throw new ElryanClientError("Production update requires the active Production connection.", {
+      status: 403,
+      code: "production_required",
+      classification: "WRITE",
+    });
+  }
+  const id = String(listingId || "").trim();
+  if (!elryanProductIdValid(id)) {
+    throw new ElryanClientError("Marketplace v1 product ids are 24 hexadecimal characters.", {
+      status: 403,
+      code: "listing_id_invalid",
+      classification: "WRITE",
+    });
+  }
+  const source = body && typeof body === "object" && !Array.isArray(body) ? body : {};
+  const extra = Object.keys(source).filter((key) => !ELRYAN_PACKAGE_DIMENSION_FIELDS.includes(key));
+  if (extra.length) {
+    throw new ElryanClientError("Production dimension update can send only width, height, and depth.", {
+      status: 403,
+      code: "dimension_fields_only",
+      classification: "WRITE",
+    });
+  }
+  const patch = {};
+  for (const field of ELRYAN_PACKAGE_DIMENSION_FIELDS) {
+    if (source[field] == null) continue;
+    const value = Number(source[field]);
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new ElryanClientError("A package dimension must be a positive number.", {
+        status: 403,
+        code: "invalid_dimensions",
+        classification: "WRITE",
+      });
+    }
+    patch[field] = value;
+  }
+  if (!Object.keys(patch).length) {
+    throw new ElryanClientError("No package dimension differs.", {
+      status: 403,
+      code: "dimensions_unchanged",
+      classification: "WRITE",
+    });
+  }
+  return elryanRequest({
+    baseUrl: productionBase,
+    apiKey: config.apiKey,
+    path: ELRYAN_PATHS.productById(id),
+    method: "PATCH",
+    body: patch,
     classification: "WRITE",
     retries: 0,
   });
