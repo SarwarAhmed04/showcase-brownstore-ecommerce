@@ -4,6 +4,7 @@ import { ElryanValueMapping } from "../models/ElryanValueMapping.js";
 import { Product } from "../models/Product.js";
 import { getElryanConnectionPublic, getElryanWritesGatePublic } from "./elryanConnection.js";
 import { elryanListWarranties } from "./elryanCatalog.js";
+import { ELRYAN_FIRST_STAGING_CREATE_SKU } from "../utils/elryanStagingGate.js";
 import { upsertElryanValueMapping } from "./elryanAttributeMapping.js";
 import { expireElryanPreviewTokens } from "./elryanCollectionDimensions.js";
 import { normalizeElryanWarrantyCatalog } from "../utils/elryanWarranty.js";
@@ -405,5 +406,99 @@ export async function saveElryanBrandWarrantyMapping(input = {}) {
     invalidation,
     confirmedSendsUnchanged:
       JSON.stringify(confirmedBefore) === JSON.stringify(confirmedAfter),
+  };
+}
+
+export const ELRYAN_KENWOOD_FOOD_CHOPPER_WARRANTY = "Kenwood Food Chopper";
+
+/**
+ * Save one Production product warranty for SKU OWCH180002.
+ * The code must be the catalog row whose name is exactly "Kenwood Food Chopper".
+ * The list is read with fresh=true. No product is sent to Elryan.
+ */
+export async function saveElryanProductWarrantyMapping(input = {}) {
+  const connection = await getElryanConnectionPublic();
+  if (connection.environment !== "production") {
+    throw fail(
+      "Save this product warranty while the Elryan connection is Production. Staging warranties were not used.",
+      "production_required",
+      409
+    );
+  }
+  if (input.confirm !== true) {
+    throw fail("Confirm the exact Kenwood Food Chopper warranty before saving.", "confirm_required");
+  }
+  if (!mongoose.isValidObjectId(input.productId)) {
+    throw fail("Product not found", "product_not_found", 404);
+  }
+  const product = await Product.findById(input.productId).lean();
+  if (!product) throw fail("Product not found", "product_not_found", 404);
+  const sku = String(product.overrides?.sku || product.itemCode || "").trim();
+  if (input.sku && String(input.sku).trim() !== sku) {
+    throw fail("SKU does not match this BrownStore product.", "sku_mismatch");
+  }
+  if (sku !== ELRYAN_FIRST_STAGING_CREATE_SKU) {
+    throw fail("This product warranty mapping is limited to SKU OWCH180002.", "first_test_sku_only");
+  }
+
+  let listed;
+  try {
+    listed = await elryanListWarranties({ fresh: true });
+  } catch (err) {
+    throw fail(err?.message || "The Production warranty list could not be loaded.", err?.code || "warranty_list_failed", 502);
+  }
+  const catalog = normalizeElryanWarrantyCatalog(listed.warranties, listed.httpStatus);
+  const matches = catalog.items.filter((item) => item.name === ELRYAN_KENWOOD_FOOD_CHOPPER_WARRANTY);
+  if (matches.length !== 1) {
+    throw fail(
+      matches.length === 0
+        ? `GET /v1/warranty?fresh=true has no exact "${ELRYAN_KENWOOD_FOOD_CHOPPER_WARRANTY}" warranty. Nothing was invented.`
+        : `GET /v1/warranty?fresh=true returned more than one exact "${ELRYAN_KENWOOD_FOOD_CHOPPER_WARRANTY}" warranty. Nothing was saved.`,
+      matches.length === 0 ? "warranty_name_missing" : "warranty_name_ambiguous",
+      409
+    );
+  }
+  const official = matches[0];
+  const requested = String(input.elryanCode || "").trim();
+  if (requested && requested !== official.code) {
+    throw fail(
+      "That code is not the exact Kenwood Food Chopper warranty. A similar name was not accepted.",
+      "invalid_warranty_code"
+    );
+  }
+
+  await upsertElryanValueMapping({
+    kind: "warranty",
+    warrantyScope: "product",
+    environment: "production",
+    brownKey: sku,
+    brownLabel: official.name,
+    elryanCode: official.code,
+    elryanLabel: official.name,
+  });
+  const storedKey = elryanWarrantyStorageKey({ environment: "production", scope: "product", subject: sku });
+  const readBack = await ElryanValueMapping.findOne({ kind: "warranty", brownKey: storedKey }).lean();
+  if (!readBack || readBack.elryanCode !== official.code || readBack.environment !== "production") {
+    throw fail("The Production warranty mapping could not be read back.", "warranty_read_back_failed", 409);
+  }
+  await expireElryanPreviewTokens([String(product._id)]);
+  return {
+    ok: true,
+    saved: true,
+    environment: "production",
+    productPostCalled: false,
+    productWritesEnabled: getElryanWritesGatePublic().productWritesEnabled,
+    mapping: {
+      brownKey: readBack.brownKey,
+      sku,
+      elryanCode: readBack.elryanCode,
+      elryanLabel: readBack.elryanLabel || "",
+      environment: "production",
+      warrantyScope: "product",
+    },
+    official: {
+      code: official.code,
+      name: official.name,
+    },
   };
 }

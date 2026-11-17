@@ -16,8 +16,8 @@ const categorySchema = new mongoose.Schema(
 
 const elryanCategoryCatalogSnapshotSchema = new mongoose.Schema(
   {
-    /** Phase 3: staging-only snapshots (production forbidden). */
-    environment: { type: String, required: true, enum: ["staging"], unique: true },
+    /** One snapshot per environment. A Staging snapshot is never read as Production. */
+    environment: { type: String, required: true, enum: ["staging", "production"], unique: true },
     status: {
       type: String,
       default: "idle",

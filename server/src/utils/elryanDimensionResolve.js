@@ -119,8 +119,8 @@ export function resolveElryanDimensions({
   const identity = brownCollectionIdentity(product);
   const env = String(environment || "");
 
-  if (env === "staging") {
-    const productCheck = assessElryanDimensionConfirmation(dimensionRow);
+  if (env === "staging" || env === "production") {
+    const productCheck = assessElryanDimensionConfirmation(dimensionRow, env);
     if (productCheck.confirmed) {
       return {
         source: ELRYAN_DIMENSION_SOURCE.PRODUCT_OVERRIDE,
@@ -128,6 +128,7 @@ export function resolveElryanDimensions({
         usable: true,
         code: "",
         reason: "product_override",
+        environment: env,
         unit: productCheck.unit,
         width: productCheck.width,
         height: productCheck.height,
@@ -136,8 +137,12 @@ export function resolveElryanDimensions({
         suggestion: null,
       };
     }
-  } else {
-    return missing(env === "production" ? "production_isolated" : "unsupported_environment", identity);
+  }
+  if (env === "production") {
+    return missing("production_isolated", identity);
+  }
+  if (env !== "staging") {
+    return missing("unsupported_environment", identity);
   }
 
   if (identity.ambiguous || !identity.collectionId) {
@@ -195,10 +200,13 @@ export function presentElryanPackageDimensions(dimensions) {
     depth: dimensions?.confirmed ? dimensions.depth : null,
   };
   if (source === ELRYAN_DIMENSION_SOURCE.PRODUCT_OVERRIDE && dimensions?.confirmed) {
+    const production = dimensions.environment === "production";
     return {
       ...base,
       status: "CONFIRMED",
-      note: "Product-specific Staging dimensions override any collection rule. The BrownStore product record was not changed.",
+      note: production
+        ? "Product-specific Production dimensions are confirmed for this SKU. Staging measurements were not used, and the BrownStore product record was not changed."
+        : "Product-specific Staging dimensions override any collection rule. The BrownStore product record was not changed.",
     };
   }
   if (source === ELRYAN_DIMENSION_SOURCE.COLLECTION_AUTO && dimensions?.confirmed) {
@@ -218,6 +226,9 @@ export function presentElryanPackageDimensions(dimensions) {
   return {
     ...base,
     status: "UNVERIFIED",
-    note: `${ELRYAN_PACKAGE_DIMENSIONS_NOTE} Sending stays blocked until a verified product override or a confirmed collection AUTO_APPLY rule applies. Staging rules are never used in Production.`,
+    note:
+      dimensions?.reason === "production_isolated"
+        ? `${ELRYAN_PACKAGE_DIMENSIONS_NOTE} Production package dimensions are missing for this product. Staging measurements are not used. Width, height, and depth stay blocked until a Production confirmation is saved.`
+        : `${ELRYAN_PACKAGE_DIMENSIONS_NOTE} Sending stays blocked until a verified product override or a confirmed collection AUTO_APPLY rule applies. Staging rules are never used in Production.`,
   };
 }

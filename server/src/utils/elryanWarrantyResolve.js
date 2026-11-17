@@ -70,7 +70,14 @@ export function describeElryanWarrantyRow(row) {
 /**
  * @returns {{ mapping: object|null, source: ""|"product"|"brand", environment: "staging"|"production" }}
  */
-export function resolveElryanWarrantyFromRows(rows, { environment, explicitKey, brandId } = {}) {
+function productWarrantyMatch(described, subject) {
+  const key = String(subject || "").trim().toLowerCase();
+  if (!key || key === "default") return null;
+  const matches = described.filter((item) => item.scope === "product" && item.subject === key);
+  return matches.find((item) => item.legacy === false) || matches[0] || null;
+}
+
+export function resolveElryanWarrantyFromRows(rows, { environment, explicitKey, brandId, productId, sku } = {}) {
   const env = normalizeElryanWarrantyEnvironment(environment);
   const described = (Array.isArray(rows) ? rows : [])
     .map(describeElryanWarrantyRow)
@@ -78,9 +85,12 @@ export function resolveElryanWarrantyFromRows(rows, { environment, explicitKey, 
 
   const explicit = String(explicitKey || "").trim().toLowerCase();
   if (explicit && explicit !== "default") {
-    const productMatches = described.filter((item) => item.scope === "product" && item.subject === explicit);
-    const product = productMatches.find((item) => item.legacy === false) || productMatches[0] || null;
+    const product = productWarrantyMatch(described, explicit);
     if (product) return { mapping: product.row, source: "product", environment: env };
+  }
+  for (const subject of [productId, sku]) {
+    const product = productWarrantyMatch(described, subject);
+    if (product && product.legacy === false) return { mapping: product.row, source: "product", environment: env };
   }
 
   const brand = String(brandId || "").trim().toLowerCase();

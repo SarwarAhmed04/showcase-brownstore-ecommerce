@@ -38,8 +38,9 @@ export function mergeElryanStagingAttributes(environment, mappingAttributes, ove
   return { ...base, ...normalized.attributes };
 }
 
-export function assessElryanDimensionConfirmation(row) {
-  if (!row || row.environment !== "staging") {
+export function assessElryanDimensionConfirmation(row, environment = "staging") {
+  const env = environment === "production" ? "production" : "staging";
+  if (!row || row.environment !== env) {
     return { confirmed: false, reason: "missing", unit: "", width: null, height: null, depth: null };
   }
   const unit = String(row.unit || "").trim();
@@ -78,7 +79,8 @@ export function matchElryanStagingPriceApproval(approval, context = {}) {
   const sku = String(context.sku || "");
   const payload = context.payload || {};
   if (!approval) return { valid: false, reason: "missing" };
-  if (context.environment !== "staging" || approval.environment !== "staging") {
+  const env = context.environment === "production" ? "production" : context.environment === "staging" ? "staging" : "";
+  if (!env || approval.environment !== env) {
     return { valid: false, reason: "environment" };
   }
   if (String(approval.productId || "") !== String(context.productId || "")) {

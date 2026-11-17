@@ -6,7 +6,7 @@ import mongoose from "mongoose";
  */
 const elryanStagingPriceApprovalSchema = new mongoose.Schema(
   {
-    environment: { type: String, required: true, enum: ["staging"] },
+    environment: { type: String, required: true, enum: ["staging", "production"] },
     productId: { type: String, required: true },
     sku: { type: String, required: true },
     price: { type: Number, required: true },

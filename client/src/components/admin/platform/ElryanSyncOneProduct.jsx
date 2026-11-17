@@ -28,6 +28,10 @@ export default function ElryanSyncOneProduct({ t, lang }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [gateNote, setGateNote] = useState("");
+  const [packageWidth, setPackageWidth] = useState("");
+  const [packageHeight, setPackageHeight] = useState("");
+  const [packageDepth, setPackageDepth] = useState("");
+  const [axesConfirmed, setAxesConfirmed] = useState(false);
 
   const sendGate = elryanStagingSendGate({ preview, writesGate, localHold });
   const confirmFacts = preview ? elryanStagingSendConfirmFacts(preview) : null;
@@ -159,7 +163,10 @@ export default function ElryanSyncOneProduct({ t, lang }) {
   const reasonText = {
     writes_disabled: t.elryanSendReasonWrites,
     writes_partial: t.elryanSendReasonPartial,
-    staging_only: t.elryanSendReasonStaging,
+    staging_only:
+      preview?.connection?.environment === "production"
+        ? t.elryanSendReasonProductionPreview
+        : t.elryanSendReasonStaging,
     not_ready: t.elryanSendReasonReady,
     blockers: t.elryanSendReasonBlockers,
     preview_required: t.elryanSendReasonToken,
@@ -340,6 +347,96 @@ export default function ElryanSyncOneProduct({ t, lang }) {
         </div>
       ) : null}
 
+      {preview?.connection?.environment === "production" && preview.product?.sku === "OWCH180002" ? (
+        <form
+          className="max-w-3xl space-y-3 rounded-[1.75rem] bg-cream/70 p-5"
+          onSubmit={(event) => event.preventDefault()}
+        >
+          <p className="text-sm text-brown/80">{t.elryanProductionPreviewNote}</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={BUTTON}
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                setError("");
+                try {
+                  await api.elryanProductWarranty({
+                    productId: preview.product.id,
+                    sku: preview.product.sku,
+                    confirm: true,
+                  });
+                  await onPreview();
+                } catch (err) {
+                  setError(err.message);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {t.elryanSaveKenwoodWarranty}
+            </button>
+            <button
+              type="button"
+              className={BUTTON}
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                setError("");
+                try {
+                  await api.elryanApprovePrice(preview.product.id);
+                  await onPreview();
+                } catch (err) {
+                  setError(err.message);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {t.elryanApproveProductionPrice}
+            </button>
+          </div>
+          <div className="grid gap-2 md:grid-cols-3">
+            <input className={CONTROL} inputMode="decimal" value={packageWidth} onChange={(event) => setPackageWidth(event.target.value)} placeholder="width cm" />
+            <input className={CONTROL} inputMode="decimal" value={packageHeight} onChange={(event) => setPackageHeight(event.target.value)} placeholder="height cm" />
+            <input className={CONTROL} inputMode="decimal" value={packageDepth} onChange={(event) => setPackageDepth(event.target.value)} placeholder="depth cm" />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-brown">
+            <input type="checkbox" checked={axesConfirmed} onChange={(event) => setAxesConfirmed(event.target.checked)} />
+            cm, width, height, and depth are confirmed
+          </label>
+          <button
+            type="button"
+            className={GHOST}
+            disabled={busy || !axesConfirmed}
+            onClick={async () => {
+              setBusy(true);
+              setError("");
+              try {
+                await api.elryanStagingDimensions({
+                  productId: preview.product.id,
+                  sku: preview.product.sku,
+                  unit: "cm",
+                  width: Number(packageWidth),
+                  height: Number(packageHeight),
+                  depth: Number(packageDepth),
+                  axesConfirmed: true,
+                  confirm: true,
+                });
+                await onPreview();
+              } catch (err) {
+                setError(err.message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {t.elryanConfirmProductionDimensions}
+          </button>
+        </form>
+      ) : null}
+
       {preview ? (
         <div className="max-w-3xl space-y-4 rounded-[1.75rem] bg-white p-5 ring-1 ring-brown/10">
           <div className="flex flex-wrap items-center gap-2">
@@ -420,11 +517,13 @@ export default function ElryanSyncOneProduct({ t, lang }) {
             <div>
               <dt className="text-brown/45">{t.elryanStagingOverride}</dt>
               <dd className="font-semibold">
-                {preview.stagingOverride
-                  ? Object.entries(preview.stagingOverride.attributes || {})
-                      .map(([code, value]) => `${code}: ${value}`)
-                      .join(", ")
-                  : t.elryanNoStagingOverride}
+                {preview.connection?.environment === "production"
+                  ? t.elryanSendReasonProductionPreview
+                  : preview.stagingOverride
+                    ? Object.entries(preview.stagingOverride.attributes || {})
+                        .map(([code, value]) => `${code}: ${value}`)
+                        .join(", ")
+                    : t.elryanNoStagingOverride}
               </dd>
             </div>
             <div>

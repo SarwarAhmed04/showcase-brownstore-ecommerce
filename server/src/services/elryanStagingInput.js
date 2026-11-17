@@ -5,6 +5,7 @@ import { toResolvedProduct } from "../utils/productView.js";
 import { expireElryanPreviewTokens } from "./elryanCollectionDimensions.js";
 import {
   assessElryanDimensionConfirmation,
+  ELRYAN_FIRST_STAGING_CREATE_SKU,
   normalizeElryanStagingAttributes,
 } from "../utils/elryanStagingGate.js";
 
@@ -78,18 +79,19 @@ export async function confirmElryanStagingDimensions({
   if (confirm !== true) {
     throw inputError("Dimension confirmation requires confirm=true.", "confirm_required");
   }
-  if (environment !== "staging") {
+  const env = environment === "production" ? "production" : environment === "staging" ? "staging" : "";
+  if (!env) {
     throw inputError("Dimension confirmation is Staging only.", "staging_only");
   }
   const candidate = {
-    environment: "staging",
+    environment: env,
     unit,
     width,
     height,
     depth,
     axesConfirmed: axesConfirmed === true,
   };
-  const assessed = assessElryanDimensionConfirmation(candidate);
+  const assessed = assessElryanDimensionConfirmation(candidate, env);
   if (!assessed.confirmed) {
     throw inputError(
       "Dimension confirmation needs an explicit unit and explicit width, height, and depth. Nothing was assumed.",
@@ -97,8 +99,11 @@ export async function confirmElryanStagingDimensions({
     );
   }
   const loaded = await loadSku(productId, sku);
+  if (env === "production" && loaded.sku !== ELRYAN_FIRST_STAGING_CREATE_SKU) {
+    throw inputError("Production dimension confirmation is limited to SKU OWCH180002.", "first_test_sku_only");
+  }
   const saved = await ElryanStagingDimensionCheck.findOneAndUpdate(
-    { environment: "staging", productId: String(loaded.doc._id) },
+    { environment: env, productId: String(loaded.doc._id) },
     {
       $set: {
         sku: loaded.sku,
@@ -115,7 +120,7 @@ export async function confirmElryanStagingDimensions({
   await expireElryanPreviewTokens([String(loaded.doc._id)]);
   return {
     ok: true,
-    environment: "staging",
+    environment: env,
     productId: String(loaded.doc._id),
     sku: saved.sku,
     unit: saved.unit,

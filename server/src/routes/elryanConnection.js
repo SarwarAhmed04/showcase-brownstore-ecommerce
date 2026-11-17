@@ -72,6 +72,7 @@ import {
 import {
   listElryanWarrantyMappingPage,
   saveElryanBrandWarrantyMapping,
+  saveElryanProductWarrantyMapping,
 } from "../services/elryanWarrantyMapping.js";
 import { assertNoElryanSecretLeak } from "../utils/elryanRedact.js";
 
@@ -426,6 +427,24 @@ elryanConnectionRouter.post("/platforms/elryan/warranty-mapping", async (req, re
     );
   } catch (err) {
     fail(res, err, "Failed to save Elryan warranty mapping");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/product-warranty-mapping", async (req, res) => {
+  try {
+    res.json(
+      assertNoElryanSecretLeak(
+        await saveElryanProductWarrantyMapping({
+          productId: req.body?.productId,
+          sku: req.body?.sku,
+          elryanCode: req.body?.elryanCode,
+          confirm: req.body?.confirm === true,
+        }),
+        ""
+      )
+    );
+  } catch (err) {
+    fail(res, err, "Failed to save the Elryan product warranty");
   }
 });
 

@@ -28,7 +28,6 @@ import {
 import { buildElryanProductPayload, collectElryanImageUrls } from "../utils/elryanPayloadBuilder.js";
 import { verifyElryanPublicImages } from "../utils/elryanImages.js";
 import {
-  elryanParentCategoryBlocker,
   elryanVerifiedLeafBlocker,
   validateElryanPreviewParts,
 } from "../utils/elryanValidator.js";
@@ -49,7 +48,7 @@ import {
   elryanListWarranties,
   elryanSkuExists,
 } from "./elryanCatalog.js";
-import { inspectElryanAttributeValues } from "../utils/elryanAttributeSet.js";
+import { inspectElryanAttributeValues, resolveElryanSavedAttributes } from "../utils/elryanAttributeSet.js";
 import { normalizeElryanWarrantyCatalog, uncheckedWarrantyCatalog } from "../utils/elryanWarranty.js";
 import { getElryanConnectionPublic, getElryanWritesGatePublic, resolveElryanConfig } from "./elryanConnection.js";
 import {
@@ -57,7 +56,6 @@ import {
   elryanDimensionBlockers,
   elryanPublicationFromCreate,
   matchElryanStagingPriceApproval,
-  mergeElryanStagingAttributes,
 } from "../utils/elryanStagingGate.js";
 
 const PREVIEW_TTL_MS = 20 * 60 * 1000;
@@ -111,9 +109,13 @@ export async function searchElryanSyncProducts(q = "", limit = 20) {
   };
 }
 
-function mappingAttributes(mappingValues) {
-  const nested = mappingValues?.environments?.[mappingValues?.elryanEnvironment]?.attributes;
+function mappingAttributes(mappingValues, environment) {
+  const env = environment === "production" ? "production" : "staging";
+  const nested = mappingValues?.environments?.[env]?.attributes;
   if (nested && typeof nested === "object" && !Array.isArray(nested)) return nested;
+  const categoryId = String(mappingValues?.categoryId || "").trim();
+  const tagged = String(mappingValues?.elryanEnvironment || "staging").trim().toLowerCase();
+  if (!categoryId || tagged !== env) return {};
   if (mappingValues?.attributes && typeof mappingValues.attributes === "object" && !Array.isArray(mappingValues.attributes)) {
     return mappingValues.attributes;
   }
@@ -140,8 +142,9 @@ async function readLiveCommission(categoryId, brandLabel) {
 
 async function mappedElryanCategory(environment, categoryId) {
   const id = String(categoryId || "").trim();
-  if (!id || environment !== "staging") return { snapshot: null, category: null };
-  const snap = await ElryanCategoryCatalogSnapshot.findOne({ environment: "staging" })
+  const env = environment === "production" ? "production" : "staging";
+  if (!id) return { snapshot: null, category: null };
+  const snap = await ElryanCategoryCatalogSnapshot.findOne({ environment: env })
     .select("status coverage categories.id categories.isParent")
     .lean();
   if (!snap) return { snapshot: null, category: null };
@@ -183,7 +186,10 @@ export async function assembleElryanSyncOne({ productId, origin = "", investigat
 
   const [override, approvalRow, dimensionInputs, categoryLookup] = await Promise.all([
     ElryanStagingProductOverride.findOne({ environment: "staging", productId: productKey }).lean(),
-    ElryanStagingPriceApproval.findOne({ environment: "staging", productId: productKey }).lean(),
+    ElryanStagingPriceApproval.findOne({
+      environment: config.environment === "production" ? "production" : "staging",
+      productId: productKey,
+    }).lean(),
     loadElryanDimensionInputs(config.environment, [doc]),
     mappedElryanCategory(config.environment, mappingValues.categoryId),
   ]);
@@ -197,12 +203,6 @@ export async function assembleElryanSyncOne({ productId, origin = "", investigat
       : dimensionInputs.rules.get(collectionIdentity.collectionId) || null,
     excluded: dimensionInputs.exclusions.has(productKey),
   });
-  const attributes = mergeElryanStagingAttributes(
-    config.environment,
-    mappingAttributes(mappingValues),
-    override
-  );
-
   let pricing = await buildElryanPricingView(doc);
   let attributeSet = null;
   let requiredAttributeCodes = [];
@@ -232,7 +232,9 @@ export async function assembleElryanSyncOne({ productId, origin = "", investigat
 
   if (config.hasApiKey) {
     try {
-      const listed = await elryanListWarranties();
+      const listed = await elryanListWarranties(
+        config.environment === "production" ? { fresh: true } : {}
+      );
       warrantyCatalog = normalizeElryanWarrantyCatalog(listed.warranties, listed.httpStatus);
     } catch (err) {
       warrantyCatalog = uncheckedWarrantyCatalog(
@@ -246,9 +248,6 @@ export async function assembleElryanSyncOne({ productId, origin = "", investigat
     try {
       const setResult = await elryanAttributeSetForCategory(mappingValues.categoryId);
       attributeSet = setResult.attributeSet || null;
-      const inspected = inspectElryanAttributeValues(attributeSet, attributes);
-      requiredAttributeCodes = inspected.requiredCodes;
-      rejectedAttributeCodes = inspected.rejectedCodes;
     } catch (err) {
       if (Number(err?.httpStatus) === 404) {
         attributeSet = null;
@@ -256,6 +255,19 @@ export async function assembleElryanSyncOne({ productId, origin = "", investigat
         attributeSetUnverified = true;
       }
     }
+  }
+
+  const attributes = resolveElryanSavedAttributes({
+    environment: config.environment,
+    mappingAttributes: mappingAttributes(mappingValues, config.environment),
+    override,
+    attributeSet,
+    product: doc,
+  });
+  if (attributeSet && !attributeSetUnverified) {
+    const inspected = inspectElryanAttributeValues(attributeSet, attributes);
+    requiredAttributeCodes = inspected.requiredCodes;
+    rejectedAttributeCodes = inspected.rejectedCodes;
   }
 
   const images = collectElryanImageUrls(resolved);
@@ -300,12 +312,16 @@ export async function assembleElryanSyncOne({ productId, origin = "", investigat
     pricing,
     pricingApproval,
     images,
+    environment: config.environment,
     extraBlockers: [
       ...elryanDimensionBlockers(dimensions),
       ...imageBlockers,
-      config.environment === "staging" && String(mappingValues.categoryId || "").trim()
-        ? elryanVerifiedLeafBlocker(categoryLookup)
-        : elryanParentCategoryBlocker(categoryLookup?.category),
+      String(mappingValues.categoryId || "").trim()
+        ? elryanVerifiedLeafBlocker({
+            ...categoryLookup,
+            environment: config.environment === "production" ? "production" : "staging",
+          })
+        : null,
     ].filter(Boolean),
   });
 
@@ -851,7 +867,8 @@ export async function approveElryanStagingPrice({ productId, confirm } = {}) {
     throw inputError("Pricing approval requires confirm=true.", "confirm_required");
   }
   const assembled = await assembleElryanSyncOne({ productId, investigateCommission: true });
-  if (assembled.config.environment !== "staging") {
+  const environment = assembled.config.environment === "production" ? "production" : "staging";
+  if (assembled.config.environment !== environment) {
     throw inputError("Pricing approval is Staging only.", "staging_only");
   }
   const sku = String(assembled.resolved?.sku || "");
@@ -869,7 +886,7 @@ export async function approveElryanStagingPrice({ productId, confirm } = {}) {
   const approvedAt = new Date();
   const rate = Number(assembled.pricing?.commissionRate);
   const saved = await ElryanStagingPriceApproval.findOneAndUpdate(
-    { environment: "staging", productId: assembled.productKey },
+    { environment, productId: assembled.productKey },
     {
       $set: {
         sku,
@@ -887,7 +904,7 @@ export async function approveElryanStagingPrice({ productId, confirm } = {}) {
   ).lean();
   return {
     ok: true,
-    environment: "staging",
+    environment,
     productId: assembled.productKey,
     sku: saved.sku,
     price: saved.price,

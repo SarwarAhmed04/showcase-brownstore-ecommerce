@@ -246,7 +246,7 @@ async function loadWarrantyCatalog(config) {
         apiKey: config.apiKey,
         path: ELRYAN_PATHS.warranty,
         method: "GET",
-        query,
+        query: config.environment === "production" ? { ...(query || {}), fresh: true } : query,
         classification: "READ",
         retries: 0,
       });
@@ -340,6 +340,8 @@ function lookupWarranty(context, doc) {
   return resolveElryanWarrantyFromRows(context.warrantyRows, {
     environment: context.environment,
     explicitKey: explicitElryanProductWarrantyKey(doc),
+    productId: String(doc?._id || ""),
+    sku: String(doc?.overrides?.sku || doc?.itemCode || "").trim(),
     brandId: elryanBrandWarrantySubject(doc),
   }).mapping;
 }
@@ -378,7 +380,7 @@ export async function evaluateElryanProductForSync(doc, context, { origin = "", 
   const dimensions = resolveElryanDimensions({
     environment: context.environment,
     product: doc,
-    dimensionRow: context.environment === "staging" ? dimensionRow : null,
+    dimensionRow,
     collectionRule:
       context.environment === "staging" && !collectionIdentity.ambiguous
         ? context.collectionDimensions?.get(collectionIdentity.collectionId) || null
@@ -394,6 +396,7 @@ export async function evaluateElryanProductForSync(doc, context, { origin = "", 
   const images = collectElryanImageUrls(resolved);
   extraBlockers.push(...(await verifyElryanPublicImages(images)));
   const validation = validateElryanPreviewParts({
+    environment: context.environment,
     hasApiKey: Boolean(context.config?.hasApiKey),
     resolved,
     sku,

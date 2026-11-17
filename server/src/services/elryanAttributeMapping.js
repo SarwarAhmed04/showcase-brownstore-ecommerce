@@ -160,12 +160,20 @@ export async function findElryanWarrantyMapping(warrantyKey = "") {
   return ElryanValueMapping.findOne({ kind: "warranty", brownKey: key }).lean();
 }
 
-/** Product warranty key first, then this brand's environment-specific mapping. Never "default". */
+function productSku(doc) {
+  const override = String(doc?.overrides?.sku || "").trim();
+  if (override) return override;
+  return String(doc?.itemCode || "").trim();
+}
+
+/** Product warranty key, then this SKU or product id, then this brand. Never "default". */
 export async function resolveElryanWarrantyForProduct(doc, environment) {
   const rows = await ElryanValueMapping.find({ kind: "warranty" }).lean();
   return resolveElryanWarrantyFromRows(rows, {
     environment,
     explicitKey: explicitElryanProductWarrantyKey(doc),
+    productId: String(doc?._id || ""),
+    sku: productSku(doc),
     brandId: elryanBrandWarrantySubject(doc),
   });
 }

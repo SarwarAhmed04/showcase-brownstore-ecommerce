@@ -81,7 +81,22 @@ export async function loadAllElryanCollectionDimensionRules() {
  */
 export async function loadElryanDimensionInputs(environment, docs, rulesMap = null) {
   const rules = rulesMap instanceof Map ? rulesMap : new Map();
-  if (environment !== "staging" || !Array.isArray(docs) || !docs.length) {
+  if (!Array.isArray(docs) || !docs.length) {
+    return { checks: new Map(), exclusions: new Set(), rules };
+  }
+  if (environment === "production") {
+    const productIds = docs.map((doc) => String(doc._id));
+    const checks = await ElryanStagingDimensionCheck.find({
+      environment: "production",
+      productId: { $in: productIds },
+    }).lean();
+    return {
+      checks: new Map(checks.map((row) => [String(row.productId), row])),
+      exclusions: new Set(),
+      rules: new Map(),
+    };
+  }
+  if (environment !== "staging") {
     return { checks: new Map(), exclusions: new Set(), rules };
   }
   const productIds = docs.map((doc) => String(doc._id));

@@ -2,7 +2,6 @@ import { Product } from "../models/Product.js";
 import { PlatformTaxonomyConfig } from "../models/PlatformTaxonomyConfig.js";
 import { ElryanCategoryCatalogSnapshot } from "../models/ElryanCategoryCatalogSnapshot.js";
 import { discoverBrownCollections } from "../utils/brownTaxonomy.js";
-import { ELRYAN_CATALOG_SYNC } from "../utils/elryanConstants.js";
 import {
   elryanMappingDiff,
   elryanMappingIsComplete,
@@ -65,21 +64,16 @@ async function loadBrownCollection(brownCollectionId) {
 
 async function loadSnapshotForEnvironment(environment) {
   const env = normalizeElryanMappingEnvironment(environment);
-  // Phase 3 snapshot model is staging-only today.
-  if (env !== ELRYAN_CATALOG_SYNC.ENVIRONMENT) {
-    throw new ElryanClientError(
-      `No ${env} Elryan category catalog snapshot is available. Fetch a ${env} catalog before saving ${env} mappings. Staging category IDs cannot be reused in production.`,
-      { status: 409, code: "catalog_env_unavailable" }
-    );
-  }
   const snapshot = await ElryanCategoryCatalogSnapshot.findOne({ environment: env })
     .select("status coverage uniqueCount categories")
     .lean();
   const categories = Array.isArray(snapshot?.categories) ? snapshot.categories : [];
   if (!categories.length) {
     throw new ElryanClientError(
-      "No staging Elryan category catalog snapshot yet. Fetch the full catalog first.",
-      { status: 409, code: "catalog_snapshot_missing" }
+      env === "production"
+        ? "No production Elryan category catalog snapshot is available. Fetch a production catalog before saving production mappings. Staging category IDs cannot be reused in production."
+        : "No staging Elryan category catalog snapshot yet. Fetch the full catalog first.",
+      { status: 409, code: env === "production" ? "catalog_env_unavailable" : "catalog_snapshot_missing" }
     );
   }
   return { snapshot, categories, environment: env };

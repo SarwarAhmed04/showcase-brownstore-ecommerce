@@ -20,6 +20,7 @@ export function validateElryanPreviewParts({
   pricingApproval,
   images,
   extraBlockers = [],
+  environment = "staging",
 }) {
   const blockers = [];
   for (const extra of extraBlockers) {
@@ -107,9 +108,10 @@ export function validateElryanPreviewParts({
 
   if (pricingApproval && pricingApproval.valid !== true) {
     const reason = String(pricingApproval.reason || "missing");
+    const place = environment === "production" ? "Production" : "Staging";
     const approvalMessage = {
-      missing: "No Staging price approval is saved for this product.",
-      environment: "The saved price approval is not for Staging.",
+      missing: `No ${place} price approval is saved for this product.`,
+      environment: `The saved price approval is not for ${place}.`,
       product: "The saved price approval is for a different product.",
       sku: "The saved price approval does not match this SKU.",
       payload_mismatch: "The saved price approval does not match the current payload.",
@@ -183,20 +185,20 @@ export function elryanParentCategoryBlocker(category) {
  * this row was stored with isParent false in a complete Staging snapshot.
  * A missing row, unknown isParent, or incomplete snapshot is not treated as a leaf.
  */
-export function elryanVerifiedLeafBlocker({ category = null, snapshot = null } = {}) {
+export function elryanVerifiedLeafBlocker({ category = null, snapshot = null, environment = "staging" } = {}) {
+  const place = environment === "production" ? "Production" : "Staging";
   if (!snapshot || snapshot.status !== "complete" || snapshot.coverage !== "complete") {
     return {
       code: "category_not_leaf",
       status: ELRYAN_READINESS.MISSING_MAPPING,
-      message:
-        "The Staging category catalog snapshot is missing or incomplete, so the mapped category is not a verified leaf.",
+      message: `The ${place} category catalog snapshot is missing or incomplete, so the mapped category is not a verified leaf.`,
     };
   }
   if (!category) {
     return {
       code: "category_not_leaf",
       status: ELRYAN_READINESS.MISSING_MAPPING,
-      message: "The mapped Elryan category is not in the Staging catalog snapshot.",
+      message: `The mapped Elryan category is not in the ${place} catalog snapshot.`,
     };
   }
   if (category.isParent === true) {

@@ -665,6 +665,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  elryanApprovePrice: (productId) =>
+    request("/api/admin/platforms/elryan/staging-price-approvals", {
+      method: "POST",
+      body: JSON.stringify({ productId, confirm: true }),
+    }),
+  elryanProductWarranty: (body) =>
+    request("/api/admin/platforms/elryan/product-warranty-mapping", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   miswagConnection: () => request("/api/admin/platforms/miswag/connection"),
   saveMiswagConnection: (body) =>
     request("/api/admin/platforms/miswag/connection", {

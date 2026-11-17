@@ -40,11 +40,16 @@ function parseRetryAfterMs(headerValue, fallbackMs) {
   return fallbackMs;
 }
 
-function publicSnapshot(doc, job = null) {
+function catalogEnvironment(environment) {
+  return environment === "production" ? "production" : "staging";
+}
+
+function publicSnapshot(doc, job = null, environment = "") {
   const warnings = [...(doc?.warnings || [])];
   if (job?.warning) warnings.push(job.warning);
+  const env = catalogEnvironment(environment || job?.environment || doc?.environment);
   return {
-    environment: ELRYAN_CATALOG_SYNC.ENVIRONMENT,
+    environment: env,
     status: job?.status || doc?.status || "idle",
     uniqueCount: doc?.uniqueCount || 0,
     reportedTotal: doc?.reportedTotal ?? null,
@@ -62,35 +67,45 @@ function publicSnapshot(doc, job = null) {
       : Number(doc?.uniqueCount) || 0,
     running: Boolean(job && job.status === "running"),
     scope: {
-      environment: ELRYAN_CATALOG_SYNC.ENVIRONMENT,
-      baseUrl: elryanEnvironmentConfig(ELRYAN_CATALOG_SYNC.ENVIRONMENT).baseUrl,
+      environment: env,
+      baseUrl: elryanEnvironmentConfig(env).baseUrl,
       pageLimit: ELRYAN_CATALOG_SYNC.PAGE_LIMIT,
       maxPages: ELRYAN_CATALOG_SYNC.MAX_PAGES,
       maxRecords: ELRYAN_CATALOG_SYNC.MAX_RECORDS,
       concurrency: ELRYAN_CATALOG_SYNC.CONCURRENCY,
-      note: "Staging-only full category catalog read. Does not save mappings or write products.",
+      note:
+        env === "production"
+          ? "Production category catalog read. Does not save mappings or write products."
+          : "Staging category catalog read. Does not save mappings or write products.",
     },
   };
 }
 
+async function activeCatalogEnvironment() {
+  const config = await resolveElryanConfig();
+  return catalogEnvironment(config.environment);
+}
+
 /** Status/progress only — never load the full categories[] array (can be 1k+ rows). */
 export async function getElryanCategoryCatalogStatus() {
+  const environment = await activeCatalogEnvironment();
   const doc = await ElryanCategoryCatalogSnapshot.findOne({
-    environment: ELRYAN_CATALOG_SYNC.ENVIRONMENT,
+    environment,
   })
     .select(
       "environment status uniqueCount reportedTotal pagesFetched lastPage coverage warnings error startedAt finishedAt cancelRequested"
     )
     .lean();
-  const job = jobs.get(ELRYAN_CATALOG_SYNC.ENVIRONMENT);
-  return publicSnapshot(doc, job);
+  const job = jobs.get(environment);
+  return publicSnapshot(doc, job, environment);
 }
 
 export async function getElryanCategoryCatalog({ q = "", limit = 100, offset = 0 } = {}) {
+  const environment = await activeCatalogEnvironment();
   const doc = await ElryanCategoryCatalogSnapshot.findOne({
-    environment: ELRYAN_CATALOG_SYNC.ENVIRONMENT,
+    environment,
   }).lean();
-  const status = publicSnapshot(doc, jobs.get(ELRYAN_CATALOG_SYNC.ENVIRONMENT));
+  const status = publicSnapshot(doc, jobs.get(environment), environment);
   let categories = Array.isArray(doc?.categories) ? doc.categories : [];
   const needle = String(q || "").trim().toLowerCase();
   if (needle) {
@@ -111,12 +126,13 @@ export async function getElryanCategoryCatalog({ q = "", limit = 100, offset = 0
 }
 
 export async function cancelElryanCategoryCatalogSync() {
-  const job = jobs.get(ELRYAN_CATALOG_SYNC.ENVIRONMENT);
+  const environment = await activeCatalogEnvironment();
+  const job = jobs.get(environment);
   if (job && job.status === "running") {
     job.cancelRequested = true;
   }
   await ElryanCategoryCatalogSnapshot.findOneAndUpdate(
-    { environment: ELRYAN_CATALOG_SYNC.ENVIRONMENT },
+    { environment },
     { $set: { cancelRequested: true } },
     { upsert: true }
   );
@@ -157,14 +173,9 @@ async function runCatalogSync(job) {
   let lastPage = null;
   let error = "";
 
+  const environment = catalogEnvironment(job.environment);
   try {
-    const config = await resolveElryanConfig({ environment: ELRYAN_CATALOG_SYNC.ENVIRONMENT });
-    if (config.environment !== ELRYAN_CATALOG_SYNC.ENVIRONMENT) {
-      throw new ElryanClientError("Category catalog sync is staging-only for this phase", {
-        status: 403,
-        code: "staging_only",
-      });
-    }
+    const config = await resolveElryanConfig({ environment });
     if (!config.storedHasApiKey && !config.temporaryKey) {
       throw new ElryanClientError("Awaiting Elryan API Access", {
         status: 409,
@@ -173,7 +184,7 @@ async function runCatalogSync(job) {
     }
     // Prefer stored staging key; temporary keys are not used for bulk sync.
     if (!config.storedHasApiKey) {
-      throw new ElryanClientError("Save a staging API key before full catalog sync", {
+      throw new ElryanClientError("Save an API key for this environment before full catalog sync", {
         status: 409,
         code: "api_access_pending",
       });
@@ -307,10 +318,10 @@ async function runCatalogSync(job) {
 
     const categories = [...byId.values()].sort((a, b) => Number(a.id) - Number(b.id));
     await ElryanCategoryCatalogSnapshot.findOneAndUpdate(
-      { environment: ELRYAN_CATALOG_SYNC.ENVIRONMENT },
+      { environment },
       {
         $set: {
-          environment: ELRYAN_CATALOG_SYNC.ENVIRONMENT,
+          environment,
           status: job.status,
           categories,
           uniqueCount: categories.length,
@@ -331,7 +342,7 @@ async function runCatalogSync(job) {
     job.status = "failed";
     job.error = err?.message || "Catalog sync failed";
     await ElryanCategoryCatalogSnapshot.findOneAndUpdate(
-      { environment: ELRYAN_CATALOG_SYNC.ENVIRONMENT },
+      { environment },
       {
         $set: {
           status: "failed",
@@ -365,7 +376,9 @@ export async function startElryanCategoryCatalogSync({ confirm } = {}) {
       { status: 400, code: "confirm_required" }
     );
   }
-  const existing = jobs.get(ELRYAN_CATALOG_SYNC.ENVIRONMENT);
+  const config = await resolveElryanConfig();
+  const environment = catalogEnvironment(config.environment);
+  const existing = jobs.get(environment);
   if (existing?.status === "running") {
     throw new ElryanClientError("A category catalog sync is already running", {
       status: 409,
@@ -375,6 +388,7 @@ export async function startElryanCategoryCatalogSync({ confirm } = {}) {
 
   const startedAt = new Date();
   const job = {
+    environment,
     status: "running",
     cancelRequested: false,
     pagesFetched: 0,
@@ -382,12 +396,13 @@ export async function startElryanCategoryCatalogSync({ confirm } = {}) {
     startedAt,
     error: "",
   };
-  jobs.set(ELRYAN_CATALOG_SYNC.ENVIRONMENT, job);
+  jobs.set(environment, job);
 
   await ElryanCategoryCatalogSnapshot.findOneAndUpdate(
-    { environment: ELRYAN_CATALOG_SYNC.ENVIRONMENT },
+    { environment },
     {
       $set: {
+        environment,
         status: "running",
         startedAt,
         finishedAt: null,
