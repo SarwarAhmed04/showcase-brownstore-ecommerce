@@ -523,6 +523,33 @@ describe("Elryan connection state and catalog reads", { concurrency: 1 }, () => 
     assert.equal(decryptApiKey(again.productionApiKeyEnc), API_KEY_PROD);
   });
 
+  it("forwards an explicit fresh warranty read with the saved Production key", async () => {
+    await call("PUT", "/api/admin/platforms/elryan/connection", {
+      body: { environment: "production", apiKey: API_KEY_PROD },
+    });
+    const calls = [];
+    setElryanFetch(async (url, options) => {
+      const request = new URL(url);
+      assert.equal(request.origin, "https://marketplace-api.elryan.com");
+      assert.equal(request.pathname, "/api/v1/warranty");
+      assert.equal(options.method, "GET");
+      assert.equal(options.headers["x-api-key"], API_KEY_PROD);
+      const fresh = request.searchParams.get("fresh");
+      calls.push(fresh);
+      return mockResponse(200, { data: fresh ? [{ code: "verified-warranty" }] : [] });
+    });
+
+    const path = "/api/admin/platforms/elryan/warranties";
+    const normal = await call("GET", path);
+    const refreshed = await call("GET", `${path}?fresh=true`);
+    assert.equal(normal.status, 200);
+    assert.deepEqual(normal.json.warranties, []);
+    assert.equal(refreshed.status, 200);
+    assert.deepEqual(refreshed.json.warranties, [{ code: "verified-warranty" }]);
+    assert.equal(refreshed.raw.includes(API_KEY_PROD), false);
+    assert.deepEqual(calls, [null, "true"]);
+  });
+
   it("7. product write gates remain disabled", async () => {
     assert.equal(elryanProductWritesEnabled(), false);
     mockElryanRouter();

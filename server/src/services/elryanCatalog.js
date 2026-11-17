@@ -238,8 +238,10 @@ export async function elryanCalculateCommission(query = {}) {
 }
 
 /** READ — GET /v1/warranty, following pagination when the response reports a total. */
-export async function elryanListWarranties() {
-  const collected = await collectElryanWarrantyRows((query) => read(ELRYAN_PATHS.warranty, query));
+export async function elryanListWarranties({ fresh = false } = {}) {
+  const collected = await collectElryanWarrantyRows((query) =>
+    read(ELRYAN_PATHS.warranty, fresh ? { ...query, fresh: true } : query)
+  );
   return {
     classification: "READ",
     httpStatus: collected.httpStatus,

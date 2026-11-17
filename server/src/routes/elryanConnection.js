@@ -394,9 +394,10 @@ elryanConnectionRouter.get("/platforms/elryan/commissions/calculate", async (req
   }
 });
 
-elryanConnectionRouter.get("/platforms/elryan/warranties", async (_req, res) => {
+elryanConnectionRouter.get("/platforms/elryan/warranties", async (req, res) => {
   try {
-    res.json(assertNoElryanSecretLeak(await elryanListWarranties(), ""));
+    const warranties = await elryanListWarranties({ fresh: req.query.fresh === "true" });
+    res.json(assertNoElryanSecretLeak(warranties, ""));
   } catch (err) {
     fail(res, err, "Failed to list Elryan warranties");
   }
