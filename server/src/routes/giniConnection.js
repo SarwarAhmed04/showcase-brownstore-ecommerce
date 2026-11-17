@@ -204,9 +204,9 @@ giniConnectionRouter.post("/platforms/gini/sync-all/reconcile", async (req, res)
   }
 });
 
-giniConnectionRouter.get("/platforms/gini/sync-all/unified", async (_req, res) => {
+giniConnectionRouter.get("/platforms/gini/sync-all/unified", async (req, res) => {
   try {
-    res.json(assertNoSecretLeak(await getGiniUnifiedSyncStatus(), ""));
+    res.json(assertNoSecretLeak(await getGiniUnifiedSyncStatus(undefined, { page: Number(req.query.page) }), ""));
   } catch (err) {
     fail(res, err, "Failed to load the GINI new and changed sync");
   }

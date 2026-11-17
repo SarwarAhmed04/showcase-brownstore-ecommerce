@@ -684,3 +684,57 @@ test("a selected job sends one simple create, one variant create, one simple upd
   void extra;
   void skuSix;
 });
+
+test("preview pages of 10 keep the full counts, and ids chosen on two pages are the only ones sent", async () => {
+  const products = [];
+  for (let index = 1; index <= 11; index += 1) {
+    products.push(await makeProduct(`PAGE-${String(index).padStart(2, "0")}`, simpleVariant()));
+  }
+  const started = await previewGiniUnifiedSync(deps());
+  const deadline = Date.now() + 30000;
+  let current = started;
+  while (current.job?.status === "scanning") {
+    if (Date.now() > deadline) throw new Error("preview scan timed out");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    current = await getGiniUnifiedSyncStatus();
+  }
+  assert.equal(current.job.status, "preview");
+  assert.equal(current.job.rows.length, 11);
+  assert.equal(current.job.create, 11);
+
+  const page1 = await getGiniUnifiedSyncStatus(deps(), { page: 1 });
+  const page2 = await getGiniUnifiedSyncStatus(deps(), { page: 2 });
+  assert.equal(page1.job.page, 1);
+  assert.equal(page1.job.pageSize, 10);
+  assert.equal(page1.job.rowCount, 11);
+  assert.equal(page1.job.rows.length, 10);
+  assert.equal(page1.job.create, 11);
+  assert.equal(page1.job.update, 0);
+  assert.equal(page1.job.unchanged, 0);
+  assert.equal(page1.job.blocked, 0);
+  assert.deepEqual(page1.job.rows.map((row) => row.sku), [
+    "PAGE-01", "PAGE-02", "PAGE-03", "PAGE-04", "PAGE-05", "PAGE-06", "PAGE-07", "PAGE-08", "PAGE-09", "PAGE-10",
+  ]);
+  assert.equal(page2.job.rows.length, 1);
+  assert.equal(page2.job.rows[0].sku, "PAGE-11");
+  assert.equal(page2.job.create, 11);
+  assert.equal(page2.job.rowCount, 11);
+
+  const selected = [page1.job.rows.find((row) => row.sku === "PAGE-10").productId, page2.job.rows[0].productId];
+  const previewCalls = calls.length;
+  const finished = await startGiniUnifiedSync({ confirm: true, previewJobId: page1.job.id, productIds: selected }, deps());
+  assert.deepEqual(finished.job.selectedProductIds, selected);
+  assert.equal(finished.productionWritesEnabled, false);
+  const posts = calls.slice(previewCalls).filter((call) => call.method === "POST");
+  assert.equal(posts.length, 2);
+  const skus = [];
+  for (const call of posts) skus.push(textFields(await formEntries(call.form)).sku);
+  assert.deepEqual(skus.sort(), ["PAGE-10", "PAGE-11"]);
+  const others = ["PAGE-01", "PAGE-02", "PAGE-03", "PAGE-04", "PAGE-05", "PAGE-06", "PAGE-07", "PAGE-08", "PAGE-09"];
+  for (const call of calls.slice(previewCalls)) {
+    if (call.method === "GET") continue;
+    const formSku = textFields(await formEntries(call.form)).sku || "";
+    assert.equal(others.some((sku) => formSku === sku || mentionsSku(call, sku)), false);
+  }
+  void products;
+});

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../../api";
 import { canReplaceGiniImage, confirmedCreateCount, giniImageSelectionRequired, reconciliationWarnings, selectGiniSyncDisplay, sendCounter } from "./giniSyncAllDisplay.js";
 
@@ -7,6 +7,8 @@ const CONTROL =
 const BUTTON = "rounded-full bg-brown px-4 py-2.5 text-sm font-semibold text-cream disabled:opacity-50";
 const GHOST =
   "rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-brown ring-1 ring-brown/10 disabled:opacity-50";
+
+const UNIFIED_PAGE_SIZE = 10;
 
 const STATE_KEYS = {
   preview_running: "giniSyncStatePreviewRunning",
@@ -202,6 +204,8 @@ export default function GiniSyncAll({ t }) {
   const [changedPreview, setChangedPreview] = useState(null);
   const [unified, setUnified] = useState(null);
   const [unifiedSelected, setUnifiedSelected] = useState(() => new Set());
+  const [unifiedPage, setUnifiedPageState] = useState(1);
+  const unifiedPageRef = useRef(1);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -211,6 +215,21 @@ export default function GiniSyncAll({ t }) {
   const [replacementImageUrl, setReplacementImageUrl] = useState("");
   const previewId = changedPreview?.previewId || "";
   const unifiedPreviewId = unified?.job?.mode === "preview" && unified?.job?.status === "preview" ? unified.job.id : "";
+  const unifiedJobId = unified?.job?.id || "";
+  const unifiedRows = unified?.job?.rows || [];
+  const unifiedRowCount = Number(unified?.job?.rowCount ?? unifiedRows.length);
+  const unifiedServerPaged = Number(unified?.job?.pageSize) === UNIFIED_PAGE_SIZE;
+  const unifiedVisibleRows = unifiedServerPaged
+    ? unifiedRows
+    : unifiedRows.slice((unifiedPage - 1) * UNIFIED_PAGE_SIZE, unifiedPage * UNIFIED_PAGE_SIZE);
+  const unifiedPageCount = Math.max(1, Math.ceil(unifiedRowCount / UNIFIED_PAGE_SIZE) || 1);
+  const unifiedShownPage = unifiedServerPaged ? (Number(unified?.job?.page) || unifiedPage) : unifiedPage;
+  const unifiedRangeStart = unifiedRowCount ? (Math.min(unifiedShownPage, unifiedPageCount) - 1) * UNIFIED_PAGE_SIZE + 1 : 0;
+  const unifiedRangeEnd = unifiedRowCount ? Math.min(unifiedShownPage * UNIFIED_PAGE_SIZE, unifiedRowCount) : 0;
+  const unifiedRangeLabel = String(t.giniUnifiedPageRange || "{start}–{end} of {total}")
+    .replace("{start}", count(unifiedRangeStart))
+    .replace("{end}", count(unifiedRangeEnd))
+    .replace("{total}", count(unifiedRowCount));
 
   useEffect(() => {
     setSelectedSku("");
@@ -220,13 +239,41 @@ export default function GiniSyncAll({ t }) {
 
   useEffect(() => {
     setUnifiedSelected(new Set());
-  }, [unifiedPreviewId]);
+    unifiedPageRef.current = 1;
+    setUnifiedPageState(1);
+  }, [unifiedJobId]);
+
+  function setUnifiedPage(page) {
+    const next = Math.max(1, Number(page) || 1);
+    unifiedPageRef.current = next;
+    setUnifiedPageState(next);
+  }
 
   async function refresh() {
     const data = await api.giniSyncAllStatus();
     setStatus(data);
-    api.giniUnifiedSyncStatus().then(setUnified).catch(() => {});
+    const page = unifiedPageRef.current;
+    api.giniUnifiedSyncStatus({ page }).then((payload) => {
+      if (unifiedPageRef.current !== page) return;
+      setUnified(payload);
+    }).catch(() => {});
     return data;
+  }
+
+  async function showUnifiedPage(next) {
+    const page = Math.min(Math.max(1, next), unifiedPageCount);
+    setUnifiedPage(page);
+    setBusy("unified-page");
+    setError("");
+    try {
+      const payload = await api.giniUnifiedSyncStatus({ page });
+      if (unifiedPageRef.current !== page) return;
+      setUnified(payload);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy("");
+    }
   }
 
   useEffect(() => {
@@ -377,7 +424,10 @@ export default function GiniSyncAll({ t }) {
               className={BUTTON}
               disabled={busy !== ""}
               data-gini-unified-preview-button="true"
-              onClick={() => run(() => api.giniUnifiedSyncPreview(), "unified-preview")}
+              onClick={() => {
+                setUnifiedPage(1);
+                run(() => api.giniUnifiedSyncPreview(), "unified-preview");
+              }}
             >
               {busy === "unified-preview" ? t.loading : t.giniUnifiedPreview}
             </button>
@@ -395,9 +445,9 @@ export default function GiniSyncAll({ t }) {
               {busy === "unified-start" ? t.loading : t.giniUnifiedStart}
             </button>
           </div>
-          {(unified?.job?.rows || []).length ? (
+          {unifiedVisibleRows.length ? (
             <ul className="mt-4 space-y-2 text-sm text-brown/70">
-              {unified.job.rows.map((row) => {
+              {unifiedVisibleRows.map((row) => {
                 const selectable = Boolean(unifiedPreviewId) && (row.action === "CREATE" || row.action === "UPDATE") && Boolean(row.productId);
                 return (
                   <li key={row.productId || row.sku} data-gini-unified-row={row.sku} data-gini-unified-action={row.action} data-gini-unified-flow={row.flow || ""} data-gini-unified-stage={row.stage || ""} data-gini-unified-product={row.productId || ""}>
@@ -428,6 +478,33 @@ export default function GiniSyncAll({ t }) {
                 );
               })}
             </ul>
+          ) : null}
+          {unifiedRowCount > 0 ? (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-brown" data-gini-unified-range={unifiedRangeLabel} data-gini-unified-row-count={unifiedRowCount} data-gini-unified-page={unifiedShownPage}>
+                {unifiedRangeLabel}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className={GHOST}
+                  data-gini-unified-prev="true"
+                  disabled={busy !== "" || unifiedPage <= 1}
+                  onClick={() => showUnifiedPage(unifiedPage - 1)}
+                >
+                  {t.giniUnifiedPrevious}
+                </button>
+                <button
+                  type="button"
+                  className={GHOST}
+                  data-gini-unified-next="true"
+                  disabled={busy !== "" || unifiedPage >= unifiedPageCount}
+                  onClick={() => showUnifiedPage(unifiedPage + 1)}
+                >
+                  {t.giniUnifiedNext}
+                </button>
+              </div>
+            </div>
           ) : null}
         </div>
         <p className="mt-3 text-xs text-brown/45" dir="ltr">

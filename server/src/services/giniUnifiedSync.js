@@ -425,7 +425,9 @@ async function scanPreview(jobId, deps, generation) {
   }
 }
 
-export async function getGiniUnifiedSyncStatus(deps) {
+const UNIFIED_PAGE_SIZE = 10;
+
+export async function getGiniUnifiedSyncStatus(deps, query = {}) {
   const scanning = await GiniUnifiedSyncJob.findOne({ partner: "gini", mode: "preview", status: "scanning" }).sort({ createdAt: -1 });
   if (scanning) launchPreview(scanning._id, deps);
   const selected = scanning || await GiniUnifiedSyncJob.findOne({ partner: "gini" }).sort({ createdAt: -1 });
@@ -433,9 +435,19 @@ export async function getGiniUnifiedSyncStatus(deps) {
     return { job: null, writesEnabled: giniUnifiedSyncWritesEnabled(), productionWritesEnabled: false, limitations: GINI_UNIFIED_LIMITATIONS };
   }
   const job = await GiniUnifiedSyncJob.findById(selected._id);
-  const items = await GiniUnifiedSyncItem.find({ jobId: job._id }).sort({ sku: 1 }).lean();
+  const requested = Number(query.page);
+  const paged = Number.isInteger(requested) && requested >= 1;
+  const rowCount = await GiniUnifiedSyncItem.countDocuments({ jobId: job._id });
+  const itemQuery = GiniUnifiedSyncItem.find({ jobId: job._id }).sort({ sku: 1, productId: 1 });
+  const items = paged
+    ? await itemQuery.skip((requested - 1) * UNIFIED_PAGE_SIZE).limit(UNIFIED_PAGE_SIZE).lean()
+    : await itemQuery.lean();
+  const visible = publicJob(job, items);
+  visible.rowCount = rowCount;
+  visible.page = paged ? requested : 1;
+  visible.pageSize = paged ? UNIFIED_PAGE_SIZE : rowCount;
   return {
-    job: publicJob(job, items),
+    job: visible,
     dryRun: job.mode !== "sync",
     sentToGini: job.mode === "preview" ? 0 : Number(job.created || 0) + Number(job.updated || 0),
     writesEnabled: giniUnifiedSyncWritesEnabled(),

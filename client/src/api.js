@@ -379,7 +379,8 @@ export const api = {
       }),
     }),
   giniSyncAllStatus: () => request("/api/admin/platforms/gini/sync-all"),
-  giniUnifiedSyncStatus: () => request("/api/admin/platforms/gini/sync-all/unified"),
+  giniUnifiedSyncStatus: ({ page = 1 } = {}) =>
+    request(`/api/admin/platforms/gini/sync-all/unified?page=${encodeURIComponent(page)}`),
   giniUnifiedSyncPreview: () =>
     request("/api/admin/platforms/gini/sync-all/unified/preview", {
       method: "POST",

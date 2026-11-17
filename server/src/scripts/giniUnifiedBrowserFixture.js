@@ -250,6 +250,9 @@ const createdVariant = await makeProduct("NEW-VAR", colors("NEW-VAR"), 1000);
 const updatedVariant = await makeProduct("UPD-VAR", colors("UPD-VAR"), 1000);
 await makeProduct("UPD-SIMPLE", simpleVariant(), 6500);
 await makeProduct("NEW-EXTRA", simpleVariant(), 6500);
+for (let index = 1; index <= 5; index += 1) {
+  await makeProduct(`LIST-${String(index).padStart(2, "0")}`, simpleVariant(), 6500);
+}
 await makeProduct("BLOCKED-SIZE", [{
   _id: new mongoose.Types.ObjectId(),
   color: { en: "White", ar: "أبيض", ku: "سپی" },
