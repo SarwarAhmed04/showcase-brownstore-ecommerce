@@ -516,6 +516,7 @@ export const translations = {
     giniUnifiedLocalOn: "نووسینی ناوخۆیی کراوەیە بۆ ئەم پرۆسەیە. بەرهەمهێنان هەر داخراوە.",
     giniUnifiedScanned: "پشکنراو",
     giniUnifiedScanning: "پشکنینی کاتالۆگ بەردەوامە. ئەم پەڕەیە دەتوانرێت نوێ بکرێتەوە.",
+    giniUnifiedSelected: "هەڵبژێردراو",
     giniSyncAllHint:
       "پێشبینین هەموو کاتالۆگی نەخشەکراو دەخوێنێتەوە. بەرهەمی نوێ یەک جار دروست دەکرێت، نرخ و کۆگا دەگۆڕدرێن، و بەرهەمی نەگۆڕاو دەپەڕێت. هیچ شتێک نانێردرێت تا پشتڕاستی بکەیتەوە.",
     giniSyncAllWritesOff:
@@ -1910,6 +1911,7 @@ export const translations = {
     giniUnifiedLocalOn: "Local sync writes are on for this process. Production stays off.",
     giniUnifiedScanned: "Scanned",
     giniUnifiedScanning: "Catalog scan is still running. This page can be refreshed.",
+    giniUnifiedSelected: "Selected",
     giniSyncAllHint:
       "Preview reads the whole mapped catalog. New products are created once, supported price and stock changes are updated, and unchanged products are skipped. Nothing is sent until you confirm, and the server write gates stay independent.",
     giniSyncAllWritesOff:
@@ -3307,6 +3309,7 @@ export const translations = {
     giniUnifiedLocalOn: "كتابة المزامنة المحلية مفتوحة لهذه العملية. الإنتاج يبقى متوقفًا.",
     giniUnifiedScanned: "تم فحصه",
     giniUnifiedScanning: "فحص الكتالوج مستمر. يمكن تحديث هذه الصفحة.",
+    giniUnifiedSelected: "المحدد",
     giniSyncAllHint:
       "المعاينة تقرأ كل الكتالوج المرتبط. المنتج الجديد يُنشأ مرة واحدة، ويتحدّث السعر والمخزون المدعومان، ويتخطى المنتج غير المتغير. لا يُرسل شيء حتى تؤكد.",
     giniSyncAllWritesOff:

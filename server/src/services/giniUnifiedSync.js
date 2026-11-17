@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { Commission } from "../models/Commission.js";
 import { GiniSyncSendState } from "../models/GiniSyncSendState.js";
 import { GiniUnifiedSyncItem } from "../models/GiniUnifiedSyncItem.js";
@@ -10,7 +11,8 @@ import { partnerPricePreview } from "../utils/partnerCatalog.js";
 import { evaluatePlatformEligibility, productScopeIds } from "../utils/platformEligibility.js";
 import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platformTaxonomy.js";
 import { toResolvedProduct } from "../utils/productView.js";
-import { blockerMessage, buildGiniPlanFromParts, giniPayloadHash, mappingFromTree } from "../utils/giniSyncEvaluate.js";
+import { blockerMessage, buildGiniPlanFromParts, giniPayloadHash, isUnresolvedHistoricalGiniSku, mappingFromTree } from "../utils/giniSyncEvaluate.js";
+import { isGiniHistoricalHoldSku } from "../utils/giniHistoricalHold.js";
 import { GINI_PRODUCTS_PATH, giniCatalogText, giniSkuKey, normalizeGiniItemCode } from "../utils/giniSyncOnePlan.js";
 import { loadProtectedVariantSkuKeys } from "../utils/giniVariantGuard.js";
 import { classifyVariantProduct } from "../utils/giniVariantCatalog.js";
@@ -24,10 +26,12 @@ import {
   selectSellableFlow,
 } from "../utils/giniUnifiedSyncPlan.js";
 import { performGiniJsonRequest, performGiniRequest, fetchGiniCategoryTree } from "./giniConnection.js";
+import { findExistingGiniProduct } from "./giniSkuLookup.js";
 import { buildGiniCreateForm, downloadGiniProductImage } from "./giniSyncOne.js";
 import { runPreparedVariantStageA, runPreparedVariantStageB } from "./giniVariantSync.js";
 
 const DONE = new Set(["verified", "unchanged", "blocked", "failed"]);
+const RECONCILIATION_SKU_KEYS = new Set(["6", "10"]);
 let activeJobId = "";
 let previewRunner = "";
 let previewDeps = null;
@@ -60,31 +64,6 @@ function visibilityOf(value) {
   return "unverified";
 }
 
-function readParent(response, expectedSku) {
-  if (!response || response.error) return { state: "uncertain", status: Number(response?.status) || 0, variants: null };
-  if (response.status === 404) return { state: "absent", status: 404, variants: null };
-  if (response.status !== 200) return { state: "uncertain", status: Number(response.status) || 0, variants: null };
-  const data = response.json?.data;
-  if (!data || typeof data !== "object" || Array.isArray(data) || !data.sku) {
-    return { state: "uncertain", status: 200, variants: null };
-  }
-  if (giniSkuKey(data.sku) !== giniSkuKey(expectedSku)) {
-    return { state: "uncertain", status: 200, sku: String(data.sku), variants: null };
-  }
-  const price = Number(data.price);
-  const quantity = Number(data.quantity);
-  return {
-    state: "present",
-    status: 200,
-    id: data.id == null ? "" : String(data.id),
-    sku: String(data.sku),
-    price: Number.isFinite(price) ? price : null,
-    quantity: Number.isFinite(quantity) ? quantity : null,
-    visibility: visibilityOf(data.is_visible ?? data.isVisible),
-    variants: null,
-  };
-}
-
 function readVariantRows(response) {
   if (!response || response.error || response.status !== 200) return null;
   const body = response.json;
@@ -99,21 +78,52 @@ function readVariantRows(response) {
   }));
 }
 
+function presentFromLookup(found) {
+  return {
+    state: "present",
+    status: 200,
+    id: String(found.giniProductId || ""),
+    sku: String(found.sku || ""),
+    price: Number.isFinite(Number(found.price)) ? Number(found.price) : null,
+    quantity: Number.isFinite(Number(found.quantity)) ? Number(found.quantity) : null,
+    visibility: visibilityOf(found.isVisible),
+    variants: null,
+  };
+}
+
+/**
+ * Absence comes only from findExistingGiniProduct.
+ * A direct 404 is not enough: that lookup still searches, and an exact search match is present.
+ */
 async function readRemote(perform, sku, withVariants) {
-  let parent;
+  let found;
   try {
-    parent = readParent(await perform({ method: "GET", path: parentPath(sku) }), sku);
+    found = await findExistingGiniProduct(sku, perform);
   } catch {
     return { state: "uncertain", status: 0, variants: null };
   }
-  if (!withVariants || parent.state !== "present") return parent;
+  if (!found || found.error || (found.exists !== true && found.exists !== false)) {
+    return { state: "uncertain", status: Number(found?.status) || 0, variants: null };
+  }
+  if (found.exists === false) return { state: "absent", status: 404, variants: null };
+  if (!found.giniProductId || giniSkuKey(found.sku) !== giniSkuKey(sku)) {
+    return { state: "uncertain", status: 200, variants: null };
+  }
+  const parent = presentFromLookup(found);
+  if (!withVariants) return parent;
   try {
     const variants = readVariantRows(await perform({ method: "GET", path: `${parentPath(sku)}/variants` }));
     if (!variants) return { ...parent, state: "uncertain", variants: null };
     return { ...parent, variants };
   } catch {
-    return { ...parent, state: "uncertain", variants: null };
+    return { ...parent, variants: null };
   }
+}
+
+function preservedHold(sku) {
+  if (isGiniHistoricalHoldSku(sku)) return "historical_sku_hold";
+  if (isUnresolvedHistoricalGiniSku(sku) || RECONCILIATION_SKU_KEYS.has(giniSkuKey(sku))) return "historical_sku_unresolved";
+  return "";
 }
 
 function operationFor(item) {
@@ -193,6 +203,8 @@ function assessOne(doc, context, remote) {
       remoteParent: null,
     });
     const blockers = [...classified.blockers, ...eligibilityBlockers(resolved, eligibility)];
+    const held = preservedHold(doc?.itemCode);
+    if (held) blockers.push(held);
     return planUnifiedProduct({
       doc,
       flow: "variant",
@@ -217,6 +229,8 @@ function assessOne(doc, context, remote) {
   const blockers = (plan.blockers || []).filter((code) => code !== "existing_gini_product");
   if (selected.flow !== "simple") blockers.push(...selected.reasons);
   blockers.push(...eligibilityBlockers(resolved, eligibility));
+  const held = preservedHold(doc?.itemCode);
+  if (held) blockers.push(held);
   return {
     ...planUnifiedProduct({
       doc,
@@ -274,6 +288,7 @@ function publicJob(job, items = []) {
     failed: job.failed,
     lastError: job.lastError || "",
     errorCode: job.errorCode || "",
+    selectedProductIds: job.selectedProductIds || [],
     blockedRows: items.filter((row) => row.action === "BLOCKED").slice(0, 20).map((row) => ({
       sku: row.sku,
       productId: row.productId,
@@ -547,7 +562,22 @@ function hiddenCreatePayload(payload) {
   return { ...(payload || {}), is_visible: 0 };
 }
 
+function blockHeld(item) {
+  const held = preservedHold(item.sku);
+  if (!held) return false;
+  item.stage = "blocked";
+  item.action = "BLOCKED";
+  item.reasons = [held];
+  item.messages = [blockerMessage(held)];
+  item.retryable = false;
+  return true;
+}
+
 async function runSimpleCreate(item, plan, perform) {
+  if (blockHeld(item)) {
+    await item.save();
+    return item;
+  }
   if (item.stage === "write_uncertain" || item.stage === "write_in_progress") {
     const remote = await readRemote(perform, item.sku, false);
     if (remote.state === "uncertain") return item;
@@ -708,7 +738,24 @@ function rowName(field) {
 }
 
 async function runVariantCreate(item, doc, plan, perform, env) {
+  if (blockHeld(item)) {
+    await item.save();
+    return item;
+  }
   const operation = operationFor(item);
+  if (!["parent_uncertain", "parent_in_progress", "variants_uncertain", "variants_in_progress", "parent_verified", "variants_verified"].includes(item.stage)) {
+    const remote = await readRemote(perform, item.sku, false);
+    if (remote.state !== "absent") {
+      item.stage = remote.state === "present" ? "blocked" : "lookup_uncertain";
+      item.retryable = remote.state !== "present";
+      item.reasons = remote.state === "present" ? ["existing_gini_product"] : ["lookup_uncertain"];
+      item.messages = item.reasons.map(blockerMessage);
+      if (remote.state === "present") item.action = "BLOCKED";
+      if (remote.id) item.giniProductId = remote.id;
+      await item.save();
+      return item;
+    }
+  }
   if (["parent_uncertain", "parent_in_progress", "variants_uncertain", "variants_in_progress"].includes(item.stage)) {
     const remote = await readRemote(perform, item.sku, true);
     if (remote.state === "uncertain") return item;
@@ -906,9 +953,12 @@ async function runJob(jobId, deps) {
   const perform = Object.assign(deps.perform || livePerform, { loadImages: deps.loadImages });
   const context = await loadContext(deps);
   context.colorContract = deps.colorContract || await colorContract(perform, deps);
+  const savedJob = await GiniUnifiedSyncJob.findById(jobId).select("selectedProductIds").lean();
+  const selected = new Set((savedJob?.selectedProductIds || []).map(String));
   const items = await GiniUnifiedSyncItem.find({ jobId }).sort({ productId: 1 });
   for (const item of items) {
     if (!(await stillRunning(jobId))) return;
+    if (selected.size && !selected.has(String(item.productId))) continue;
     if (DONE.has(item.stage)) continue;
     const doc = context.products.find((row) => String(row._id) === item.productId) || await Product.findById(item.productId).lean();
     if (!doc) {
@@ -969,25 +1019,58 @@ async function runJob(jobId, deps) {
   }
 }
 
-async function openSync(previewJobId, deps) {
+function selectionOf(productIds) {
+  if (productIds == null) return null;
+  if (!Array.isArray(productIds) || productIds.length === 0) {
+    throw new GiniUnifiedSyncError("Choose the products to send.", { status: 400, code: "selection_required" });
+  }
+  const ids = [];
+  for (const value of productIds) {
+    const id = String(value || "").trim();
+    if (!mongoose.isValidObjectId(id)) {
+      throw new GiniUnifiedSyncError("A selected product id is not valid.", { status: 400, code: "selection_invalid" });
+    }
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+async function openSync(previewJobId, deps, productIds) {
   if (!giniUnifiedSyncWritesEnabled(deps.env || process.env)) {
     throw new GiniUnifiedSyncError("GINI unified sync writes are disabled. Production writes stay off.", { code: "unified_writes_disabled" });
   }
   if (activeJobId) throw new GiniUnifiedSyncError("A GINI sync job is already running.", { code: "job_running" });
+  const selected = selectionOf(productIds);
   const preview = await GiniUnifiedSyncJob.findById(previewJobId);
   if (!preview || preview.mode !== "preview" || preview.status !== "preview") {
     throw new GiniUnifiedSyncError("Finish the Sync New & Changed preview first.", { code: "preview_required" });
   }
-  const source = await GiniUnifiedSyncItem.find({ jobId: preview._id }).lean();
+  let source = await GiniUnifiedSyncItem.find({ jobId: preview._id }).lean();
+  if (selected) {
+    const byId = new Map(source.map((row) => [String(row.productId), row]));
+    source = selected.map((id) => {
+      const row = byId.get(id);
+      if (!row) throw new GiniUnifiedSyncError("A selected product is not on this preview.", { status: 400, code: "selection_not_in_preview" });
+      if (row.action !== "CREATE" && row.action !== "UPDATE") {
+        throw new GiniUnifiedSyncError("A selected product is not a create or an update on this preview.", { status: 400, code: "selection_not_sendable" });
+      }
+      if (preservedHold(row.sku)) {
+        throw new GiniUnifiedSyncError("A historical SKU cannot be selected.", { status: 400, code: "selection_not_sendable" });
+      }
+      return row;
+    });
+  }
+  const counts = countsOf(source);
   const job = await GiniUnifiedSyncJob.create({
     partner: "gini",
     status: "running",
     mode: "sync",
     previewJobId: String(preview._id),
-    create: preview.create,
-    update: preview.update,
-    unchanged: preview.unchanged,
-    blocked: preview.blocked,
+    selectedProductIds: selected || [],
+    create: counts.create,
+    update: counts.update,
+    unchanged: counts.unchanged,
+    blocked: counts.blocked,
     writesEnabled: true,
     productionWritesEnabled: false,
     limitations: [...GINI_UNIFIED_LIMITATIONS],
@@ -1016,11 +1099,12 @@ async function openSync(previewJobId, deps) {
   return job;
 }
 
-export async function startGiniUnifiedSync({ confirm = false, previewJobId } = {}, deps = {}) {
+export async function startGiniUnifiedSync({ confirm = false, previewJobId, productIds } = {}, deps = {}) {
   if (confirm !== true) throw new GiniUnifiedSyncError("Confirm the sync after the preview.", { status: 400, code: "confirm_required" });
-  const job = await openSync(previewJobId, deps);
+  const job = await openSync(previewJobId, deps, productIds);
   activeJobId = String(job._id);
   try {
+    if (deps.beforeRun) await deps.beforeRun(job);
     await runJob(job._id, deps);
   } finally {
     if (activeJobId === String(job._id)) activeJobId = "";

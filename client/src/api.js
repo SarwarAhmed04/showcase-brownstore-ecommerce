@@ -385,10 +385,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({}),
     }),
-  giniUnifiedSyncStart: (previewJobId) =>
+  giniUnifiedSyncStart: (previewJobId, productIds) =>
     request("/api/admin/platforms/gini/sync-all/unified/start", {
       method: "POST",
-      body: JSON.stringify({ confirm: true, previewJobId }),
+      body: JSON.stringify({
+        confirm: true,
+        previewJobId,
+        ...(Array.isArray(productIds) ? { productIds } : {}),
+      }),
     }),
   giniSyncAllPreview: () =>
     request("/api/admin/platforms/gini/sync-all/preview", {

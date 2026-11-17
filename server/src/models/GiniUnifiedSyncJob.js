@@ -11,6 +11,7 @@ const giniUnifiedSyncJobSchema = new mongoose.Schema(
     },
     mode: { type: String, enum: ["preview", "sync"], default: "preview" },
     previewJobId: { type: String, default: "" },
+    selectedProductIds: { type: [String], default: () => [] },
     cursorProductId: { type: String, default: "" },
     scanned: { type: Number, default: 0 },
     total: { type: Number, default: 0 },

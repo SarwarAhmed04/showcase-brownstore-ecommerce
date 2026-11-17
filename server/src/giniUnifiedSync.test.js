@@ -34,6 +34,8 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 let memory;
 let calls;
 let remote;
+let searchOnly;
+let incompleteSearch;
 
 function imageFile() {
   return { blob: new Blob([PNG], { type: "image/png" }), filename: "color.png", byteLength: PNG.length };
@@ -67,6 +69,8 @@ function textFields(entries) {
 function installRemote() {
   calls = [];
   remote = new Map();
+  searchOnly = new Map();
+  incompleteSearch = new Set();
   remote.set("upd-simple", parentBody("UPD-SIMPLE", { id: "501", price: 6000, quantity: 5, visible: true }));
   remote.set("upd-var", {
     ...parentBody("UPD-VAR", { id: "601", price: 1000, quantity: 7, visible: true }),
@@ -85,19 +89,40 @@ function skuFromPath(path) {
   return decodeURIComponent(clean.slice(index + marker.length).replace(/\/variants$|\/stock$/, ""));
 }
 
+function searchSku(request) {
+  const source = String(request.query || "");
+  const match = source.match(/(?:^|[?&])search=([^&]*)/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+function mentionsSku(call, sku) {
+  return giniSkuKey(searchSku(call)) === giniSkuKey(sku) || giniSkuKey(skuFromPath(call.path)) === giniSkuKey(sku);
+}
+
 async function perform(request) {
   const method = String(request.method || "GET").toUpperCase();
   const path = String(request.path || "");
-  calls.push({ method, path, rawBody: request.rawBody || "", form: request.form || null });
+  calls.push({ method, path, query: request.query || "", rawBody: request.rawBody || "", form: request.form || null });
   if (method === "GET" && path.endsWith("/attributes/3696")) {
     return { status: 200, json: { data: { id: "3696", name: "Color", values: COLOR.values } } };
+  }
+  const searched = searchSku(request);
+  if (method === "GET" && searched) {
+    const key = giniSkuKey(searched);
+    if (incompleteSearch.has(key)) return { status: 200, json: { data: [], meta: {} } };
+    const current = remote.get(key) || searchOnly.get(key);
+    const data = current
+      ? [{ id: current.id, sku: current.sku, price: current.price, quantity: current.quantity, is_visible: current.is_visible }]
+      : [];
+    return { status: 200, json: { data, meta: { last_page: 1 } } };
   }
   const sku = skuFromPath(path);
   const key = giniSkuKey(sku);
   const current = remote.get(key);
   if (method === "GET" && path.endsWith("/variants")) {
-    if (!current) return { status: 404, json: { message: "Product not found." } };
-    return { status: 200, json: { data: current.variants || [] } };
+    const parent = current || searchOnly.get(key);
+    if (!parent) return { status: 404, json: { message: "Product not found." } };
+    return { status: 200, json: { data: parent.variants || [] } };
   }
   if (method === "GET") {
     if (!current) return { status: 404, json: { message: "Product not found." } };
@@ -504,7 +529,7 @@ test("an API restart resumes the same scanning preview instead of leaving it stu
   assert.equal(done.job.update, 1);
   assert.equal(await GiniUnifiedSyncItem.countDocuments({ jobId: started.job.id }), 2);
   assert.equal(calls.some((call) => call.method !== "GET"), false);
-  assert.equal(calls.filter((call) => call.method === "GET" && call.path.includes("NEW-SIMPLE")).length, 1);
+  assert.equal(calls.filter((call) => call.method === "GET" && mentionsSku(call, "NEW-SIMPLE")).length, 2);
 });
 
 test("a preview scan records a terminal error without sending", async () => {
@@ -530,4 +555,132 @@ test("a preview scan records a terminal error without sending", async () => {
   assert.equal(done.job.lastError, "GINI catalog could not be read.");
   assert.equal(done.productionWritesEnabled, false);
   assert.equal(calls.some((call) => call.method !== "GET"), false);
+});
+
+test("a direct 404 plus an exact search match is an existing product, and an incomplete search stays uncertain", async () => {
+  const exactSimple = await makeProduct("EXACT-SIMPLE", simpleVariant());
+  const exactVariant = await makeProduct("UPD-VAR-EXACT", colors("UPD-VAR-EXACT"));
+  const held = await makeProduct("HA0449", simpleVariant());
+  const incomplete = await makeProduct("INCOMPLETE", simpleVariant());
+  const ghost = await makeProduct("GHOST-SIMPLE", simpleVariant());
+  await approveChildren(exactVariant);
+  await GiniVariantParentOwner.create({
+    skuKey: giniSkuKey("UPD-VAR-EXACT"),
+    parentSku: "UPD-VAR-EXACT",
+    productId: String(exactVariant._id),
+    giniProductId: "611",
+    visibility: "visible",
+    status: "verified_remote",
+    approvalNote: "Found by exact SKU search.",
+  });
+  searchOnly.set("exact-simple", parentBody("EXACT-SIMPLE", { id: "77", price: 4000, quantity: 1, visible: true }));
+  searchOnly.set("upd-var-exact", {
+    ...parentBody("UPD-VAR-EXACT", { id: "611", price: 1000, quantity: 7, visible: true }),
+    variants: [
+      { id: "311", sku: "UPD-VAR-EXACT-BLACK", price: 750, quantity: 4, attributes: [{ attribute_id: "3696", value: "Black" }] },
+      { id: "312", sku: "UPD-VAR-EXACT-BLUE", price: 1000, quantity: 3, attributes: [{ attribute_id: "3696", value: "Blue" }] },
+    ],
+  });
+  incompleteSearch.add("incomplete");
+
+  const preview = await waitPreview(deps());
+  const rows = Object.fromEntries(preview.job.rows.map((row) => [row.sku, row]));
+  assert.equal(rows["EXACT-SIMPLE"].action, "UPDATE");
+  assert.equal(rows["EXACT-SIMPLE"].flow, "simple");
+  assert.equal(rows["EXACT-SIMPLE"].giniProductId, "77");
+  assert.equal(rows["UPD-VAR-EXACT"].action, "UPDATE");
+  assert.equal(rows["UPD-VAR-EXACT"].flow, "variant");
+  assert.equal(rows["HA0449"].action, "BLOCKED");
+  assert.equal(rows["HA0449"].reasons.includes("historical_sku_hold"), true);
+  assert.equal(rows["INCOMPLETE"].action, "BLOCKED");
+  assert.equal(rows["INCOMPLETE"].reasons.includes("lookup_uncertain"), true);
+  assert.equal(rows["GHOST-SIMPLE"].action, "CREATE");
+  assert.equal(calls.some((call) => call.method !== "GET"), false);
+  void exactSimple;
+  void held;
+  void incomplete;
+
+  searchOnly.set("ghost-simple", parentBody("GHOST-SIMPLE", { id: "78", price: 1000, quantity: 1, visible: true }));
+  const sent = await startGiniUnifiedSync({
+    confirm: true,
+    previewJobId: preview.job.id,
+    productIds: [String(ghost._id)],
+  }, deps());
+  assert.equal(sent.productionWritesEnabled, false);
+  assert.equal(calls.some((call) => call.method === "POST"), false);
+  const ghostRow = sent.job.rows.find((row) => row.sku === "GHOST-SIMPLE");
+  assert.equal(ghostRow.action, "BLOCKED");
+  assert.equal(ghostRow.reasons.includes("preview_drift"), true);
+});
+
+test("a selected job sends one simple create, one variant create, one simple update, and one variant update", async () => {
+  const createdSimple = await makeProduct("NEW-SIMPLE", simpleVariant());
+  const createdVariant = await makeProduct("NEW-VAR", colors("NEW-VAR"));
+  const updatedSimple = await makeProduct("UPD-SIMPLE", simpleVariant());
+  const updatedVariant = await makeProduct("UPD-VAR", colors("UPD-VAR"));
+  const extra = await makeProduct("NEW-EXTRA", simpleVariant());
+  const skuSix = await makeProduct("6", simpleVariant());
+  const skuTen = await makeProduct("10", simpleVariant());
+  await approveChildren(createdVariant);
+  await approveChildren(updatedVariant);
+  await GiniVariantParentOwner.create({
+    skuKey: giniSkuKey("UPD-VAR"),
+    parentSku: "UPD-VAR",
+    productId: String(updatedVariant._id),
+    giniProductId: "601",
+    visibility: "visible",
+    status: "verified_remote",
+    approvalNote: "Excel import reconciled by exact parent SKU.",
+  });
+
+  const preview = await waitPreview(deps());
+  const rows = Object.fromEntries(preview.job.rows.map((row) => [row.sku, row]));
+  assert.equal(rows["6"].action, "BLOCKED");
+  assert.equal(rows["6"].reasons.includes("historical_sku_unresolved"), true);
+  assert.equal(rows["10"].action, "BLOCKED");
+  assert.equal(rows["10"].reasons.includes("historical_sku_unresolved"), true);
+  assert.equal(rows["NEW-EXTRA"].action, "CREATE");
+  await assert.rejects(
+    () => startGiniUnifiedSync({ confirm: true, previewJobId: preview.job.id, productIds: [String(skuTen._id)] }, deps()),
+    (err) => err.code === "selection_not_sendable"
+  );
+  const selected = [createdSimple, createdVariant, updatedSimple, updatedVariant].map((product) => String(product._id));
+  const previewCalls = calls.length;
+  const finished = await startGiniUnifiedSync({ confirm: true, previewJobId: preview.job.id, productIds: selected }, {
+    ...deps(),
+    async beforeRun(job) {
+      const row = await GiniUnifiedSyncItem.findOne({ jobId: preview.job.id, sku: "NEW-EXTRA" }).lean();
+      const { _id, createdAt, updatedAt, ...rest } = row;
+      await GiniUnifiedSyncItem.create({ ...rest, jobId: job._id });
+      void _id;
+      void createdAt;
+      void updatedAt;
+    },
+  });
+
+  assert.equal(finished.productionWritesEnabled, false);
+  assert.deepEqual(finished.job.selectedProductIds, selected);
+  assert.equal(finished.job.created, 2);
+  assert.equal(finished.job.updated, 2);
+  const sent = calls.slice(previewCalls);
+  const posts = sent.filter((call) => call.method === "POST");
+  assert.equal(posts.length, 2);
+  const forms = [];
+  for (const call of posts) forms.push(textFields(await formEntries(call.form)));
+  assert.equal(forms.some((fields) => fields.sku === "NEW-SIMPLE" && fields.is_visible === "0"), true);
+  assert.equal(forms.some((fields) => fields.sku === "NEW-VAR" && fields.is_visible === "0" && fields.quantity === "0"), true);
+  const simpleUpdate = sent.find((call) => call.method === "PUT" && mentionsSku(call, "UPD-SIMPLE"));
+  assert.equal(JSON.parse(simpleUpdate.rawBody).is_visible, undefined);
+  assert.equal(sent.some((call) => call.method === "PATCH" && mentionsSku(call, "UPD-VAR")), true);
+  assert.equal(sent.some((call) => call.method !== "GET" && (mentionsSku(call, "NEW-EXTRA") || mentionsSku(call, "6") || mentionsSku(call, "10"))), false);
+  assert.equal(remote.get("upd-simple").is_visible, 1);
+  assert.equal(remote.get("upd-var").is_visible, 1);
+  assert.equal(remote.get("new-simple").is_visible, 0);
+  assert.equal(remote.get("new-var").is_visible, 0);
+  const syncItems = await GiniUnifiedSyncItem.find({ jobId: finished.job.id }).lean();
+  assert.equal(syncItems.some((row) => row.sku === "NEW-EXTRA"), true);
+  assert.equal(syncItems.find((row) => row.sku === "NEW-EXTRA").stage, "pending");
+  assert.equal(syncItems.some((row) => row.sku === "6" || row.sku === "10"), false);
+  void extra;
+  void skuSix;
 });

@@ -225,6 +225,7 @@ giniConnectionRouter.post("/platforms/gini/sync-all/unified/start", async (req, 
     res.json(assertNoSecretLeak(await startGiniUnifiedSync({
       confirm: req.body?.confirm === true,
       previewJobId: req.body?.previewJobId,
+      productIds: req.body?.productIds,
     }), ""));
   } catch (err) {
     fail(res, err, "Failed to start the GINI new and changed sync");

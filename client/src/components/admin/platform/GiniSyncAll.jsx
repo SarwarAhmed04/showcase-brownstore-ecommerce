@@ -201,6 +201,7 @@ export default function GiniSyncAll({ t }) {
   const [status, setStatus] = useState(null);
   const [changedPreview, setChangedPreview] = useState(null);
   const [unified, setUnified] = useState(null);
+  const [unifiedSelected, setUnifiedSelected] = useState(() => new Set());
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -209,12 +210,17 @@ export default function GiniSyncAll({ t }) {
   const [deleteImageUrl, setDeleteImageUrl] = useState("");
   const [replacementImageUrl, setReplacementImageUrl] = useState("");
   const previewId = changedPreview?.previewId || "";
+  const unifiedPreviewId = unified?.job?.mode === "preview" && unified?.job?.status === "preview" ? unified.job.id : "";
 
   useEffect(() => {
     setSelectedSku("");
     setDeleteImageUrl("");
     setReplacementImageUrl("");
   }, [previewId]);
+
+  useEffect(() => {
+    setUnifiedSelected(new Set());
+  }, [unifiedPreviewId]);
 
   async function refresh() {
     const data = await api.giniSyncAllStatus();
@@ -244,7 +250,7 @@ export default function GiniSyncAll({ t }) {
     try {
       const data = await action();
       if (label === "changed-preview") setChangedPreview(data);
-      if (label === "unified-preview") setUnified(data);
+      if (label === "unified-preview" || label === "unified-start") setUnified(data);
       if (data?.job || (data?.writesEnabled != null && label !== "changed-preview")) {
         setStatus((current) => ({ ...(current || {}), ...data }));
       }
@@ -362,6 +368,9 @@ export default function GiniSyncAll({ t }) {
             <Stat label={t.giniUnifiedUnchanged} value={count(unified?.job?.unchanged)} marker="data-gini-unified-unchanged" markerValue={unified?.job?.unchanged ?? 0} />
             <Stat label={t.giniUnifiedBlocked} value={count(unified?.job?.blocked)} marker="data-gini-unified-blocked" markerValue={unified?.job?.blocked ?? 0} />
           </div>
+          <p className="mt-4 text-sm font-semibold text-brown" data-gini-unified-selected={unifiedSelected.size} data-gini-unified-job={unifiedPreviewId}>
+            {t.giniUnifiedSelected}: {unifiedSelected.size}
+          </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <button
               type="button"
@@ -375,26 +384,49 @@ export default function GiniSyncAll({ t }) {
             <button
               type="button"
               className={GHOST}
-              disabled={busy !== "" || unified?.writesEnabled !== true || unified?.job?.mode !== "preview" || unified?.job?.status !== "preview"}
+              disabled={busy !== "" || !unifiedPreviewId || unified?.writesEnabled !== true || unifiedSelected.size === 0}
               data-gini-unified-start="true"
-              onClick={() => run(() => api.giniUnifiedSyncStart(unified.job.id), "unified-start")}
+              onClick={() => {
+                const productIds = [...unifiedSelected];
+                if (!unifiedPreviewId || productIds.length === 0) return;
+                run(() => api.giniUnifiedSyncStart(unifiedPreviewId, productIds), "unified-start");
+              }}
             >
               {busy === "unified-start" ? t.loading : t.giniUnifiedStart}
             </button>
           </div>
           {(unified?.job?.rows || []).length ? (
             <ul className="mt-4 space-y-2 text-sm text-brown/70">
-              {unified.job.rows.map((row) => (
-                <li key={row.productId || row.sku} data-gini-unified-row={row.sku} data-gini-unified-action={row.action} data-gini-unified-stage={row.stage || ""}>
-                  <span className="font-semibold text-brown">{row.sku}</span>
-                  {" · "}
-                  {row.action}
-                  {row.stage ? ` · ${row.stage}` : ""}
-                  {((row.messages || []).length ? row.messages : row.reasons || []).length
-                    ? ` — ${((row.messages || []).length ? row.messages : row.reasons || []).join("; ")}`
-                    : ""}
-                </li>
-              ))}
+              {unified.job.rows.map((row) => {
+                const selectable = Boolean(unifiedPreviewId) && (row.action === "CREATE" || row.action === "UPDATE") && Boolean(row.productId);
+                return (
+                  <li key={row.productId || row.sku} data-gini-unified-row={row.sku} data-gini-unified-action={row.action} data-gini-unified-flow={row.flow || ""} data-gini-unified-stage={row.stage || ""} data-gini-unified-product={row.productId || ""}>
+                    {selectable ? (
+                      <input
+                        type="checkbox"
+                        className="me-2 align-middle"
+                        checked={unifiedSelected.has(row.productId)}
+                        data-gini-unified-select={row.sku}
+                        onChange={() => {
+                          setUnifiedSelected((current) => {
+                            const next = new Set(current);
+                            if (next.has(row.productId)) next.delete(row.productId);
+                            else next.add(row.productId);
+                            return next;
+                          });
+                        }}
+                      />
+                    ) : null}
+                    <span className="font-semibold text-brown">{row.sku}</span>
+                    {" · "}
+                    {row.action}
+                    {row.stage ? ` · ${row.stage}` : ""}
+                    {((row.messages || []).length ? row.messages : row.reasons || []).length
+                      ? ` — ${((row.messages || []).length ? row.messages : row.reasons || []).join("; ")}`
+                      : ""}
+                  </li>
+                );
+              })}
             </ul>
           ) : null}
         </div>

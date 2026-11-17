@@ -39,11 +39,16 @@ function errorResult(response, failure = "") {
 }
 
 function foundResult(data, fallbackSku) {
+  const price = Number(data?.price);
+  const quantity = Number(data?.quantity ?? data?.stock);
   return {
     exists: true,
     giniProductId: String(data.id ?? "").trim(),
     sku: String(data.sku || fallbackSku),
     images: giniResponseImages(data),
+    price: Number.isFinite(price) ? price : null,
+    quantity: Number.isFinite(quantity) ? quantity : null,
+    isVisible: data?.is_visible !== undefined ? data.is_visible : data?.isVisible,
   };
 }
 

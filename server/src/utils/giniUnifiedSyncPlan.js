@@ -14,7 +14,8 @@ export const GINI_UNIFIED_ACTIONS = Object.freeze(["CREATE", "UPDATE", "UNCHANGE
  * Product updates send price and quantity only. is_visible stays on Publish.
  */
 export const GINI_UNIFIED_LIMITATIONS = Object.freeze([
-  "An exact SKU GET runs before every create, including products that were imported to GINI through Excel and have no BrownStore send record.",
+  "The verified exact-SKU lookup runs before every create, including products imported to GINI through Excel. A direct 404 is not absence. Absence requires that 404 plus a finished search with no exact SKU. An exact search match follows the existing-product path.",
+  "A sync job can be bound to product IDs from one completed preview. Rows outside that selection are not sent.",
   "Multi-variant updates change only a child whose approved SKU matches a GINI variant. Unknown remote variants are left in place.",
   "Update Variant Stock does not document quantity 0, adding a color, or deleting a variant, so those products stay blocked.",
   "The verified two-stage create is used only when the parent SKU is absent. An existing variant set is not replaced.",
