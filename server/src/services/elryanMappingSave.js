@@ -98,7 +98,7 @@ export async function searchElryanSnapshotCategories({
 } = {}) {
   const connection = await getElryanConnectionPublic();
   const environment = normalizeElryanMappingEnvironment(connection.environment);
-  const { categories } = await loadSnapshotForEnvironment(environment);
+  const { categories, snapshot } = await loadSnapshotForEnvironment(environment);
 
   const needle = String(q || "").trim().toLowerCase();
   let rows = categories.map((row) => ({
@@ -137,8 +137,9 @@ export async function searchElryanSnapshotCategories({
     limit: take,
     categories: rows.slice(start, start + take),
     snapshot: {
-      uniqueCount: categories.length,
-      status: "complete",
+      uniqueCount: snapshot.uniqueCount || categories.length,
+      status: snapshot.status || "complete",
+      environment,
     },
   };
 }

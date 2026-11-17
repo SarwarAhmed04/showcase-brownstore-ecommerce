@@ -16,12 +16,24 @@ export function normalizeElryanCatalogWarnings(warnings) {
     .filter(Boolean);
 }
 
+/** Visible catalog label for the active Elryan connection. */
+export function elryanCatalogEnvironmentLabel(environment) {
+  const value =
+    environment && typeof environment === "object"
+      ? environment.environment || environment.scope?.environment || ""
+      : environment;
+  if (value === "production") return "Production";
+  if (value === "staging") return "Staging";
+  return "";
+}
+
 /** Compact status line fields; avoids assuming large payload shapes. */
 export function elryanCatalogStatusSummary(status) {
   if (!status || typeof status !== "object") {
     return { ready: false, line: "" };
   }
   const parts = [
+    elryanCatalogEnvironmentLabel(status),
     status.status != null ? String(status.status) : "",
     status.uniqueCount != null ? `${status.uniqueCount} IDs` : "",
     status.reportedTotal != null ? `API total ${status.reportedTotal}` : "",

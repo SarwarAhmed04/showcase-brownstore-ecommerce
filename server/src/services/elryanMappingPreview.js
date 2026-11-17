@@ -4,7 +4,6 @@ import { PlatformTaxonomyConfig } from "../models/PlatformTaxonomyConfig.js";
 import { ElryanCategoryCatalogSnapshot } from "../models/ElryanCategoryCatalogSnapshot.js";
 import { discoverBrownCollections } from "../utils/brownTaxonomy.js";
 import {
-  ELRYAN_CATALOG_SYNC,
   ELRYAN_MAPPING_CONFIDENCE,
   ELRYAN_MAPPING_PREVIEW,
 } from "../utils/elryanConstants.js";
@@ -287,21 +286,20 @@ export async function buildElryanMappingPreview({
   const mappingEnvironment = normalizeElryanMappingEnvironment(connection.environment);
 
   const snapshot = await ElryanCategoryCatalogSnapshot.findOne({
-    environment: ELRYAN_CATALOG_SYNC.ENVIRONMENT,
+    environment: mappingEnvironment,
   })
     .select("uniqueCount coverage status finishedAt updatedAt categories")
     .lean();
   const catalog = Array.isArray(snapshot?.categories) ? snapshot.categories : [];
   if (!catalog.length) {
     throw new ElryanClientError(
-      "No staging Elryan category catalog snapshot yet. Run Category Discovery → Fetch full catalog first.",
-      { status: 409, code: "catalog_snapshot_missing" }
-    );
-  }
-  if (mappingEnvironment !== ELRYAN_CATALOG_SYNC.ENVIRONMENT) {
-    throw new ElryanClientError(
-      `Active Elryan connection is ${mappingEnvironment}, but the category catalog snapshot is staging-only. Switch connection to staging or fetch a ${mappingEnvironment} catalog before mapping.`,
-      { status: 409, code: "catalog_env_unavailable" }
+      mappingEnvironment === "production"
+        ? "No production Elryan category catalog snapshot is available. Fetch a production catalog before mapping. Staging category IDs cannot be reused in production."
+        : "No staging Elryan category catalog snapshot yet. Run Category Discovery → Fetch full catalog first.",
+      {
+        status: 409,
+        code: mappingEnvironment === "production" ? "catalog_env_unavailable" : "catalog_snapshot_missing",
+      }
     );
   }
   const preparedCatalog = prepareElryanCatalogForMatching(catalog);
@@ -407,7 +405,7 @@ export async function buildElryanMappingPreview({
       coverage: snapshot.coverage || "unknown",
       status: snapshot.status || "idle",
       fetchedAt: snapshot.finishedAt || snapshot.updatedAt || null,
-      environment: ELRYAN_CATALOG_SYNC.ENVIRONMENT,
+      environment: mappingEnvironment,
     },
     counts: {
       collections: collections.length,

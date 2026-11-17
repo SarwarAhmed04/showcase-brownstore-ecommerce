@@ -27,6 +27,7 @@ import {
   resolveDisplayedElryanCategory,
 } from "../../../utils/elryanSmartMappingSelect";
 import ElryanCatalogBrowse from "./ElryanCatalogBrowse";
+import { elryanCatalogEnvironmentLabel } from "../../../utils/elryanCatalogStatusUi";
 import { formatCount, StatusBadge } from "./platformUi";
 
 const BUTTON =
@@ -573,8 +574,8 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
         {pageNotice ? <p className="mt-3 text-sm text-brown/70">{pageNotice}</p> : null}
         {payload?.catalog ? (
           <p className="mt-3 text-[11px] text-brown/45">
-            {t.elryanCatalogStatus}: {payload.catalog.status} · {payload.catalog.uniqueCount} ·{" "}
-            {payload.environment || "staging"}
+            {t.elryanCatalogStatus}: {elryanCatalogEnvironmentLabel(payload.catalog) || payload.environment} ·{" "}
+            {payload.catalog.status} · {payload.catalog.uniqueCount}
           </p>
         ) : null}
 
@@ -799,6 +800,9 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
                       {manualResult && manualFor === id ? (
                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-brown/55">
                           <span>
+                            {elryanCatalogEnvironmentLabel(manualResult)
+                              ? `${elryanCatalogEnvironmentLabel(manualResult)} · `
+                              : ""}
                             {manualResult.totalMatching} {t.elryanTotalResults || "results"} ·{" "}
                             {manualResult.offset + 1}–{manualResult.offset + (manualResult.categories?.length || 0)}
                           </span>

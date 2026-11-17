@@ -72,6 +72,14 @@ describe("Elryan white-screen regressions", () => {
     assert.equal(summary.ready, true);
     assert.match(summary.line, /1393/);
     assert.match(summary.line, /complete/);
+    const production = elryanCatalogStatusSummary({
+      environment: "production",
+      status: "complete",
+      uniqueCount: 1529,
+      coverage: "complete",
+    });
+    assert.match(production.line, /Production/);
+    assert.match(production.line, /1529/);
   });
 });
 

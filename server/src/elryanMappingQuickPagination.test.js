@@ -11,7 +11,9 @@ import { Product } from "./models/Product.js";
 import { PlatformTaxonomyConfig } from "./models/PlatformTaxonomyConfig.js";
 import { ElryanConnection } from "./models/ElryanConnection.js";
 import { ElryanCategoryCatalogSnapshot } from "./models/ElryanCategoryCatalogSnapshot.js";
+import { setElryanFetch } from "./services/elryanClient.js";
 import { encryptApiKey } from "./utils/partnerAuth.js";
+import { elryanValuesForEnvironment } from "./utils/elryanTaxonomyMapping.js";
 import {
   collectElryanMappingPage,
   elryanMappingScanBudget,
@@ -40,10 +42,15 @@ function listen(instance) {
   });
 }
 
-async function call(urlPath) {
+async function call(urlPath, { method = "GET", body } = {}) {
   const { port } = server.address();
   const response = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
-    headers: { Authorization: `Bearer ${token}` },
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
   });
   const json = await response.json().catch(() => ({}));
   return { status: response.status, json };
@@ -233,6 +240,7 @@ describe("Elryan mapping preview pagination", { concurrency: 1 }, () => {
   });
 
   after(async () => {
+    setElryanFetch(null);
     await new Promise((resolve) => server.close(resolve));
     await mongoose.disconnect();
     await memory.stop();
@@ -458,7 +466,108 @@ describe("Elryan mapping preview pagination", { concurrency: 1 }, () => {
     const res = await call("/api/admin/platforms/elryan/mapping-preview?limit=40&offset=0");
     assert.equal(res.status, 409);
     assert.equal(res.json.code, "catalog_env_unavailable");
+    assert.match(String(res.json.message || ""), /production/i);
+    assert.equal(String(res.json.message || "").includes("staging-only"), false);
     const after = await PlatformTaxonomyConfig.countDocuments({ partner: "elryan" });
     assert.equal(after, before);
+  });
+
+  it("maps Choppers to Production Chopper 340 when both snapshots exist", async () => {
+    setElryanFetch(async () => ({
+      status: 200,
+      headers: { get: () => "application/json" },
+      async text() {
+        return JSON.stringify({ data: { id: "as-4", name: "Chopper set", attributes: [] } });
+      },
+    }));
+    await ElryanCategoryCatalogSnapshot.create({
+      environment: "staging",
+      status: "complete",
+      coverage: "complete",
+      uniqueCount: 1,
+      categories: [leafCategory(999, "Chopper")],
+    });
+    await ElryanCategoryCatalogSnapshot.create({
+      environment: "production",
+      status: "complete",
+      coverage: "complete",
+      uniqueCount: 1529,
+      categories: [leafCategory(340, "Chopper")],
+    });
+    await Product.create(
+      productDoc({ id: "col-choppers", name: "Choppers", category: "Kitchen", sub: "Appliances" })
+    );
+    await PlatformTaxonomyConfig.create({
+      partner: "elryan",
+      brownCollectionId: "col-choppers",
+      values: {
+        categoryId: "999",
+        categoryName: "Chopper",
+        categoryHierarchy: "Depotroot : Shelfnode : Chopper",
+        attributeSetId: "4",
+        elryanEnvironment: "staging",
+        environments: {
+          staging: {
+            categoryId: "999",
+            categoryName: "Chopper",
+            categoryHierarchy: "Depotroot : Shelfnode : Chopper",
+            attributeSetId: "4",
+          },
+        },
+      },
+    });
+    await ElryanConnection.findOneAndUpdate(
+      { singletonKey: "default" },
+      {
+        $set: {
+          environment: "production",
+          productionApiKeyEnc: encryptApiKey(API_KEY),
+          hasApiKey: true,
+        },
+      }
+    );
+
+    const preview = await call(
+      "/api/admin/platforms/elryan/mapping-preview?q=Choppers&limit=40&offset=0"
+    );
+    assert.equal(preview.status, 200, preview.json?.message || "preview failed");
+    assert.equal(preview.json.environment, "production");
+    assert.equal(preview.json.catalog.environment, "production");
+    assert.equal(preview.json.catalog.status, "complete");
+    assert.equal(preview.json.catalog.uniqueCount, 1529);
+    assert.equal(String(JSON.stringify(preview.json)).includes("staging-only"), false);
+    const row = preview.json.rows.find((item) => item.brownCollectionId === "col-choppers");
+    assert.ok(row);
+    assert.equal(row.brownCollectionName.en, "Choppers");
+    for (const candidate of row.candidates || []) {
+      assert.notEqual(String(candidate.categoryId), "999");
+    }
+
+    const search = await call("/api/admin/platforms/elryan/mapping/snapshot-search?q=Chopper&limit=25");
+    assert.equal(search.status, 200, search.json?.message || "search failed");
+    assert.equal(search.json.environment, "production");
+    assert.equal(search.json.snapshot.environment, "production");
+    const hit = search.json.categories.find((item) => String(item.categoryId) === "340");
+    assert.ok(hit);
+    assert.equal(hit.categoryName, "Chopper");
+    assert.equal(
+      search.json.categories.some((item) => String(item.categoryId) === "999"),
+      false
+    );
+
+    const saved = await call("/api/admin/platforms/elryan/mapping/save", {
+      method: "POST",
+      body: { brownCollectionId: "col-choppers", categoryId: "340", confirm: true },
+    });
+    assert.equal(saved.status, 200, saved.json?.message || "save failed");
+    assert.equal(saved.json.environment, "production");
+    assert.equal(saved.json.values.categoryId, "340");
+    const stored = await PlatformTaxonomyConfig.findOne({
+      partner: "elryan",
+      brownCollectionId: "col-choppers",
+    }).lean();
+    assert.equal(elryanValuesForEnvironment(stored.values, "production").categoryId, "340");
+    assert.equal(elryanValuesForEnvironment(stored.values, "staging").categoryId, "999");
+    setElryanFetch(null);
   });
 });

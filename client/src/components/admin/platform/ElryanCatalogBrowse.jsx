@@ -8,6 +8,7 @@ import {
   shouldFetchElryanCategoryChildren,
 } from "../../../utils/elryanCategoryBrowse";
 import {
+  elryanCatalogEnvironmentLabel,
   elryanCatalogStatusSummary,
   normalizeElryanCatalogWarnings,
 } from "../../../utils/elryanCatalogStatusUi";
@@ -271,6 +272,9 @@ export default function ElryanCatalogBrowse({ t, embedded = false }) {
       <section className="space-y-3 rounded-[1.5rem] bg-white p-4 ring-1 ring-brown/10">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-tan">
           {t.elryanFullCatalogTitle}
+          {elryanCatalogEnvironmentLabel(catalogStatus)
+            ? ` (${elryanCatalogEnvironmentLabel(catalogStatus)})`
+            : ""}
         </p>
         <p className="text-sm text-brown/60">{t.elryanFullCatalogHint}</p>
         <div className="flex flex-wrap gap-2">
