@@ -200,6 +200,7 @@ function Stat({ label, value, marker, markerValue }) {
 export default function GiniSyncAll({ t }) {
   const [status, setStatus] = useState(null);
   const [changedPreview, setChangedPreview] = useState(null);
+  const [unified, setUnified] = useState(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -218,6 +219,7 @@ export default function GiniSyncAll({ t }) {
   async function refresh() {
     const data = await api.giniSyncAllStatus();
     setStatus(data);
+    api.giniUnifiedSyncStatus().then(setUnified).catch(() => {});
     return data;
   }
 
@@ -242,6 +244,7 @@ export default function GiniSyncAll({ t }) {
     try {
       const data = await action();
       if (label === "changed-preview") setChangedPreview(data);
+      if (label === "unified-preview") setUnified(data);
       if (data?.job || (data?.writesEnabled != null && label !== "changed-preview")) {
         setStatus((current) => ({ ...(current || {}), ...data }));
       }
@@ -329,6 +332,57 @@ export default function GiniSyncAll({ t }) {
         <p className={`mt-2 rounded-2xl px-4 py-3 text-sm ${updateWritesEnabled ? "bg-amber-50 text-amber-950" : "bg-cream text-brown/70"}`}>
           {updateWritesEnabled ? t.giniSyncAllUpdateWritesOn : t.giniSyncAllUpdateWritesOff}
         </p>
+        <div className="mt-5 rounded-2xl bg-cream px-4 py-4" data-gini-unified-preview="true">
+          <p className="text-xs font-semibold tracking-wide text-brown/50 uppercase">{t.giniUnifiedTitle}</p>
+          <p className="mt-1 text-sm text-brown/60">{t.giniUnifiedHint}</p>
+          <p className="mt-3 text-sm font-semibold text-brown" data-gini-unified-production-writes="off">
+            {t.giniUnifiedProductionOff}
+          </p>
+          <p className="mt-1 text-sm text-brown/70" data-gini-unified-local-writes={unified?.writesEnabled === true ? "on" : "off"}>
+            {unified?.writesEnabled === true ? t.giniUnifiedLocalOn : t.giniUnifiedLocalOff}
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-4">
+            <Stat label={t.giniUnifiedCreate} value={count(unified?.job?.create)} marker="data-gini-unified-create" markerValue={unified?.job?.create ?? 0} />
+            <Stat label={t.giniUnifiedUpdate} value={count(unified?.job?.update)} marker="data-gini-unified-update" markerValue={unified?.job?.update ?? 0} />
+            <Stat label={t.giniUnifiedUnchanged} value={count(unified?.job?.unchanged)} marker="data-gini-unified-unchanged" markerValue={unified?.job?.unchanged ?? 0} />
+            <Stat label={t.giniUnifiedBlocked} value={count(unified?.job?.blocked)} marker="data-gini-unified-blocked" markerValue={unified?.job?.blocked ?? 0} />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={BUTTON}
+              disabled={busy !== ""}
+              data-gini-unified-preview-button="true"
+              onClick={() => run(() => api.giniUnifiedSyncPreview(), "unified-preview")}
+            >
+              {busy === "unified-preview" ? t.loading : t.giniUnifiedPreview}
+            </button>
+            <button
+              type="button"
+              className={GHOST}
+              disabled={busy !== "" || unified?.writesEnabled !== true || unified?.job?.mode !== "preview" || unified?.job?.status !== "preview"}
+              data-gini-unified-start="true"
+              onClick={() => run(() => api.giniUnifiedSyncStart(unified.job.id), "unified-start")}
+            >
+              {busy === "unified-start" ? t.loading : t.giniUnifiedStart}
+            </button>
+          </div>
+          {(unified?.job?.rows || []).length ? (
+            <ul className="mt-4 space-y-2 text-sm text-brown/70">
+              {unified.job.rows.map((row) => (
+                <li key={row.productId || row.sku} data-gini-unified-row={row.sku} data-gini-unified-action={row.action} data-gini-unified-stage={row.stage || ""}>
+                  <span className="font-semibold text-brown">{row.sku}</span>
+                  {" · "}
+                  {row.action}
+                  {row.stage ? ` · ${row.stage}` : ""}
+                  {((row.messages || []).length ? row.messages : row.reasons || []).length
+                    ? ` — ${((row.messages || []).length ? row.messages : row.reasons || []).join("; ")}`
+                    : ""}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
         <p className="mt-3 text-xs text-brown/45" dir="ltr">
           {t.giniSyncEndpoint}: POST {status?.endpoint || "/api/v2.0/third-party/products"}
         </p>

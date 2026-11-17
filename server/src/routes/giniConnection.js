@@ -33,6 +33,13 @@ import { loadVariantTestImageBytes, mongoVariantTestOperation, previewGiniVarian
 import { approveParentOwner, approveVariantSkus, variantCatalogPage } from "../services/giniVariantSync.js";
 import { previewGiniVariant38104, previewGiniVariantPilot, runGiniVariant38104Stage, runGiniVariantPilotStage } from "../services/giniVariantPilot.js";
 import { previewVariantChangedSync } from "../services/giniVariantChangedSync.js";
+import {
+  getGiniUnifiedSyncStatus,
+  pauseGiniUnifiedSync,
+  previewGiniUnifiedSync,
+  resumeGiniUnifiedSync,
+  startGiniUnifiedSync,
+} from "../services/giniUnifiedSync.js";
 import { listOwnershipGroups, prepareOwnershipSelection, saveOwnershipSelection } from "../services/giniVariantOwnershipSelection.js";
 import { approveVariantPricePilot } from "../services/giniVariantPricePilot.js";
 import { previewEi8888PricePatch, previewKe20PricePatch, refreshEi8888CommissionSnapshot, runAuthorizedEi8888PricePatch, runAuthorizedKe20PricePatch } from "../services/giniVariantPricePatch.js";
@@ -194,6 +201,49 @@ giniConnectionRouter.post("/platforms/gini/sync-all/reconcile", async (req, res)
     res.json(assertNoSecretLeak(await reconcileStoredGiniPreview(req.body?.jobId), ""));
   } catch (err) {
     fail(res, err, "Failed to reconcile the GINI preview");
+  }
+});
+
+giniConnectionRouter.get("/platforms/gini/sync-all/unified", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await getGiniUnifiedSyncStatus(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to load the GINI new and changed sync");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/unified/preview", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await previewGiniUnifiedSync(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to preview new and changed GINI products");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/unified/start", async (req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await startGiniUnifiedSync({
+      confirm: req.body?.confirm === true,
+      previewJobId: req.body?.previewJobId,
+    }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to start the GINI new and changed sync");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/unified/pause", async (_req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await pauseGiniUnifiedSync(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to pause the GINI new and changed sync");
+  }
+});
+
+giniConnectionRouter.post("/platforms/gini/sync-all/unified/resume", async (req, res) => {
+  try {
+    res.json(assertNoSecretLeak(await resumeGiniUnifiedSync({ jobId: req.body?.jobId }), ""));
+  } catch (err) {
+    fail(res, err, "Failed to resume the GINI new and changed sync");
   }
 });
 
