@@ -8,6 +8,26 @@ export function normalizeElryanMappingEnvironment(raw) {
   return String(raw || "").trim().toLowerCase() === "production" ? "production" : "staging";
 }
 
+export const ELRYAN_MAPPING_RELOAD_MESSAGE =
+  "The Elryan connection changed after this page loaded. Reload the page before saving. Nothing was saved.";
+
+/**
+ * A mapping save is bound to the environment shown when its options loaded.
+ * A missing value means the caller did not bind a page, so the active connection is used.
+ */
+export function assertElryanSaveEnvironment(requested, active) {
+  const shown = String(requested ?? "").trim().toLowerCase();
+  const current = normalizeElryanMappingEnvironment(active);
+  if (!shown) return current;
+  if (shown !== current) {
+    const error = new Error(ELRYAN_MAPPING_RELOAD_MESSAGE);
+    error.status = 409;
+    error.code = "environment_changed";
+    throw error;
+  }
+  return current;
+}
+
 export function emptyElryanMappingFields(environment = "staging") {
   return {
     categoryId: "",

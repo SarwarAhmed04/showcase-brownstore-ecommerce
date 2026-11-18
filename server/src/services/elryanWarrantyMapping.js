@@ -14,6 +14,7 @@ import {
   resolveElryanWarrantyFromRows,
 } from "../utils/elryanWarrantyResolve.js";
 import { resolveElryanScopedValue } from "../utils/elryanValueResolve.js";
+import { assertElryanSaveEnvironment } from "../utils/elryanTaxonomyMapping.js";
 
 function fail(message, code, status = 400) {
   const error = new Error(message);
@@ -38,16 +39,12 @@ function brandIdVariants(brandId) {
   return or;
 }
 
-async function assertStagingConnection() {
+async function activeWarrantyEnvironment() {
   const connection = await getElryanConnectionPublic();
-  if (connection.environment !== "staging") {
-    throw fail(
-      "Warranty mapping is limited to Elryan Staging. Production warranties were not read and no mapping was saved.",
-      "production_isolated",
-      409
-    );
-  }
-  return connection;
+  return {
+    connection,
+    environment: connection.environment === "production" ? "production" : "staging",
+  };
 }
 
 async function loadBrownBrands() {
@@ -85,9 +82,9 @@ async function loadBrownBrands() {
     }));
 }
 
-function stagingBrandWarranty(warrantyRows, brandId) {
+function brandWarranty(warrantyRows, brandId, environment) {
   const resolved = resolveElryanWarrantyFromRows(warrantyRows, {
-    environment: "staging",
+    environment,
     explicitKey: "",
     brandId,
   });
@@ -95,7 +92,7 @@ function stagingBrandWarranty(warrantyRows, brandId) {
   return resolved.mapping;
 }
 
-function presentWarranty(mapping, catalogItems) {
+function presentWarranty(mapping, catalogItems, environment) {
   if (!mapping) return null;
   const code = String(mapping.elryanCode || "").trim();
   const live = (catalogItems || []).find((item) => item.code === code) || null;
@@ -108,13 +105,13 @@ function presentWarranty(mapping, catalogItems) {
     terms: live?.terms ?? null,
     status: live?.status ?? null,
     verified: Boolean(live),
-    environment: "staging",
+    environment,
     scope: "brand",
   };
 }
 
-function presentBrandMapping(brandRows, brandId) {
-  const resolved = resolveElryanScopedValue(brandRows, { environment: "staging", subject: brandId });
+function presentBrandMapping(brandRows, brandId, environment) {
+  const resolved = resolveElryanScopedValue(brandRows, { environment, subject: brandId });
   if (!resolved?.row?.elryanId) {
     return { mapped: false, elryanId: "", elryanLabel: "", brownKey: "" };
   }
@@ -128,7 +125,7 @@ function presentBrandMapping(brandRows, brandId) {
 
 async function loadWarrantyCatalog() {
   try {
-    const listed = await elryanListWarranties();
+    const listed = await elryanListWarranties({ fresh: true });
     const catalog = normalizeElryanWarrantyCatalog(listed.warranties, listed.httpStatus);
     return {
       ok: true,
@@ -162,7 +159,7 @@ async function loadWarrantyCatalog() {
  * warranty list. Does not save a mapping and does not write products.
  */
 export async function listElryanWarrantyMappingPage() {
-  const connection = await assertStagingConnection();
+  const { connection, environment } = await activeWarrantyEnvironment();
   const [brands, brandRows, warrantyRows, warranties] = await Promise.all([
     loadBrownBrands(),
     ElryanValueMapping.find({ kind: "brand" }).lean(),
@@ -173,7 +170,7 @@ export async function listElryanWarrantyMappingPage() {
   const byId = new Map(brands.map((row) => [row.brownKey, row]));
   for (const row of warrantyRows) {
     const described = describeElryanWarrantyRow(row);
-    if (!described || described.environment !== "staging" || described.scope !== "brand") continue;
+    if (!described || described.environment !== environment || described.scope !== "brand") continue;
     if (byId.has(described.subject)) continue;
     byId.set(described.subject, {
       brownKey: described.subject,
@@ -187,16 +184,17 @@ export async function listElryanWarrantyMappingPage() {
       brownKey: brand.brownKey,
       brownLabel: brand.brownLabel || brand.brownKey,
       productCount: brand.productCount,
-      brandMapping: presentBrandMapping(brandRows, brand.brownKey),
-      warranty: presentWarranty(stagingBrandWarranty(warrantyRows, brand.brownKey), warranties.items),
+      brandMapping: presentBrandMapping(brandRows, brand.brownKey, environment),
+      warranty: presentWarranty(brandWarranty(warrantyRows, brand.brownKey, environment), warranties.items, environment),
     }))
     .sort((a, b) => a.brownLabel.localeCompare(b.brownLabel, undefined, { sensitivity: "base" }));
 
   const mapped = rows.filter((row) => row.warranty?.code).length;
   return {
-    environment: "staging",
-    stagingOnly: true,
-    productionIsolated: true,
+    environment,
+    fresh: true,
+    stagingOnly: environment === "staging",
+    productionIsolated: environment === "staging",
     activeEnvironment: connection.environment,
     autoAssigned: false,
     nameMatchApplied: false,
@@ -274,7 +272,10 @@ export async function invalidateElryanBrandWarrantyPreviews(brandId) {
  * requires overwrite confirmation. The product document is not updated.
  */
 export async function saveElryanBrandWarrantyMapping(input = {}) {
-  await assertStagingConnection();
+  const { environment } = await activeWarrantyEnvironment();
+  if (input.environment != null && String(input.environment).trim() !== "") {
+    assertElryanSaveEnvironment(input.environment, environment);
+  }
   if (input.confirmCoverage !== true) {
     throw fail(
       "Confirm that this warranty coverage applies to the brand's relevant products before saving.",
@@ -310,7 +311,7 @@ export async function saveElryanBrandWarrantyMapping(input = {}) {
   const official = warranties.items.find((item) => item.code === code);
   if (!official) {
     throw fail(
-      "That warranty code is not in the official Elryan Staging list. Nothing was saved.",
+      "That warranty code is not in the fresh Elryan warranty list for the active account. Nothing was saved.",
       "invalid_warranty_code",
       400
     );
@@ -318,7 +319,7 @@ export async function saveElryanBrandWarrantyMapping(input = {}) {
 
   const known = await knownBrand(brandId);
   const warrantyRows = await ElryanValueMapping.find({ kind: "warranty" }).lean();
-  const existing = stagingBrandWarranty(warrantyRows, brandId);
+  const existing = brandWarranty(warrantyRows, brandId, environment);
   if (!known && !existing) {
     throw fail("That BrownStore brand id was not found. A display name cannot be saved as a brand id.", "unknown_brand");
   }
@@ -330,7 +331,7 @@ export async function saveElryanBrandWarrantyMapping(input = {}) {
     );
   }
 
-  const confirmedBefore = await ElryanConfirmedSend.find({ environment: "staging" })
+  const confirmedBefore = await ElryanConfirmedSend.find({ environment })
     .select("productId payloadHash elryanProductId httpStatus confirmedAt")
     .sort({ productId: 1 })
     .lean();
@@ -338,7 +339,7 @@ export async function saveElryanBrandWarrantyMapping(input = {}) {
   await upsertElryanValueMapping({
     kind: "warranty",
     warrantyScope: "brand",
-    environment: "staging",
+    environment,
     brownKey: brandId,
     brownLabel: known?.brownLabel || existing?.brownLabel || "",
     elryanCode: official.code,
@@ -346,7 +347,7 @@ export async function saveElryanBrandWarrantyMapping(input = {}) {
   });
 
   const storedKey = elryanWarrantyStorageKey({
-    environment: "staging",
+    environment,
     scope: "brand",
     subject: brandId,
   });
@@ -354,7 +355,7 @@ export async function saveElryanBrandWarrantyMapping(input = {}) {
   const readBackOk = Boolean(
     readBack &&
       readBack.elryanCode === official.code &&
-      readBack.environment === "staging" &&
+      readBack.environment === environment &&
       readBack.warrantyScope === "brand" &&
       readBack.brownKey === storedKey
   );
@@ -367,7 +368,7 @@ export async function saveElryanBrandWarrantyMapping(input = {}) {
   }
 
   const invalidation = await invalidateElryanBrandWarrantyPreviews(brandId);
-  const confirmedAfter = await ElryanConfirmedSend.find({ environment: "staging" })
+  const confirmedAfter = await ElryanConfirmedSend.find({ environment })
     .select("productId payloadHash elryanProductId httpStatus confirmedAt")
     .sort({ productId: 1 })
     .lean();
@@ -375,7 +376,7 @@ export async function saveElryanBrandWarrantyMapping(input = {}) {
   return {
     ok: true,
     saved: true,
-    environment: "staging",
+    environment,
     autoAssigned: false,
     productPostCalled: false,
     productWritesEnabled: getElryanWritesGatePublic().productWritesEnabled,

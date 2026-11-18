@@ -300,8 +300,7 @@ async function prepareContext(environment) {
     warrantyCatalog,
     categoryIndex,
     attributeSets: new Map(),
-    collectionDimensions:
-      environment === "staging" ? await loadAllElryanCollectionDimensionRules() : new Map(),
+    collectionDimensions: await loadAllElryanCollectionDimensionRules(environment),
   };
 }
 

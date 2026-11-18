@@ -46,16 +46,17 @@ function missing(reason, identity, extra = {}) {
   };
 }
 
-function ruleMatchesCollection(rule, collectionId) {
-  return Boolean(rule) && rule.environment === "staging" && String(rule.brownCollectionId || "") === String(collectionId || "");
+function ruleMatchesCollection(rule, collectionId, environment = "staging") {
+  const env = environment === "production" ? "production" : "staging";
+  return Boolean(rule) && rule.environment === env && String(rule.brownCollectionId || "") === String(collectionId || "");
 }
 
 /**
  * How a stored collection rule behaves for a product that has no higher-priority source.
  * Parent categories are never consulted. The caller must pass this collection's own rule.
  */
-export function elryanCollectionRuleBucket(rule, collectionId) {
-  if (!ruleMatchesCollection(rule, collectionId)) return { bucket: "missing", reason: "missing_mapping" };
+export function elryanCollectionRuleBucket(rule, collectionId, environment = "staging") {
+  if (!ruleMatchesCollection(rule, collectionId, environment)) return { bucket: "missing", reason: "missing_mapping" };
   if (rule.applyMode === "DISABLED" || rule.enabled !== true) return { bucket: "missing", reason: "disabled" };
   const width = positiveElryanDimension(rule.width);
   const height = positiveElryanDimension(rule.height);
@@ -82,7 +83,7 @@ export function summarizeCollectionDimensionCoverage({
   collectionId = "",
 } = {}) {
   const inheritable = Math.max(0, Number(productCount) - Number(productOverride) - Number(excludedOnly) - Number(ambiguousOnly));
-  const decision = elryanCollectionRuleBucket(rule, collectionId);
+  const decision = elryanCollectionRuleBucket(rule, collectionId, rule?.environment === "production" ? "production" : "staging");
   const counts = {
     productCount: Number(productCount) || 0,
     productOverride: Number(productOverride) || 0,
@@ -138,10 +139,7 @@ export function resolveElryanDimensions({
       };
     }
   }
-  if (env === "production") {
-    return missing("production_isolated", identity);
-  }
-  if (env !== "staging") {
+  if (env !== "staging" && env !== "production") {
     return missing("unsupported_environment", identity);
   }
 
@@ -150,7 +148,10 @@ export function resolveElryanDimensions({
   }
   if (excluded) return missing("excluded", identity);
 
-  const decision = elryanCollectionRuleBucket(collectionRule, identity.collectionId);
+  const decision = elryanCollectionRuleBucket(collectionRule, identity.collectionId, env);
+  if (env === "production" && decision.reason === "missing_mapping") {
+    return missing("production_isolated", identity);
+  }
   if (decision.bucket === "auto") {
     return {
       source: ELRYAN_DIMENSION_SOURCE.COLLECTION_AUTO,
@@ -158,6 +159,7 @@ export function resolveElryanDimensions({
       usable: true,
       code: "",
       reason: "collection_auto",
+      environment: env,
       unit: "cm",
       width: decision.width,
       height: decision.height,
@@ -213,7 +215,10 @@ export function presentElryanPackageDimensions(dimensions) {
     return {
       ...base,
       status: "CONFIRMED",
-      note: "Inherited from a Staging collection rule the operator confirmed as packed shipping-carton dimensions for that collection's eligible products. This is not a measurement of each product.",
+      note:
+        dimensions?.environment === "production"
+          ? "Inherited from a Production collection rule the operator saved for that collection's eligible products. Staging measurements were not used, and this is not a measurement of each product."
+          : "Inherited from a Staging collection rule the operator confirmed as packed shipping-carton dimensions for that collection's eligible products. This is not a measurement of each product.",
     };
   }
   if (source === ELRYAN_DIMENSION_SOURCE.SUGGESTED) {

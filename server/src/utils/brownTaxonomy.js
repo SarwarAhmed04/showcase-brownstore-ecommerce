@@ -68,12 +68,12 @@ export async function discoverBrownCollections() {
           subCategoryId: {
             $first: { $toString: { $ifNull: ["$subCategory._id", ""] } },
           },
-          subCategoryName: { $first: "$subCategory.name" },
           subCategoryIds: {
             $addToSet: { $toString: { $ifNull: ["$subCategory._id", ""] } },
           },
           categoryId: { $first: { $toString: { $ifNull: ["$category._id", ""] } } },
-          categoryName: { $first: "$category.name" },
+          categoryName: { $first: { $ifNull: ["$category.name", "$collectionName.category.name"] } },
+          subCategoryName: { $first: { $ifNull: ["$subCategory.name", "$collectionName.subcategory.name"] } },
           categoryIds: {
             $addToSet: { $toString: { $ifNull: ["$category._id", ""] } },
           },

@@ -1,13 +1,13 @@
 import mongoose from "mongoose";
 
 /**
- * One Staging shipping-carton dimension rule for a BrownStore collection.
- * Eligible products inherit it at preview time. It is not copied onto products.
- * Production never reads this collection.
+ * One shipping-carton dimension rule for a BrownStore collection.
+ * Staging and Production each have their own rule. Eligible products inherit
+ * the rule for the active environment at preview time. It is not copied onto products.
  */
 const elryanCollectionDimensionSchema = new mongoose.Schema(
   {
-    environment: { type: String, required: true, enum: ["staging"] },
+    environment: { type: String, required: true, enum: ["staging", "production"] },
     brownCollectionId: { type: String, required: true },
     width: { type: Number, required: true },
     height: { type: Number, required: true },

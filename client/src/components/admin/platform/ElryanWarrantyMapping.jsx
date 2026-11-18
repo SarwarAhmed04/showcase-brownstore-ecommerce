@@ -105,6 +105,7 @@ export default function ElryanWarrantyMapping({ t }) {
       const result = await api.saveElryanWarrantyMapping({
         brownKey: selected.brownKey,
         elryanCode: selectedWarranty.code,
+        environment: page?.environment,
         confirmCoverage: true,
         confirmOverwrite: confirmOverwrite === true,
       });
@@ -138,7 +139,9 @@ export default function ElryanWarrantyMapping({ t }) {
           )}
         </p>
         <p className="mt-2 text-sm font-semibold text-brown">
-          {text(t, "elryanWarrantyStagingBanner", "Staging only. Production warranties and mappings are not read or changed here.")}
+          {page?.environment === "production"
+            ? text(t, "elryanWarrantyProductionBanner", "Production. Staging warranties are not read or changed here.")
+            : text(t, "elryanWarrantyStagingBanner", "Staging. Production warranties are not read or changed here.")}
         </p>
         <p className="mt-2 max-w-3xl text-xs font-semibold text-brown/60">
           {text(
@@ -255,6 +258,7 @@ export default function ElryanWarrantyMapping({ t }) {
 
         <form onSubmit={save} className="h-fit space-y-4 rounded-[1.75rem] bg-white p-5 ring-1 ring-brown/10">
           <h3 className="font-display text-xl text-brown">{text(t, "elryanWarrantyEdit", "Edit mapping")}</h3>
+          <div className="grid gap-3 md:grid-cols-2">
           <label className="block text-sm font-semibold text-brown">
             {text(t, "elryanWarrantySelectBrand", "BrownStore brand")}
             <select
@@ -296,6 +300,7 @@ export default function ElryanWarrantyMapping({ t }) {
               ))}
             </select>
           </label>
+          </div>
 
           {review ? (
             <div className="rounded-2xl bg-cream px-4 py-3 text-sm text-brown">

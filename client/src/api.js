@@ -589,6 +589,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body || {}),
     }),
+  elryanPairMapping: (kind) =>
+    request(`/api/admin/platforms/elryan/pair-mapping?kind=${encodeURIComponent(kind)}`),
   elryanValueMappings: (kind) => {
     const qs = kind ? `?kind=${encodeURIComponent(kind)}` : "";
     return request(`/api/admin/platforms/elryan/value-mappings${qs}`);

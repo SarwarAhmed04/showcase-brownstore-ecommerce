@@ -11,7 +11,12 @@ import {
   elryanScopedValueStorageKey,
   resolveElryanScopedValue,
 } from "../utils/elryanValueResolve.js";
-import { normalizeElryanMappingEnvironment } from "../utils/elryanTaxonomyMapping.js";
+import { brownColourKey } from "../utils/elryanColour.js";
+import {
+  assertElryanSaveEnvironment,
+  normalizeElryanMappingEnvironment,
+} from "../utils/elryanTaxonomyMapping.js";
+import { getElryanConnectionPublic } from "./elryanConnection.js";
 import { ElryanClientError } from "./elryanClient.js";
 import {
   elryanAttributeSupportsValueList,
@@ -135,6 +140,20 @@ export async function upsertElryanValueMapping(input = {}) {
   ).lean();
 }
 
+/**
+ * Save a brand or colour pair for the environment shown when the options loaded.
+ * Remote verification uses that same active connection. A later environment change
+ * saves nothing.
+ */
+export async function saveElryanScopedValueMapping(input = {}) {
+  const connection = await getElryanConnectionPublic();
+  const active = connection.environment === "production" ? "production" : "staging";
+  if (input.environment != null && String(input.environment).trim() !== "") {
+    assertElryanSaveEnvironment(input.environment, active);
+  }
+  return upsertElryanValueMapping({ ...input, environment: active });
+}
+
 export async function deleteElryanValueMapping(kind, brownKey) {
   await ElryanValueMapping.deleteOne({ kind, brownKey: normalizeKey(brownKey) });
   return { ok: true };
@@ -179,16 +198,9 @@ export async function resolveElryanWarrantyForProduct(doc, environment) {
 }
 
 export function brownColourKeyFromResolved(resolved, variation) {
-  const label = variation?.colourLabel || "";
-  if (label) return String(label).trim().toLowerCase();
-  const variant = resolved?.variants?.[0];
-  const colour =
-    variant?.color?.name?.en ||
-    variant?.color?.en ||
-    variant?.color?.name ||
-    (typeof variant?.color === "string" ? variant.color : "") ||
-    "";
-  return String(colour).trim().toLowerCase();
+  const fromVariation = brownColourKey(variation?.colourLabel);
+  if (fromVariation) return fromVariation;
+  return brownColourKey(resolved?.variants?.[0]?.color);
 }
 
 /** @deprecated Prefer explicitElryanProductWarrantyKey. "default" means no explicit key. */

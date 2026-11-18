@@ -1,3 +1,5 @@
+import { brownColourKey, brownColourLabel } from "./elryanColour.js";
+
 /**
  * Elryan marketplace-api create schema has colourId + single quantity, no verified multi-size array.
  * Multi-size / multi-variant products are blocked until Elryan confirms the model.
@@ -20,13 +22,8 @@ export function assessElryanSellableUnits(resolvedProduct) {
   let sizeCount = 0;
   const colourLabels = new Set();
   for (const variant of variants) {
-    const colour =
-      variant?.color?.name?.en ||
-      variant?.color?.en ||
-      variant?.color?.name ||
-      (typeof variant?.color === "string" ? variant.color : "") ||
-      "";
-    if (String(colour).trim()) colourLabels.add(String(colour).trim().toLowerCase());
+    const colour = brownColourLabel(variant?.color);
+    if (colour) colourLabels.add(brownColourKey(variant?.color));
     const sizes = Array.isArray(variant?.sizes) ? variant.sizes : [];
     sizeCount += sizes.length;
     for (const size of sizes) {
@@ -50,12 +47,7 @@ export function assessElryanSellableUnits(resolvedProduct) {
   if (colourLabels.size > 1) reasons.push("multi_colour_unverified");
 
   const uniqueReasons = [...new Set(reasons)];
-  const colourLabel =
-    variants[0]?.color?.name?.en ||
-    variants[0]?.color?.en ||
-    variants[0]?.color?.name ||
-    (typeof variants[0]?.color === "string" ? variants[0].color : "") ||
-    "";
+  const colourLabel = brownColourLabel(variants[0]?.color);
 
   return {
     ok: uniqueReasons.length === 0,

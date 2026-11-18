@@ -39,6 +39,7 @@ import {
 import {
   deleteElryanValueMapping,
   listElryanValueMappings,
+  saveElryanScopedValueMapping,
   upsertElryanValueMapping,
 } from "../services/elryanAttributeMapping.js";
 import { verifyElryanAttributeValueFromList } from "../services/elryanAttributeValueCatalog.js";
@@ -424,6 +425,7 @@ elryanConnectionRouter.post("/platforms/elryan/warranty-mapping", async (req, re
         await saveElryanBrandWarrantyMapping({
           brownKey: req.body?.brownKey,
           elryanCode: req.body?.elryanCode,
+          environment: req.body?.environment,
           confirmCoverage: req.body?.confirmCoverage === true,
           confirmOverwrite: req.body?.confirmOverwrite === true,
         }),
@@ -465,6 +467,15 @@ elryanConnectionRouter.get("/platforms/elryan/sku-exists", async (req, res) => {
 
 // --- Local attribute mappings (no Elryan write) ---
 
+elryanConnectionRouter.get("/platforms/elryan/pair-mapping", async (req, res) => {
+  try {
+    const { listElryanPairMapping } = await import("../services/elryanPairMapping.js");
+    res.json(assertNoElryanSecretLeak(await listElryanPairMapping(req.query.kind), ""));
+  } catch (err) {
+    fail(res, err, "Failed to load Elryan pair mapping");
+  }
+});
+
 elryanConnectionRouter.get("/platforms/elryan/value-mappings", async (req, res) => {
   try {
     res.json({ mappings: await listElryanValueMappings(req.query.kind) });
@@ -476,13 +487,18 @@ elryanConnectionRouter.get("/platforms/elryan/value-mappings", async (req, res) 
 elryanConnectionRouter.put("/platforms/elryan/value-mappings", async (req, res) => {
   try {
     const body = req.body || {};
-    let input = body;
     const kind = String(body.kind || "");
-    if (kind === "warranty" || kind === "brand" || kind === "color") {
-      const connection = await getElryanConnectionPublic();
-      input = { ...body, environment: connection.environment || "staging" };
-    }
-    const row = await upsertElryanValueMapping(input);
+    const row =
+      kind === "brand" || kind === "color"
+        ? await saveElryanScopedValueMapping(body)
+        : await upsertElryanValueMapping(
+            kind === "warranty"
+              ? {
+                  ...body,
+                  environment: (await getElryanConnectionPublic()).environment || "staging",
+                }
+              : body
+          );
     res.json({ mapping: row });
   } catch (err) {
     fail(res, err, "Failed to save Elryan value mapping");

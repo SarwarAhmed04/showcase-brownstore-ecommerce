@@ -284,7 +284,6 @@ describe("Elryan brand warranty mapping", () => {
       const target = String(url);
       const method = String(options.method || "GET").toUpperCase();
       calls.push(`${method} ${target}`);
-      assert.equal(target.includes("://marketplace-api.elryan.com"), false);
       if (method !== "GET") return mockResponse(500, { message: "product write blocked" });
       if (!target.includes("/v1/warranty")) return mockResponse(404, { message: "unexpected" });
       return mockResponse(200, {
@@ -574,18 +573,31 @@ describe("Elryan brand warranty mapping", () => {
     assert.equal(calls.some((line) => line.startsWith("POST") || line.startsWith("PATCH") || line.startsWith("PUT")), false);
   });
 
-  it("does not read or save warranties while the connection is Production", async () => {
-    await ElryanConnection.updateOne({ singletonKey: "default" }, { $set: { environment: "production" } });
-    calls.length = 0;
-    await assert.rejects(() => listElryanWarrantyMappingPage(), (error) => error.code === "production_isolated");
-    await assert.rejects(
-      () => saveElryanBrandWarrantyMapping({ brownKey: INGCO, elryanCode: INGCO_CODE, confirmCoverage: true }),
-      (error) => error.code === "production_isolated"
+  it("keeps a Production warranty mapping separate from the Staging brand default", async () => {
+    await ElryanConnection.updateOne(
+      { singletonKey: "default" },
+      { $set: { environment: "production", productionApiKeyEnc: encryptApiKey(API_KEY) } }
     );
-    assert.equal(calls.length, 0);
-    assert.equal(await ElryanValueMapping.countDocuments({ kind: "warranty" }), 1);
-    const kenwood = await ElryanValueMapping.findOne({ kind: "warranty" }).lean();
-    assert.equal(kenwood.elryanCode, KENWOOD_CODE);
-    assert.equal(kenwood.environment, "staging");
+    calls.length = 0;
+    const page = await listElryanWarrantyMappingPage();
+    assert.equal(page.environment, "production");
+    assert.equal(page.fresh, true);
+    assert.equal(calls.some((line) => line.includes("/v1/warranty") && line.includes("fresh=true")), true);
+    assert.equal(page.brands.find((row) => row.brownKey === KENWOOD)?.warranty, null);
+    const saved = await saveElryanBrandWarrantyMapping({
+      brownKey: INGCO,
+      elryanCode: INGCO_CODE,
+      confirmCoverage: true,
+    });
+    assert.equal(saved.environment, "production");
+    assert.equal(saved.readBack.elryanCode, INGCO_CODE);
+    const rows = await ElryanValueMapping.find({ kind: "warranty" }).lean();
+    assert.equal(rows.filter((row) => row.environment === "staging" && row.elryanCode === KENWOOD_CODE).length, 1);
+    assert.equal(rows.filter((row) => row.environment === "production" && row.elryanCode === INGCO_CODE).length, 1);
+    await ElryanConnection.updateOne({ singletonKey: "default" }, { $set: { environment: "staging" } });
+    const staging = await listElryanWarrantyMappingPage();
+    assert.equal(staging.environment, "staging");
+    assert.equal(staging.brands.find((row) => row.brownKey === INGCO)?.warranty, null);
+    assert.equal(staging.brands.find((row) => row.brownKey === KENWOOD)?.warranty?.code, KENWOOD_CODE);
   });
 });

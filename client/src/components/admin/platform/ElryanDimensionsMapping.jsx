@@ -25,7 +25,7 @@ function label(name, lang) {
 function taxonomyPath(row, lang) {
   return [label(row?.brownCategoryName, lang), label(row?.brownSubCategoryName, lang), label(row?.brownCollectionName, lang)]
     .filter(Boolean)
-    .join(" → ");
+    .join(" > ");
 }
 
 function Stat({ label: statLabel, value }) {
@@ -53,12 +53,54 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [drafts, setDrafts] = useState({});
+  const [collectionDrafts, setCollectionDrafts] = useState({});
 
   async function loadCatalog() {
     const data = await api.elryanCollectionDimensions();
-    setCatalog(data.collections || []);
-    setActiveEnvironment(data.activeEnvironment || "staging");
+    const rows = data.collections || [];
+    setCatalog(rows);
+    setActiveEnvironment(data.environment || data.activeEnvironment || "staging");
+    setCollectionDrafts((current) => {
+      const next = { ...current };
+      for (const row of rows) {
+        if (next[row.brownCollectionId]) continue;
+        next[row.brownCollectionId] = {
+          width: row.rule?.width ?? "",
+          height: row.rule?.height ?? "",
+          depth: row.rule?.depth ?? "",
+        };
+      }
+      return next;
+    });
     return data;
+  }
+
+  async function saveCollection(id, draft) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await api.saveElryanCollectionDimension({
+        environment: activeEnvironment,
+        brownCollectionId: id,
+        width: Number(draft.width),
+        height: Number(draft.height),
+        depth: Number(draft.depth),
+        unit: "cm",
+        applyMode: "AUTO_APPLY",
+        enabled: true,
+        verifiedForCollection: true,
+        confirm: true,
+        confirmAutoApply: true,
+      });
+      setMessage(t.elryanDimSaved);
+      await loadCatalog();
+      if (collectionId === id) await loadDetail(id, 1, reason);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function loadDetail(id, nextPage = 1, nextReason = reason) {
@@ -309,6 +351,76 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
             ))}
           </select>
         </label>
+      </div>
+
+      <div className="space-y-3">
+        {collections.map((row) => {
+          const draft = collectionDrafts[row.brownCollectionId] || {
+            width: row.rule?.width ?? "",
+            height: row.rule?.height ?? "",
+            depth: row.rule?.depth ?? "",
+          };
+          return (
+            <article key={row.brownCollectionId} className="rounded-3xl bg-white p-4 ring-1 ring-brown/10">
+              <p className="text-sm font-semibold text-brown">{taxonomyPath(row, lang)}</p>
+              <p className="mt-1 text-xs text-brown/50">
+                {row.brownCollectionId} · {t.elryanDimProductCount}: {row.productCount}
+              </p>
+              <div className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
+                <label className="text-sm font-semibold text-brown">
+                  {t.elryanDimWidth}
+                  <input
+                    className={`${CONTROL} mt-2`}
+                    inputMode="decimal"
+                    value={draft.width}
+                    onChange={(event) =>
+                      setCollectionDrafts((current) => ({
+                        ...current,
+                        [row.brownCollectionId]: { ...draft, width: event.target.value },
+                      }))
+                    }
+                  />
+                </label>
+                <label className="text-sm font-semibold text-brown">
+                  {t.elryanDimHeight}
+                  <input
+                    className={`${CONTROL} mt-2`}
+                    inputMode="decimal"
+                    value={draft.height}
+                    onChange={(event) =>
+                      setCollectionDrafts((current) => ({
+                        ...current,
+                        [row.brownCollectionId]: { ...draft, height: event.target.value },
+                      }))
+                    }
+                  />
+                </label>
+                <label className="text-sm font-semibold text-brown">
+                  {t.elryanDimDepth}
+                  <input
+                    className={`${CONTROL} mt-2`}
+                    inputMode="decimal"
+                    value={draft.depth}
+                    onChange={(event) =>
+                      setCollectionDrafts((current) => ({
+                        ...current,
+                        [row.brownCollectionId]: { ...draft, depth: event.target.value },
+                      }))
+                    }
+                  />
+                </label>
+                <button
+                  type="button"
+                  className={BUTTON}
+                  disabled={busy}
+                  onClick={() => saveCollection(row.brownCollectionId, draft)}
+                >
+                  {t.elryanDimSave || "Save"}
+                </button>
+              </div>
+            </article>
+          );
+        })}
       </div>
 
       {selected ? (

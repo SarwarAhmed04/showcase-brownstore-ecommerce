@@ -53,7 +53,7 @@ function objectIds(ids) {
 export function publicCollectionDimensionRule(rule) {
   if (!rule) return null;
   return {
-    environment: "staging",
+    environment: rule.environment === "production" ? "production" : "staging",
     brownCollectionId: String(rule.brownCollectionId || ""),
     width: rule.width,
     height: rule.height,
@@ -70,9 +70,15 @@ export function publicCollectionDimensionRule(rule) {
   };
 }
 
-export async function loadAllElryanCollectionDimensionRules() {
-  const rules = await ElryanCollectionDimension.find({ environment: "staging" }).lean();
+export async function loadAllElryanCollectionDimensionRules(environment = "staging") {
+  const env = environment === "production" ? "production" : "staging";
+  const rules = await ElryanCollectionDimension.find({ environment: env }).lean();
   return new Map(rules.map((rule) => [String(rule.brownCollectionId), rule]));
+}
+
+async function activeDimensionEnvironment() {
+  const connection = await getElryanConnectionPublic();
+  return connection.environment === "production" ? "production" : "staging";
 }
 
 /**
@@ -86,14 +92,34 @@ export async function loadElryanDimensionInputs(environment, docs, rulesMap = nu
   }
   if (environment === "production") {
     const productIds = docs.map((doc) => String(doc._id));
-    const checks = await ElryanStagingDimensionCheck.find({
-      environment: "production",
-      productId: { $in: productIds },
-    }).lean();
+    const collectionIds = [
+      ...new Set(
+        docs
+          .map((doc) => brownCollectionIdentity(doc))
+          .filter((identity) => identity.collectionId && !identity.ambiguous)
+          .map((identity) => identity.collectionId)
+      ),
+    ];
+    const [checks, loadedRules] = await Promise.all([
+      ElryanStagingDimensionCheck.find({
+        environment: "production",
+        productId: { $in: productIds },
+      }).lean(),
+      rulesMap instanceof Map
+        ? Promise.resolve(null)
+        : ElryanCollectionDimension.find({
+            environment: "production",
+            brownCollectionId: { $in: collectionIds },
+          }).lean(),
+    ]);
+    const rules = rulesMap instanceof Map ? rulesMap : new Map();
+    if (Array.isArray(loadedRules)) {
+      for (const rule of loadedRules) rules.set(String(rule.brownCollectionId), rule);
+    }
     return {
       checks: new Map(checks.map((row) => [String(row.productId), row])),
       exclusions: new Set(),
-      rules: new Map(),
+      rules,
     };
   }
   if (environment !== "staging") {
@@ -176,13 +202,14 @@ const AMBIGUOUS_EXPR = {
   },
 };
 
-async function coverageNumbers(collectionId, rule) {
+async function coverageNumbers(collectionId, rule, environment = "staging") {
+  const env = environment === "production" ? "production" : "staging";
   const filter = collectionIdFilter(collectionId);
   const [productCount, ambiguousCount, checks, exclusions] = await Promise.all([
     Product.countDocuments(filter),
     Product.countDocuments({ $and: [filter, AMBIGUOUS_EXPR] }),
-    ElryanStagingDimensionCheck.find({ environment: "staging", axesConfirmed: true }).lean(),
-    ElryanDimensionExclusion.find({ environment: "staging", excluded: true }).select("productId").lean(),
+    ElryanStagingDimensionCheck.find({ environment: env, axesConfirmed: true }).lean(),
+    ElryanDimensionExclusion.find({ environment: env, excluded: true }).select("productId").lean(),
   ]);
   const confirmed = checks.filter((row) => assessElryanDimensionConfirmation(row).confirmed);
   const overrideIds = await productsInCollection(
@@ -256,16 +283,17 @@ async function collectionSample(collectionId) {
 }
 
 export async function listElryanCollectionDimensionCatalog() {
+  const active = await activeDimensionEnvironment();
   const [discovered, rules, connection] = await Promise.all([
     discoverBrownCollections(),
-    ElryanCollectionDimension.find({ environment: "staging" }).lean(),
+    ElryanCollectionDimension.find({ environment: active }).lean(),
     getElryanConnectionPublic(),
   ]);
   const byId = new Map(rules.map((rule) => [String(rule.brownCollectionId), publicCollectionDimensionRule(rule)]));
   return {
-    environment: "staging",
+    environment: active,
     activeEnvironment: connection.environment === "production" ? "production" : "staging",
-    stagingOnly: true,
+    stagingOnly: active === "staging",
     sentToElryan: 0,
     diagnostics: discovered.diagnostics,
     collections: discovered.collections.map((row) => ({
@@ -278,17 +306,18 @@ export async function listElryanCollectionDimensionCatalog() {
 export async function getElryanCollectionDimensionDetail(brownCollectionId) {
   const collectionId = String(brownCollectionId || "").trim();
   if (!collectionId) throw inputError("Choose a BrownStore collection.", "collection_required");
+  const active = await activeDimensionEnvironment();
   const [rule, sample, connection] = await Promise.all([
-    ElryanCollectionDimension.findOne({ environment: "staging", brownCollectionId: collectionId }).lean(),
+    ElryanCollectionDimension.findOne({ environment: active, brownCollectionId: collectionId }).lean(),
     collectionSample(collectionId),
     getElryanConnectionPublic(),
   ]);
-  const counts = await coverageNumbers(collectionId, rule);
+  const counts = await coverageNumbers(collectionId, rule, active);
   if (!counts.productCount) throw inputError("That BrownStore collection was not found.", "collection_not_found");
   return {
-    environment: "staging",
+    environment: active,
     activeEnvironment: connection.environment === "production" ? "production" : "staging",
-    stagingOnly: true,
+    stagingOnly: active === "staging",
     sentToElryan: 0,
     brownCollectionId: collectionId,
     ...sample,
@@ -298,9 +327,10 @@ export async function getElryanCollectionDimensionDetail(brownCollectionId) {
   };
 }
 
-async function assertNoActivePreview() {
+async function assertNoActivePreview(environment = "staging") {
+  const env = environment === "production" ? "production" : "staging";
   const active = await ElryanSyncJob.findOne({
-    environment: "staging",
+    environment: env,
     status: { $in: ["running", "paused"] },
   })
     .select("_id status")
@@ -314,7 +344,8 @@ async function assertNoActivePreview() {
   }
 }
 
-export async function invalidateInheritedDimensionPreviews(brownCollectionId) {
+export async function invalidateInheritedDimensionPreviews(brownCollectionId, environment = "staging") {
+  const env = environment === "production" ? "production" : "staging";
   const filter = collectionIdFilter(brownCollectionId);
   let affectedProducts = 0;
   let invalidatedPreviewTokens = 0;
@@ -326,7 +357,7 @@ export async function invalidateInheritedDimensionPreviews(brownCollectionId) {
     lastId = products[products.length - 1]._id;
     const ids = products.map((row) => String(row._id));
     const checks = await ElryanStagingDimensionCheck.find({
-      environment: "staging",
+      environment: env,
       productId: { $in: ids },
     }).lean();
     const protectedIds = new Set(
@@ -344,8 +375,13 @@ export async function saveElryanCollectionDimension(input = {}, actor = null) {
   if (input.confirm !== true) {
     throw inputError("Saving a collection dimension rule requires confirm=true.", "confirm_required");
   }
-  if (String(input.environment || "staging") !== "staging") {
-    throw inputError("Collection dimension rules can be stored for Staging only. Production is unchanged.", "staging_only");
+  const active = await activeDimensionEnvironment();
+  const requested = input.environment === "production" || input.environment === "staging" ? input.environment : active;
+  if (requested !== active) {
+    throw inputError(
+      "Collection dimension rules are stored for the active Elryan environment only. The other environment is unchanged.",
+      "staging_only"
+    );
   }
   const brownCollectionId = String(input.brownCollectionId || "").trim();
   if (!brownCollectionId) throw inputError("Choose a BrownStore collection.", "collection_required");
@@ -370,12 +406,12 @@ export async function saveElryanCollectionDimension(input = {}, actor = null) {
   }
   const exists = await Product.exists(collectionIdFilter(brownCollectionId));
   if (!exists) throw inputError("That BrownStore collection was not found.", "collection_not_found");
-  await assertNoActivePreview();
+  await assertNoActivePreview(active);
 
   const enabled = applyMode !== "DISABLED" && input.enabled === true;
   const verifiedForCollection = applyMode === "AUTO_APPLY" && input.verifiedForCollection === true;
   const saved = await ElryanCollectionDimension.findOneAndUpdate(
-    { environment: "staging", brownCollectionId },
+    { environment: active, brownCollectionId },
     {
       $set: {
         width,
@@ -392,7 +428,7 @@ export async function saveElryanCollectionDimension(input = {}, actor = null) {
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   ).lean();
-  const invalidation = await invalidateInheritedDimensionPreviews(brownCollectionId);
+  const invalidation = await invalidateInheritedDimensionPreviews(brownCollectionId, active);
   return {
     ok: true,
     sentToElryan: 0,
