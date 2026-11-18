@@ -682,10 +682,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  elryanApprovePrice: (productId) =>
+  elryanApprovePrice: (productId, reviewedPrice) =>
     request("/api/admin/platforms/elryan/staging-price-approvals", {
       method: "POST",
-      body: JSON.stringify({ productId, confirm: true }),
+      body: JSON.stringify({ productId, confirm: true, reviewedPrice }),
     }),
   elryanProductWarranty: (body) =>
     request("/api/admin/platforms/elryan/product-warranty-mapping", {

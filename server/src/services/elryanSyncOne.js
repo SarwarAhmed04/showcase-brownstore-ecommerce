@@ -1202,7 +1202,7 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
   }
 }
 
-export async function approveElryanStagingPrice({ productId, confirm } = {}) {
+export async function approveElryanStagingPrice({ productId, confirm, reviewedPrice } = {}) {
   if (confirm !== true) {
     throw inputError("Pricing approval requires confirm=true.", "confirm_required");
   }
@@ -1212,7 +1212,7 @@ export async function approveElryanStagingPrice({ productId, confirm } = {}) {
     throw inputError("Pricing approval is Staging only.", "staging_only");
   }
   const sku = String(assembled.resolved?.sku || "");
-  if (sku !== ELRYAN_FIRST_STAGING_CREATE_SKU) {
+  if (environment !== "production" && sku !== ELRYAN_FIRST_STAGING_CREATE_SKU) {
     throw inputError("This approval is limited to SKU OWCH180002.", "first_test_sku_only");
   }
   const price = Number(assembled.payload.price);
@@ -1222,6 +1222,12 @@ export async function approveElryanStagingPrice({ productId, confirm } = {}) {
   }
   if (assembled.payload.cost != null) {
     throw inputError("The approved payload must omit cost.", "cost_present");
+  }
+  if (environment === "production" && Number(reviewedPrice) !== price) {
+    throw inputError(
+      "The proposed selling price changed. Open a fresh preview before approving. Nothing was saved.",
+      "preview_stale"
+    );
   }
   const approvedAt = new Date();
   const rate = Number(assembled.pricing?.commissionRate);

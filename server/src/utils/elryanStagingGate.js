@@ -86,7 +86,7 @@ export function matchElryanStagingPriceApproval(approval, context = {}) {
   if (String(approval.productId || "") !== String(context.productId || "")) {
     return { valid: false, reason: "product" };
   }
-  if (sku !== ELRYAN_FIRST_STAGING_CREATE_SKU || approval.sku !== ELRYAN_FIRST_STAGING_CREATE_SKU) {
+  if (approval.sku !== sku || (env === "staging" && sku !== ELRYAN_FIRST_STAGING_CREATE_SKU)) {
     return { valid: false, reason: "sku" };
   }
   if (!context.payloadHash || approval.payloadHash !== context.payloadHash) {

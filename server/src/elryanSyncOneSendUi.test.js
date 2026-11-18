@@ -7,6 +7,8 @@ import {
   describeElryanSendResult,
   elryanProductionConfirmFacts,
   elryanProductionDimensionUpdateRequest,
+  elryanProductionPriceApprovalRequest,
+  productionPriceApprovalReady,
   elryanProductionSendGate,
   elryanProductionSendRequest,
   elryanStagingSendConfirmFacts,
@@ -294,5 +296,37 @@ describe("Elryan Sync One send UI gate", () => {
       confirm: true,
     });
     assert.equal("width" in request, false);
+  });
+
+  it("confirms a Production price approval with the reviewed selling price and no Elryan write", () => {
+    const blocked = {
+      connection: { environment: "production" },
+      product: { id: "heater-id", sku: "HB-8011NG" },
+      pricing: { proposedElryanPrice: 240750 },
+      blockers: [{ code: "pricing_unverified" }, { code: "dimensions_unverified" }],
+    };
+    assert.equal(productionPriceApprovalReady(blocked), false);
+    const preview = {
+      connection: { environment: "production" },
+      product: { id: "heater-id", sku: "HB-8011NG" },
+      pricing: { proposedElryanPrice: 240750 },
+      blockers: [{ code: "pricing_unverified" }],
+    };
+    assert.equal(productionPriceApprovalReady(preview), true);
+    assert.deepEqual(elryanProductionPriceApprovalRequest({ preview, confirm: true }), {
+      productId: "heater-id",
+      confirm: true,
+      reviewedPrice: 240750,
+    });
+    assert.equal(elryanProductionSendRequest({ preview, writesGate: bothOn, now, confirm: true }), null);
+    const ui = fs.readFileSync(
+      new URL("../../client/src/components/admin/platform/ElryanSyncOneProduct.jsx", import.meta.url),
+      "utf8"
+    );
+    assert.match(ui, /elryanProposedSellingPrice/);
+    assert.match(ui, /elryanApprovePriceConfirm/);
+    assert.equal(ui.split("api.elryanApprovePrice(").length - 1, 1);
+    const approval = ui.slice(ui.indexOf("productionPriceApprovalReady(preview)"), ui.indexOf('preview.product?.sku === "OWCH180002"'));
+    assert.match(approval, /elryanApproveProductionPrice/);
   });
 });

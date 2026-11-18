@@ -415,7 +415,7 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     assert.equal(priced.blockers.some((blocker) => blocker.code === "dimensions_unverified"), false);
     assert.equal(priced.blockers.some((blocker) => blocker.code === "pricing_unverified"), true);
 
-    const approval = await approveElryanStagingPrice({ productId, confirm: true });
+    const approval = await approveElryanStagingPrice({ productId, confirm: true, reviewedPrice: 66500 });
     assert.equal(approval.environment, "production");
     assert.equal(approval.price, 66500);
     const ready = await previewElryanSyncOne({ productId });
@@ -478,7 +478,7 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
       axesConfirmed: true,
       confirm: true,
     });
-    await approveElryanStagingPrice({ productId, confirm: true });
+    await approveElryanStagingPrice({ productId, confirm: true, reviewedPrice: 66500 });
     return previewElryanSyncOne({ productId });
   }
 
@@ -978,5 +978,139 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     assert.equal(stalePatch.code, "preview_stale");
     assert.equal(patches.length, 0);
     assert.equal(posts, 0);
+  });
+
+  it("approves the HB-8011NG Production price locally and does not write to Elryan", async () => {
+    const heater = await Product.create({
+      ibsherId: "ibs-heater",
+      itemCode: "HB-8011NG",
+      name: { en: "Heater" },
+      description: { en: "Heater 400 watts" },
+      price: 240750,
+      brand: { _id: "kenwood-brand", name: { en: "Kenwood" } },
+      collectionName: { _id: "choppers", name: { en: "Choppers" } },
+      variants: [
+        {
+          color: { en: "White" },
+          images: [{ url: "https://cdn.example.com/heater.jpg", isMain: true }],
+          sizes: [{ size: "One", stockQuantity: 3 }],
+        },
+      ],
+      isActive: true,
+    });
+    const heaterId = String(heater._id);
+    await ElryanCategoryCatalogSnapshot.create({
+      environment: "staging",
+      status: "complete",
+      coverage: "complete",
+      categories: [{ id: 999, name: "Staging only", hierarchy: "Staging", isParent: false }],
+    });
+    await ElryanCategoryCatalogSnapshot.create({
+      environment: "production",
+      status: "complete",
+      coverage: "complete",
+      categories: [{ id: 340, name: "Chopper", hierarchy: "Appliances : Chopper", isParent: false }],
+    });
+    await saveElryanVerifiedMapping({ brownCollectionId: "choppers", categoryId: "340", confirm: true });
+    await PlatformTaxonomyConfig.updateOne(
+      { partner: "elryan", brownCollectionId: "choppers" },
+      { $set: { "values.environments.production.attributes": { plug_type: 5 } } }
+    );
+    await upsertElryanValueMapping({
+      kind: "brand",
+      environment: "production",
+      brownKey: "kenwood-brand",
+      brownLabel: "Kenwood",
+      elryanId: "276",
+      elryanLabel: "Kenwood",
+    });
+    await upsertElryanValueMapping({
+      kind: "color",
+      environment: "production",
+      brownKey: "white",
+      brownLabel: "White",
+      elryanId: "59",
+      elryanLabel: "White",
+    });
+    await upsertElryanValueMapping({
+      kind: "warranty",
+      warrantyScope: "brand",
+      environment: "production",
+      brownKey: "kenwood-brand",
+      brownLabel: "Kenwood",
+      elryanCode: "kenwood-chopper",
+      elryanLabel: "Kenwood Food Chopper",
+    });
+    await ElryanStagingDimensionCheck.create({
+      environment: "production",
+      productId: heaterId,
+      sku: "HB-8011NG",
+      unit: "cm",
+      width: 20,
+      height: 30,
+      depth: 40,
+      axesConfirmed: true,
+      confirmedAt: new Date(),
+    });
+
+    const preview = await previewElryanSyncOne({ productId: heaterId });
+    assert.equal(preview.product.sku, "HB-8011NG");
+    assert.equal(preview.pricing.proposedElryanPrice, 240750);
+    assert.equal(preview.proposedPayload.price, 240750);
+    assert.deepEqual(
+      preview.blockers.map((blocker) => blocker.code),
+      ["pricing_unverified"]
+    );
+    assert.notEqual(preview.readiness, "READY");
+
+    const writesBefore = writeCalls.length;
+    await assert.rejects(
+      () => approveElryanStagingPrice({ productId: heaterId, confirm: true, reviewedPrice: 66500 }),
+      (error) => error.code === "preview_stale"
+    );
+    assert.equal(await ElryanStagingPriceApproval.countDocuments({ productId: heaterId }), 0);
+
+    const approval = await approveElryanStagingPrice({
+      productId: heaterId,
+      confirm: true,
+      reviewedPrice: 240750,
+    });
+    assert.equal(approval.environment, "production");
+    assert.equal(approval.productId, heaterId);
+    assert.equal(approval.sku, "HB-8011NG");
+    assert.equal(approval.price, 240750);
+    assert.equal(approval.currency, "IQD");
+    const stored = await ElryanStagingPriceApproval.findOne({ environment: "production", productId: heaterId }).lean();
+    assert.equal(stored.price, 240750);
+
+    const ready = await previewElryanSyncOne({ productId: heaterId });
+    assert.equal(ready.pricingApproval.valid, true);
+    assert.equal(ready.readiness, "READY");
+    assert.equal(ready.blockers.length, 0);
+    assert.equal(ready.productWritesEnabled, false);
+
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const created = await sendElryanProductionOne({
+      productId: heaterId,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(created.code, "first_test_sku_only");
+    const updated = await updateElryanProductionDimensions({
+      productId: heaterId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: "not-a-dimension-token",
+    });
+    delete process.env.ELRYAN_PRODUCT_WRITES_ENABLED;
+    delete process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES;
+    assert.equal(updated.code, "first_test_sku_only");
+    const bulk = await startElryanSyncAll();
+    assert.notEqual(bulk.ok, true);
+    assert.equal(posts, 0);
+    assert.equal(patches.length, 0);
+    assert.equal(writeCalls.length, writesBefore);
+    assert.equal(await ElryanConfirmedSend.countDocuments({ productId: heaterId }), 0);
   });
 });

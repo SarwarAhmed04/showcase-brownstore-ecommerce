@@ -5,6 +5,8 @@ import {
   describeElryanSendResult,
   elryanProductionConfirmFacts,
   elryanProductionDimensionUpdateRequest,
+  elryanProductionPriceApprovalRequest,
+  productionPriceApprovalReady,
   elryanProductionSendGate,
   elryanProductionSendRequest,
   elryanStagingSendConfirmFacts,
@@ -34,6 +36,7 @@ export default function ElryanSyncOneProduct({ t, lang }) {
   const [listingId, setListingId] = useState("");
   const [updatePreview, setUpdatePreview] = useState(null);
   const [updateConfirm, setUpdateConfirm] = useState(false);
+  const [approvalConfirm, setApprovalConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [gateNote, setGateNote] = useState("");
@@ -234,6 +237,7 @@ export default function ElryanSyncOneProduct({ t, lang }) {
       setBusy(false);
     }
   }
+
 
   async function onRefreshSendAttempt() {
     const productId = preview?.product?.id || selected?.id;
@@ -438,6 +442,14 @@ export default function ElryanSyncOneProduct({ t, lang }) {
         </div>
       ) : null}
 
+      {productionPriceApprovalReady(preview) ? (
+        <div className="max-w-3xl rounded-[1.75rem] bg-cream/70 p-5">
+          <button type="button" className={BUTTON} disabled={busy} onClick={() => setApprovalConfirm(true)}>
+            {t.elryanApproveProductionPrice}
+          </button>
+        </div>
+      ) : null}
+
       {preview?.connection?.environment === "production" && preview.product?.sku === "OWCH180002" ? (
         <form
           className="max-w-3xl space-y-3 rounded-[1.75rem] bg-cream/70 p-5"
@@ -467,25 +479,6 @@ export default function ElryanSyncOneProduct({ t, lang }) {
               }}
             >
               {t.elryanSaveKenwoodWarranty}
-            </button>
-            <button
-              type="button"
-              className={BUTTON}
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                setError("");
-                try {
-                  await api.elryanApprovePrice(preview.product.id);
-                  await onPreview();
-                } catch (err) {
-                  setError(err.message);
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              {t.elryanApproveProductionPrice}
             </button>
           </div>
           <div className="grid gap-2 md:grid-cols-3">
@@ -628,6 +621,48 @@ export default function ElryanSyncOneProduct({ t, lang }) {
               </button>
               <button type="button" className={BUTTON} disabled={busy} onClick={onConfirmDimensionUpdate}>
                 {t.elryanUpdateDimensions}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {approvalConfirm && productionPriceApprovalReady(preview) ? (
+        <div className="fixed inset-0 z-40 grid place-items-center bg-brown/40 p-4" role="dialog">
+          <div className="w-full max-w-lg space-y-4 rounded-[1.75rem] bg-white p-6 shadow-xl">
+            <h3 className="font-display text-2xl text-brown">{t.elryanApproveProductionPrice}</h3>
+            <dl className="grid gap-2 text-sm">
+              <div>
+                <dt className="text-brown/45">{t.elryanProposedSellingPrice}</dt>
+                <dd className="font-semibold">{preview.pricing.proposedElryanPrice} IQD</dd>
+              </div>
+            </dl>
+            <p className="text-sm text-brown/70">{t.elryanApprovePriceConfirm}</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className={GHOST} onClick={() => setApprovalConfirm(false)}>
+                {t.elryanSendCancel}
+              </button>
+              <button
+                type="button"
+                className={BUTTON}
+                disabled={busy}
+                onClick={async () => {
+                  const request = elryanProductionPriceApprovalRequest({ preview, confirm: true });
+                  if (!request) return;
+                  setBusy(true);
+                  setError("");
+                  try {
+                    await api.elryanApprovePrice(request.productId, request.reviewedPrice);
+                    setApprovalConfirm(false);
+                    await onPreview();
+                  } catch (err) {
+                    setError(err.message);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {t.elryanApproveProductionPrice}
               </button>
             </div>
           </div>

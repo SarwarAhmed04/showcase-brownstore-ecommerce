@@ -209,6 +209,24 @@ export function describeElryanSendResult(result) {
   return { kind: "other", lines: [], retryBlocked: false, hold: "", tokenConsumed: false };
 }
 
+/** Local Production price approval is available when pricing is the only preview blocker. */
+export function productionPriceApprovalReady(preview) {
+  if (preview?.connection?.environment !== "production") return false;
+  const blockers = Array.isArray(preview?.blockers) ? preview.blockers : [];
+  if (!blockers.length || blockers.some((blocker) => blocker.code !== "pricing_unverified")) return false;
+  return Number(preview?.pricing?.proposedElryanPrice) > 0;
+}
+
+/** Saves the price the operator reviewed. It does not send a product or a price update. */
+export function elryanProductionPriceApprovalRequest({ preview, confirm } = {}) {
+  if (confirm !== true || !productionPriceApprovalReady(preview)) return null;
+  const productId = String(preview?.product?.id || "").trim();
+  const reviewedPrice = Number(preview?.pricing?.proposedElryanPrice);
+  if (!productId || !(reviewedPrice > 0)) return null;
+  return { productId, confirm: true, reviewedPrice };
+}
+
+
 /** Confirm sends the preview identity only. The server rebuilds the dimension patch. */
 export function elryanProductionDimensionUpdateRequest({ updatePreview, confirm } = {}) {
   if (confirm !== true || updatePreview?.updateAllowed !== true) return null;

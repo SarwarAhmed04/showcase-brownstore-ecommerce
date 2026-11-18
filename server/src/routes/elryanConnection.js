@@ -745,6 +745,7 @@ elryanConnectionRouter.post("/platforms/elryan/staging-price-approvals", async (
       await approveElryanStagingPrice({
         productId: req.body?.productId,
         confirm: req.body?.confirm === true,
+        reviewedPrice: req.body?.reviewedPrice,
       })
     );
   } catch (err) {
