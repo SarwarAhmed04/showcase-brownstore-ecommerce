@@ -254,7 +254,9 @@ describe("Elryan warranty mapping page helpers", () => {
   it("adds a Warranty Mapping sidebar item without removing the other Elryan sections", () => {
     const ids = elryanPlatformSectionEntries().map(([id]) => id);
     assert.equal(ids.includes(ELRYAN_WARRANTY_MAPPING_TAB), true);
-    assert.equal(ids.includes("elryanAttributes"), true);
+    assert.equal(ids.includes("elryanBrandMapping"), true);
+    assert.equal(ids.includes("elryanColourMapping"), true);
+    assert.equal(ids.includes("elryanAttributes"), false);
     assert.equal(ids.includes("elryanDimensionsMapping"), true);
     assert.equal(ids.includes("syncOne"), true);
     assert.equal(ids.includes("syncAll"), true);

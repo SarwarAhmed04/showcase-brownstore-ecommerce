@@ -6,7 +6,7 @@
  */
 import ElryanDimensionsMapping from "./ElryanDimensionsMapping";
 import ElryanApiConnection from "./ElryanApiConnection";
-import ElryanAttributeMappings from "./ElryanAttributeMappings";
+import ElryanValueMapping from "./ElryanValueMapping";
 import ElryanWarrantyMapping from "./ElryanWarrantyMapping";
 import ElryanSmartMapping from "./ElryanSmartMapping";
 import ElryanPanelErrorBoundary from "./ElryanPanelErrorBoundary";
@@ -16,6 +16,11 @@ import {
   elryanPlatformSectionEntries,
   isElryanCategoryMappingTab,
 } from "../../../utils/elryanCategoryMappingPage";
+import {
+  ELRYAN_BRAND_MAPPING_TAB,
+  ELRYAN_COLOUR_MAPPING_TAB,
+  ELRYAN_LEGACY_VALUE_MAPPING_TAB,
+} from "../../../utils/elryanValueMappingPage";
 
 export function elryanPlatformSections() {
   return elryanPlatformSectionEntries();
@@ -32,10 +37,17 @@ export default function ElryanPlatformHost({ tab, partnerSlug, t, lang }) {
       </ElryanPanelErrorBoundary>
     );
   }
-  if (tab === "elryanAttributes") {
+  if (tab === ELRYAN_BRAND_MAPPING_TAB || tab === ELRYAN_LEGACY_VALUE_MAPPING_TAB) {
     return (
       <ElryanPanelErrorBoundary t={t}>
-        <ElryanAttributeMappings t={t} />
+        <ElryanValueMapping t={t} kind="brand" />
+      </ElryanPanelErrorBoundary>
+    );
+  }
+  if (tab === ELRYAN_COLOUR_MAPPING_TAB) {
+    return (
+      <ElryanPanelErrorBoundary t={t}>
+        <ElryanValueMapping t={t} kind="color" />
       </ElryanPanelErrorBoundary>
     );
   }

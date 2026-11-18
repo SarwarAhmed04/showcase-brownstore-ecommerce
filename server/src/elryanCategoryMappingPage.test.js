@@ -60,7 +60,9 @@ describe("Elryan unified category mapping page", () => {
     assert.equal(entries.find(([, key]) => key === "elryanCategoryMappingTitle")?.[0], ELRYAN_CATEGORY_MAPPING_TAB);
     assert.equal(ids.includes("elryanDimensionsMapping"), true);
     assert.equal(ids.includes("connection"), true);
-    assert.equal(ids.includes("elryanAttributes"), true);
+    assert.equal(ids.includes("elryanBrandMapping"), true);
+    assert.equal(ids.includes("elryanColourMapping"), true);
+    assert.equal(ids.includes("elryanAttributes"), false);
     assert.equal(ids.includes("syncOne"), true);
     assert.equal(ids.includes("syncAll"), true);
 
@@ -384,13 +386,16 @@ describe("Elryan unified category mapping page", () => {
     for (const snippet of [
       'tab === "connection"',
       "isElryanCategoryMappingTab(tab)",
-      'tab === "elryanAttributes"',
+      'tab === ELRYAN_BRAND_MAPPING_TAB || tab === ELRYAN_LEGACY_VALUE_MAPPING_TAB',
+      'tab === ELRYAN_COLOUR_MAPPING_TAB',
       'tab === "elryanWarrantyMapping"',
       'tab === "elryanDimensionsMapping"',
       'tab === "syncOne"',
       'tab === "syncAll"',
       "<ElryanSmartMapping",
-      "<ElryanAttributeMappings",
+      "<ElryanValueMapping",
+      'kind="brand"',
+      'kind="color"',
       "<ElryanWarrantyMapping",
       "<ElryanDimensionsMapping",
       "<ElryanSyncOneProduct",
@@ -410,7 +415,8 @@ describe("Elryan unified category mapping page", () => {
     for (const id of [
       "connection",
       ELRYAN_CATEGORY_MAPPING_TAB,
-      "elryanAttributes",
+      "elryanBrandMapping",
+      "elryanColourMapping",
       "elryanWarrantyMapping",
       "elryanDimensionsMapping",
       "syncOne",

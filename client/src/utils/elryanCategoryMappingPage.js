@@ -4,6 +4,11 @@
  * Picking a category never persists a mapping.
  */
 import { pickElryanCategoryState } from "./elryanSmartMappingSelect.js";
+import {
+  ELRYAN_BRAND_MAPPING_TAB,
+  ELRYAN_COLOUR_MAPPING_TAB,
+  ELRYAN_LEGACY_VALUE_MAPPING_TAB,
+} from "./elryanValueMappingPage.js";
 
 export const ELRYAN_CATEGORY_MAPPING_TAB = "elryanCategoryMapping";
 
@@ -21,6 +26,7 @@ export function isElryanLegacyCategoryTab(tab) {
 /** Use only for the Elryan partner. GINI still uses the generic mapping tab. */
 export function resolveElryanPlatformTab(tab) {
   if (isElryanLegacyCategoryTab(tab)) return ELRYAN_CATEGORY_MAPPING_TAB;
+  if (tab === ELRYAN_LEGACY_VALUE_MAPPING_TAB) return ELRYAN_BRAND_MAPPING_TAB;
   return tab;
 }
 
@@ -32,7 +38,8 @@ export function elryanPlatformSectionEntries() {
   return [
     ["connection", "elryanApiConnection"],
     [ELRYAN_CATEGORY_MAPPING_TAB, "elryanCategoryMappingTitle"],
-    ["elryanAttributes", "elryanAttributesTitle"],
+    [ELRYAN_BRAND_MAPPING_TAB, "elryanBrandMappingTitle"],
+    [ELRYAN_COLOUR_MAPPING_TAB, "elryanColourMappingTitle"],
     ["elryanWarrantyMapping", "elryanWarrantyMappingTitle"],
     ["elryanDimensionsMapping", "elryanDimensionsMappingTitle"],
     ["syncOne", "elryanSyncOneTitle"],
