@@ -217,12 +217,38 @@ describe("Elryan Sync One send UI gate", () => {
     assert.equal(shouldRetryElryanSend(), false);
   });
 
-  it("confirms Production create with the SKU, approved price, and live stock", () => {
-    const preview = readyPreview({ connection: { environment: "production" } });
+  it("confirms Production create with the selected record, approved price, and live stock", () => {
+    const preview = readyPreview({
+      connection: { environment: "production" },
+      productionListing: { state: "absent" },
+    });
     assert.equal(elryanStagingSendGate({ preview, writesGate: bothOn, now }).reason, "staging_only");
     const decision = elryanProductionSendGate({ preview, writesGate: bothOn, now });
     assert.equal(decision.enabled, true);
+    const heater = readyPreview({
+      connection: { environment: "production" },
+      productionListing: { state: "absent" },
+      product: { ...readyPreview().product, id: "heater-id", sku: "HB-8011NG" },
+    });
+    assert.equal(elryanProductionSendGate({ preview: heater, writesGate: bothOn, now }).enabled, true);
+    assert.equal(
+      elryanProductionSendGate({
+        preview: { ...heater, productionListing: { state: "exists", listing: { id: "elr-1", status: "in_review" } } },
+        writesGate: bothOn,
+        now,
+      }).reason,
+      "sku_already_exists"
+    );
+    assert.equal(
+      elryanProductionSendGate({
+        preview: { ...heater, productionListing: { state: "inconclusive", message: "The listing could not be read." } },
+        writesGate: bothOn,
+        now,
+      }).reason,
+      "listing_unverified"
+    );
     const facts = elryanProductionConfirmFacts(preview);
+    assert.equal(facts.productId, preview.product.id);
     assert.equal(facts.sku, ELRYAN_STAGING_SEND_SKU);
     assert.equal(facts.price, 66250);
     assert.equal(facts.stock, 3);
@@ -265,6 +291,8 @@ describe("Elryan Sync One send UI gate", () => {
     assert.match(ui, /elryanCurrentElryan/);
     assert.match(ui, /elryanProposedBrownStore/);
     assert.match(ui, /elryanSendProduction/);
+    assert.match(ui, /elryanBrownStoreProductId/);
+    assert.match(ui, /\{product\.id\}/);
     assert.match(ui, /elryanApprovedPrice/);
     assert.match(ui, /elryanLiveStock/);
     const probe = ui.slice(ui.indexOf("async function onProbeWritesGate"), ui.indexOf("function onAskSend"));

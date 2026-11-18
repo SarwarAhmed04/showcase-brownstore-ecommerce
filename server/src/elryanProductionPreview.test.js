@@ -9,6 +9,7 @@ import { ElryanCategoryCatalogSnapshot } from "./models/ElryanCategoryCatalogSna
 import { ElryanCollectionDimension } from "./models/ElryanCollectionDimension.js";
 import { ElryanStagingDimensionCheck } from "./models/ElryanStagingDimensionCheck.js";
 import { ElryanStagingPriceApproval } from "./models/ElryanStagingPriceApproval.js";
+import { ElryanProductionSkuReservation } from "./models/ElryanProductionSkuReservation.js";
 import { ElryanSendAttempt } from "./models/ElryanSendAttempt.js";
 import { ElryanConfirmedSend } from "./models/ElryanConfirmedSend.js";
 import { ElryanSyncOnePreview } from "./models/ElryanSyncOnePreview.js";
@@ -33,6 +34,7 @@ import {
 import {
   approveElryanStagingPrice,
   previewElryanSyncOne,
+  searchElryanSyncProducts,
   sendElryanProductionOne,
   sendElryanSyncOne,
 } from "./services/elryanSyncOne.js";
@@ -113,6 +115,7 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
       ElryanStagingDimensionCheck.deleteMany({}),
       ElryanStagingPriceApproval.deleteMany({}),
       ElryanSendAttempt.deleteMany({}),
+      ElryanProductionSkuReservation.deleteMany({}),
       ElryanConfirmedSend.deleteMany({}),
       ElryanSyncOnePreview.deleteMany({}),
       PlatformTaxonomyConfig.deleteMany({}),
@@ -166,7 +169,11 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
             error: { code: "CONFLICT", message: "SKU already used" },
             data: skuConflictOmitsIdentity
               ? {}
-              : { id: skuConflictId, sku: "OWCH180002", status: "in_review" },
+              : {
+                  id: skuConflictId,
+                  sku: new URL(target).searchParams.get("sku") || "OWCH180002",
+                  status: "in_review",
+                },
           });
         }
         if (failNextSku) {
@@ -511,7 +518,7 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     assert.equal(sent.listingStatus, "in_review");
     assert.equal(sent.sku, "OWCH180002");
     assert.equal(posts, 1);
-    assert.equal(skuReads, 1);
+    assert.equal(skuReads, 2);
     assert.equal(createdBody.sku, "OWCH180002");
     assert.equal(createdBody.price, 66500);
     assert.equal(createdBody.quantity, 10);
@@ -523,6 +530,9 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
     createMode = "duplicate";
     const ready = await prepareReady();
+    assert.equal(ready.productionListing.state, "exists");
+    assert.equal(ready.productionListing.listing.id, "elr-existing");
+    assert.equal(ready.productionListing.listing.status, "in_review");
     const sent = await sendElryanProductionOne({
       productId,
       confirm: true,
@@ -548,7 +558,7 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     });
     assert.equal(timedOut.code, "create_timeout");
     assert.equal(posts, 1);
-    assert.equal(skuReads, 2);
+    assert.equal(skuReads, 3);
     const again = await previewElryanSyncOne({ productId });
     createMode = "success";
     const sent = await sendElryanProductionOne({
@@ -1260,12 +1270,6 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
 
     process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
     process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
-    const created = await sendElryanProductionOne({
-      productId: heaterId,
-      confirm: true,
-      previewToken: ready.previewToken,
-    });
-    assert.equal(created.code, "first_test_sku_only");
     const updated = await updateElryanProductionPrice({
       productId: heaterId,
       listingId: LISTING_ID,
@@ -1281,5 +1285,310 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     assert.equal(patches.length, 0);
     assert.equal(writeCalls.length, writesBefore);
     assert.equal(await ElryanConfirmedSend.countDocuments({ productId: heaterId }), 0);
+  });
+
+  async function createReadyHeater({ ibsherId, name, price = 240750 }) {
+    const heater = await Product.create({
+      ibsherId,
+      itemCode: "HB-8011NG",
+      name: { en: name },
+      description: { en: "Heater 400 watts" },
+      price,
+      brand: { _id: "kenwood-brand", name: { en: "Kenwood" } },
+      collectionName: { _id: "choppers", name: { en: "Choppers" } },
+      variants: [
+        {
+          color: { en: "White" },
+          images: [{ url: "https://cdn.example.com/heater.jpg", isMain: true }],
+          sizes: [{ size: "One", stockQuantity: 3 }],
+        },
+      ],
+      isActive: true,
+    });
+    const heaterId = String(heater._id);
+    if (!(await ElryanCategoryCatalogSnapshot.exists({ environment: "production" }))) {
+      await ElryanCategoryCatalogSnapshot.create({
+        environment: "staging",
+        status: "complete",
+        coverage: "complete",
+        categories: [{ id: 999, name: "Staging only", hierarchy: "Staging", isParent: false }],
+      });
+      await ElryanCategoryCatalogSnapshot.create({
+        environment: "production",
+        status: "complete",
+        coverage: "complete",
+        categories: [{ id: 340, name: "Chopper", hierarchy: "Appliances : Chopper", isParent: false }],
+      });
+      await saveElryanVerifiedMapping({ brownCollectionId: "choppers", categoryId: "340", confirm: true });
+      await PlatformTaxonomyConfig.updateOne(
+        { partner: "elryan", brownCollectionId: "choppers" },
+        { $set: { "values.environments.production.attributes": { plug_type: 5 } } }
+      );
+      await upsertElryanValueMapping({
+        kind: "brand",
+        environment: "production",
+        brownKey: "kenwood-brand",
+        brownLabel: "Kenwood",
+        elryanId: "276",
+        elryanLabel: "Kenwood",
+      });
+      await upsertElryanValueMapping({
+        kind: "color",
+        environment: "production",
+        brownKey: "white",
+        brownLabel: "White",
+        elryanId: "59",
+        elryanLabel: "White",
+      });
+      await upsertElryanValueMapping({
+        kind: "warranty",
+        warrantyScope: "brand",
+        environment: "production",
+        brownKey: "kenwood-brand",
+        brownLabel: "Kenwood",
+        elryanCode: "kenwood-chopper",
+        elryanLabel: "Kenwood Food Chopper",
+      });
+    }
+    await ElryanStagingDimensionCheck.create({
+      environment: "production",
+      productId: heaterId,
+      sku: "HB-8011NG",
+      unit: "cm",
+      width: 20,
+      height: 30,
+      depth: 40,
+      axesConfirmed: true,
+      confirmedAt: new Date(),
+    });
+    const preview = await previewElryanSyncOne({ productId: heaterId });
+    await approveElryanStagingPrice({ productId: heaterId, confirm: true, reviewedPrice: preview.pricing.proposedElryanPrice });
+    return previewElryanSyncOne({ productId: heaterId });
+  }
+
+  it("distinguishes two HB-8011NG search results by Brown Store product id", async () => {
+    const first = await Product.create({
+      ibsherId: "ibs-heater-a",
+      itemCode: "HB-8011NG",
+      name: { en: "Heater showroom" },
+      price: 240750,
+      brand: { _id: "kenwood-brand", name: { en: "Kenwood" } },
+      variants: [{ color: { en: "White" }, images: [], sizes: [{ stockQuantity: 1 }] }],
+      isActive: true,
+    });
+    const second = await Product.create({
+      ibsherId: "ibs-heater-b",
+      itemCode: "HB-8011NG",
+      name: { en: "Heater warehouse" },
+      price: 180000,
+      brand: { _id: "other-brand", name: { en: "Other" } },
+      variants: [{ color: { en: "Black" }, images: [], sizes: [{ stockQuantity: 2 }] }],
+      isActive: true,
+    });
+    const found = await searchElryanSyncProducts("HB-8011NG");
+    const rows = found.products.filter((row) => row.sku === "HB-8011NG");
+    assert.equal(rows.length, 2);
+    assert.notEqual(rows[0].id, rows[1].id);
+    assert.deepEqual(rows.map((row) => row.id).sort(), [String(first._id), String(second._id)].sort());
+    assert.equal(rows.find((row) => row.id === String(first._id)).name.en, "Heater showroom");
+    assert.equal(rows.find((row) => row.id === String(second._id)).brand, "Other");
+    assert.equal(rows.find((row) => row.id === String(second._id)).price, 180000);
+    assert.equal(rows.find((row) => row.id === String(first._id)).ibsherId, "ibs-heater-a");
+  });
+
+  it("blocks HB-8011NG creation when the Production listing exists or the lookup is inconclusive", async () => {
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    listingBody = {
+      id: LISTING_ID,
+      sku: "HB-8011NG",
+      status: "in_review",
+      width: 20,
+      height: 30,
+      depth: 40,
+    };
+    createMode = "duplicate";
+    skuConflictId = LISTING_ID;
+    const ready = await createReadyHeater({ ibsherId: "ibs-heater-listed", name: "Listed heater" });
+    assert.equal(ready.productionListing.state, "exists");
+    assert.equal(ready.productionListing.listing.id, LISTING_ID);
+    assert.equal(ready.productionListing.listing.status, "in_review");
+    const existing = await sendElryanProductionOne({
+      productId: ready.product.id,
+      confirm: true,
+      previewToken: ready.previewToken,
+    });
+    assert.equal(existing.code, "sku_already_exists");
+    assert.equal(existing.listing.id, LISTING_ID);
+    assert.equal(existing.listing.status, "in_review");
+    assert.equal(posts, 0);
+
+    skuConflictOmitsIdentity = true;
+    const omitted = await previewElryanSyncOne({ productId: ready.product.id });
+    assert.equal(omitted.productionListing.state, "inconclusive");
+    assert.match(omitted.productionListing.message, /did not include a listing ID/);
+    const blocked = await sendElryanProductionOne({
+      productId: omitted.product.id,
+      confirm: true,
+      previewToken: omitted.previewToken,
+    });
+    assert.equal(blocked.code, "listing_unverified");
+    assert.equal(posts, 0);
+
+    skuConflictOmitsIdentity = false;
+    createMode = "";
+    failNextSku = true;
+    const failed = await previewElryanSyncOne({ productId: ready.product.id });
+    assert.equal(failed.productionListing.state, "inconclusive");
+    assert.equal(failed.productionListing.code, "sku_check_failed");
+    const refused = await sendElryanProductionOne({
+      productId: failed.product.id,
+      confirm: true,
+      previewToken: failed.previewToken,
+    });
+    assert.equal(refused.code, "sku_check_failed");
+    assert.equal(posts, 0);
+  });
+
+  it("creates the selected HB-8011NG record once and refuses a repeat or a changed price", async () => {
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const showroom = await createReadyHeater({ ibsherId: "ibs-heater-showroom", name: "Heater showroom" });
+    const warehouse = await createReadyHeater({ ibsherId: "ibs-heater-warehouse", name: "Heater warehouse" });
+    assert.equal(showroom.productionListing.state, "absent");
+    assert.equal(showroom.readiness, "READY");
+    assert.equal(showroom.pricingApproval.valid, true);
+    const sent = await sendElryanProductionOne({
+      productId: showroom.product.id,
+      confirm: true,
+      previewToken: showroom.previewToken,
+    });
+    assert.equal(sent.ok, true);
+    assert.equal(sent.sku, "HB-8011NG");
+    assert.equal(sent.elryanProductId, "elr-prod-1");
+    assert.equal(sent.listingStatus, "in_review");
+    assert.equal(createdBody.sku, "HB-8011NG");
+    assert.equal(posts, 1);
+
+    const wrongRecord = await sendElryanProductionOne({
+      productId: warehouse.product.id,
+      confirm: true,
+      previewToken: showroom.previewToken,
+    });
+    assert.equal(wrongRecord.code, "preview_mismatch");
+    assert.equal(posts, 1);
+
+    const againPreview = await previewElryanSyncOne({ productId: showroom.product.id });
+    const repeat = await sendElryanProductionOne({
+      productId: showroom.product.id,
+      confirm: true,
+      previewToken: againPreview.previewToken,
+    });
+    assert.equal(repeat.code, "already_sent");
+    assert.equal(repeat.elryanProductId, "elr-prod-1");
+    assert.equal(posts, 1);
+
+    const changed = await Product.findById(showroom.product.id);
+    changed.price = 1000;
+    await changed.save();
+    const stale = await previewElryanSyncOne({ productId: showroom.product.id });
+    assert.notEqual(stale.readiness, "READY");
+    const refused = await sendElryanProductionOne({
+      productId: showroom.product.id,
+      confirm: true,
+      previewToken: stale.previewToken,
+    });
+    assert.notEqual(refused.code, "created");
+    assert.equal(refused.ok, false);
+    assert.equal(posts, 1);
+    const bulk = await startElryanSyncAll({ confirm: true, strategy: "full" });
+    assert.notEqual(bulk.ok, true);
+    assert.equal(posts, 1);
+  });
+
+  it("makes one Production POST when two HB-8011NG records send at the same time", async () => {
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const showroom = await createReadyHeater({ ibsherId: "ibs-race-a", name: "Heater showroom" });
+    const warehouse = await createReadyHeater({ ibsherId: "ibs-race-b", name: "Heater warehouse" });
+    assert.notEqual(showroom.product.id, warehouse.product.id);
+    assert.equal(showroom.readiness, "READY");
+    assert.equal(warehouse.readiness, "READY");
+    assert.equal(showroom.pricingApproval.valid, true);
+    assert.equal(warehouse.pricingApproval.valid, true);
+    let release = () => {};
+    hangPromise = new Promise((resolve) => {
+      release = resolve;
+    });
+    createMode = "hang";
+    const pending = sendElryanProductionOne({
+      productId: showroom.product.id,
+      confirm: true,
+      previewToken: showroom.previewToken,
+    });
+    let reserved;
+    try {
+      const started = Date.now();
+      while (posts < 1 && Date.now() - started < 8000) {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+      reserved = await sendElryanProductionOne({
+        productId: warehouse.product.id,
+        confirm: true,
+        previewToken: warehouse.previewToken,
+      });
+    } finally {
+      release();
+    }
+    assert.equal(posts, 1);
+    assert.equal(reserved.ok, false);
+    assert.equal(reserved.code, "sku_reserved");
+    assert.equal(reserved.reservation.status, "in_progress");
+    assert.equal(reserved.reservation.productId, showroom.product.id);
+    assert.equal(reserved.reservation.sku, "HB-8011NG");
+    const created = await pending;
+    assert.equal(created.ok, true);
+    assert.equal(created.code, "created");
+    assert.equal(created.elryanProductId, "elr-prod-1");
+    assert.equal(posts, 1);
+    const bulk = await startElryanSyncAll({ confirm: true, strategy: "full" });
+    assert.notEqual(bulk.ok, true);
+  });
+
+  it("blocks the other HB-8011NG record after an ambiguous create until reconciliation", async () => {
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const showroom = await createReadyHeater({ ibsherId: "ibs-amb-a", name: "Heater showroom" });
+    const warehouse = await createReadyHeater({ ibsherId: "ibs-amb-b", name: "Heater warehouse" });
+    createMode = "timeout-uncheckable";
+    const ambiguous = await sendElryanProductionOne({
+      productId: showroom.product.id,
+      confirm: true,
+      previewToken: showroom.previewToken,
+    });
+    assert.equal(ambiguous.code, "create_uncertain");
+    assert.equal(posts, 1);
+    const blocked = await sendElryanProductionOne({
+      productId: warehouse.product.id,
+      confirm: true,
+      previewToken: warehouse.previewToken,
+    });
+    assert.equal(posts, 1);
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.code, "send_uncertain");
+    assert.equal(blocked.reservation.status, "uncertain");
+    assert.equal(blocked.reservation.productId, showroom.product.id);
+    failNextSku = false;
+    createMode = "success";
+    const retry = await sendElryanProductionOne({
+      productId: warehouse.product.id,
+      confirm: true,
+      previewToken: warehouse.previewToken,
+    });
+    assert.equal(retry.ok, true);
+    assert.equal(retry.code, "created");
+    assert.equal(retry.sku, "HB-8011NG");
+    assert.equal(createdBody.sku, "HB-8011NG");
+    assert.equal(posts, 2);
   });
 });

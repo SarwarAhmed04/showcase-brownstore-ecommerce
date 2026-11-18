@@ -166,6 +166,10 @@ export default function ElryanSyncOneProduct({ t, lang }) {
     setError("");
     try {
       const fresh = await api.elryanSyncOnePreview(selected.id, { investigateCommission: true });
+      if (String(fresh?.product?.id || "") !== String(selected.id)) {
+        setError(t.elryanChooseProductRecord);
+        return;
+      }
       setPreview(fresh);
       setWritesGate(fresh.writesGate || writesGate);
       const gate = elryanProductionSendGate({ preview: fresh, writesGate: fresh.writesGate || writesGate, localHold });
@@ -323,6 +327,9 @@ export default function ElryanSyncOneProduct({ t, lang }) {
         </button>
       </div>
 
+      {results.filter((product, index, rows) => product.sku && rows.findIndex((row) => row.sku === product.sku) !== index).length ? (
+        <p className="max-w-xl text-sm text-brown/70">{t.elryanChooseProductRecord}</p>
+      ) : null}
       <ul className="max-w-xl space-y-2">
         {results.map((product) => (
           <li key={product.id}>
@@ -333,11 +340,18 @@ export default function ElryanSyncOneProduct({ t, lang }) {
               }`}
               onClick={() => {
                 setSelected(product);
+                setPreview(null);
                 clearSendState();
               }}
             >
               <span className="font-semibold text-brown">{tName(product.name, lang) || product.sku}</span>
-              <span className="mt-1 block text-xs text-brown/45">{product.sku}</span>
+              <span className="mt-1 block text-xs text-brown/45">
+                {product.sku}
+                {product.brand ? ` · ${product.brand}` : ""}
+                {product.price ? ` · ${product.price} IQD` : ""}
+                {product.ibsherId ? ` · ${product.ibsherId}` : ""}
+              </span>
+              <span className="mt-1 block font-mono text-xs text-brown/60">{product.id}</span>
             </button>
           </li>
         ))}
@@ -469,36 +483,49 @@ export default function ElryanSyncOneProduct({ t, lang }) {
         </div>
       ) : null}
 
-      {preview?.connection?.environment === "production" && preview.product?.sku === "OWCH180002" ? (
+      {preview?.connection?.environment === "production" &&
+      (preview.product?.sku === "OWCH180002" || preview.product?.sku === "HB-8011NG") ? (
         <form
           className="max-w-3xl space-y-3 rounded-[1.75rem] bg-cream/70 p-5"
           onSubmit={(event) => event.preventDefault()}
         >
           <p className="text-sm text-brown/80">{t.elryanProductionPreviewNote}</p>
+          <p className="font-mono text-xs text-brown/60">{preview.product?.id}</p>
+          {preview.productionListing?.state === "exists" && preview.productionListing.listing?.id ? (
+            <p className="text-sm font-semibold text-brown">
+              {t.elryanExistingListing}: {preview.productionListing.listing.id}
+              {preview.productionListing.listing.status ? ` · ${preview.productionListing.listing.status}` : ""}
+            </p>
+          ) : null}
+          {preview.productionListing?.state === "inconclusive" ? (
+            <p className="text-sm text-red-800">{preview.productionListing.message}</p>
+          ) : null}
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className={BUTTON}
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                setError("");
-                try {
-                  await api.elryanProductWarranty({
-                    productId: preview.product.id,
-                    sku: preview.product.sku,
-                    confirm: true,
-                  });
-                  await onPreview();
-                } catch (err) {
-                  setError(err.message);
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              {t.elryanSaveKenwoodWarranty}
-            </button>
+            {preview.product?.sku === "OWCH180002" ? (
+              <button
+                type="button"
+                className={BUTTON}
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  setError("");
+                  try {
+                    await api.elryanProductWarranty({
+                      productId: preview.product.id,
+                      sku: preview.product.sku,
+                      confirm: true,
+                    });
+                    await onPreview();
+                  } catch (err) {
+                    setError(err.message);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {t.elryanSaveKenwoodWarranty}
+              </button>
+            ) : null}
           </div>
           <div className="grid gap-2 md:grid-cols-3">
             <input className={CONTROL} inputMode="decimal" value={packageWidth} onChange={(event) => setPackageWidth(event.target.value)} placeholder="width cm" />
@@ -635,6 +662,13 @@ export default function ElryanSyncOneProduct({ t, lang }) {
                   {productionResult.listing.sku ? ` · ${productionResult.listing.sku}` : ""}
                 </p>
               ) : null}
+              {productionResult.reservation?.status ? (
+                <p>
+                  {productionResult.reservation.status}
+                  {productionResult.reservation.productId ? ` · ${productionResult.reservation.productId}` : ""}
+                  {productionResult.reservation.elryanProductId ? ` · ${productionResult.reservation.elryanProductId}` : ""}
+                </p>
+              ) : null}
             </div>
           ) : null}
         </form>
@@ -760,6 +794,10 @@ export default function ElryanSyncOneProduct({ t, lang }) {
             <p className="text-lg font-semibold text-brown">{t.elryanSendProductionConfirmTitle}</p>
             <p className="text-sm text-red-800">{t.elryanSendProductionConfirmWarning}</p>
             <dl className="grid gap-2 text-sm">
+              <div>
+                <dt className="text-brown/45">{t.elryanBrownStoreProductId}</dt>
+                <dd className="font-mono text-xs font-semibold">{productionFacts.productId}</dd>
+              </div>
               <div>
                 <dt className="text-brown/45">SKU</dt>
                 <dd className="font-semibold">{productionFacts.sku}</dd>

@@ -1,6 +1,13 @@
 /** First Staging create is limited to this SKU. The server send endpoint enforces the same limit. */
 export const ELRYAN_STAGING_SEND_SKU = "OWCH180002";
 
+/** Production create reuses the reviewed single-product flow for these SKUs only. */
+export const ELRYAN_PRODUCTION_CREATE_SKUS = ["OWCH180002", "HB-8011NG"];
+
+export function isElryanProductionCreateSku(sku) {
+  return ELRYAN_PRODUCTION_CREATE_SKUS.includes(String(sku || "").trim());
+}
+
 const BLOCKING_ATTEMPT = new Set(["succeeded", "uncertain", "in_progress"]);
 
 /**
@@ -65,8 +72,14 @@ export function elryanProductionSendGate({ preview, writesGate, now = Date.now()
   const liveWritesAllowed = writesGate?.liveWritesAllowed === true;
   if (!productWritesEnabled && !liveWritesAllowed) return { enabled: false, reason: "writes_disabled" };
   if (!productWritesEnabled || !liveWritesAllowed) return { enabled: false, reason: "writes_partial" };
-  if (String(preview.product?.sku || "") !== ELRYAN_STAGING_SEND_SKU) {
+  if (!isElryanProductionCreateSku(preview.product?.sku)) {
     return { enabled: false, reason: "wrong_sku" };
+  }
+  if (preview.productionListing?.state !== "absent") {
+    return {
+      enabled: false,
+      reason: preview.productionListing?.state === "exists" ? "sku_already_exists" : "listing_unverified",
+    };
   }
   if (preview.readiness !== "READY") return { enabled: false, reason: "not_ready" };
   if (!Array.isArray(preview.blockers) || preview.blockers.length > 0) {
@@ -95,6 +108,7 @@ export function elryanProductionSendRequest({ preview, writesGate, now, localHol
 
 export function elryanProductionConfirmFacts(preview) {
   return {
+    productId: String(preview?.product?.id || ""),
     sku: String(preview?.product?.sku || ""),
     price: preview?.pricing?.proposedElryanPrice ?? preview?.proposedPayload?.price ?? null,
     stock: preview?.product?.stock ?? preview?.proposedPayload?.quantity ?? null,

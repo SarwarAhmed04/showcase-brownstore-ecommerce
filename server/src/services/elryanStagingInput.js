@@ -5,7 +5,7 @@ import { toResolvedProduct } from "../utils/productView.js";
 import { expireElryanPreviewTokens } from "./elryanCollectionDimensions.js";
 import {
   assessElryanDimensionConfirmation,
-  ELRYAN_FIRST_STAGING_CREATE_SKU,
+  isElryanProductionCreateSku,
   normalizeElryanStagingAttributes,
 } from "../utils/elryanStagingGate.js";
 
@@ -99,8 +99,11 @@ export async function confirmElryanStagingDimensions({
     );
   }
   const loaded = await loadSku(productId, sku);
-  if (env === "production" && loaded.sku !== ELRYAN_FIRST_STAGING_CREATE_SKU) {
-    throw inputError("Production dimension confirmation is limited to SKU OWCH180002.", "first_test_sku_only");
+  if (env === "production" && !isElryanProductionCreateSku(loaded.sku)) {
+    throw inputError(
+      "Production dimension confirmation is limited to SKU OWCH180002 and HB-8011NG.",
+      "first_test_sku_only"
+    );
   }
   const saved = await ElryanStagingDimensionCheck.findOneAndUpdate(
     { environment: env, productId: String(loaded.doc._id) },

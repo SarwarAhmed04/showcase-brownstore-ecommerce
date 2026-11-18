@@ -3,6 +3,13 @@ import { ELRYAN_READINESS } from "./elryanConstants.js";
 /** First live Staging create is limited to this SKU until that send is reviewed. */
 export const ELRYAN_FIRST_STAGING_CREATE_SKU = "OWCH180002";
 
+/** Single-product Production create. Staging create and Production bulk stay on the first SKU only. */
+export const ELRYAN_PRODUCTION_CREATE_SKUS = ["OWCH180002", "HB-8011NG"];
+
+export function isElryanProductionCreateSku(sku) {
+  return ELRYAN_PRODUCTION_CREATE_SKUS.includes(String(sku || "").trim());
+}
+
 export function normalizeElryanStagingAttributes(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, code: "attributes_required", attributes: {} };

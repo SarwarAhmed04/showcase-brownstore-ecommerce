@@ -4,6 +4,7 @@ import { Product } from "../models/Product.js";
 import { ElryanSyncOnePreview } from "../models/ElryanSyncOnePreview.js";
 import { ElryanProductSyncState } from "../models/ElryanProductSyncState.js";
 import { ElryanConfirmedSend } from "../models/ElryanConfirmedSend.js";
+import { ElryanProductionSkuReservation } from "../models/ElryanProductionSkuReservation.js";
 import { ElryanSendAttempt } from "../models/ElryanSendAttempt.js";
 import { ElryanStagingProductOverride } from "../models/ElryanStagingProductOverride.js";
 import { ElryanStagingPriceApproval } from "../models/ElryanStagingPriceApproval.js";
@@ -35,7 +36,8 @@ import {
 import { assessElryanSellableUnits } from "../utils/elryanVariations.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import { sanitizeElryanText } from "../utils/elryanRedact.js";
-import { elryanListingFromSkuConflict } from "../utils/elryanSku.js";
+import { elryanListingFromSkuConflict, normalizeElryanSkuCandidate } from "../utils/elryanSku.js";
+import { elryanListingIdentity } from "../utils/elryanDimensionCompare.js";
 import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platformTaxonomy.js";
 import {
   brownColourKeyFromResolved,
@@ -48,6 +50,7 @@ import {
   elryanCalculateCommission,
   elryanCreateProduct,
   elryanCreateProductionProduct,
+  elryanGetProduct,
   elryanListWarranties,
   elryanSkuExists,
 } from "./elryanCatalog.js";
@@ -58,6 +61,7 @@ import {
   ELRYAN_FIRST_STAGING_CREATE_SKU,
   elryanDimensionBlockers,
   elryanPublicationFromCreate,
+  isElryanProductionCreateSku,
   matchElryanStagingPriceApproval,
 } from "../utils/elryanStagingGate.js";
 
@@ -84,6 +88,14 @@ async function loadProduct(productId) {
   return Product.findById(productId).lean();
 }
 
+function searchBrandLabel(brand) {
+  if (!brand) return "";
+  if (typeof brand === "string") return brand.trim();
+  const name = brand.name;
+  if (typeof name === "string") return name.trim();
+  return String(name?.en || name?.ku || name?.ar || "").trim();
+}
+
 export async function searchElryanSyncProducts(q = "", limit = 20) {
   const query = String(q || "").trim();
   const take = Math.min(Math.max(Number(limit) || 20, 1), 50);
@@ -107,6 +119,9 @@ export async function searchElryanSyncProducts(q = "", limit = 20) {
         sku: resolved?.sku || doc.itemCode || "",
         name: resolved?.name || {},
         image: resolved?.image || "",
+        brand: searchBrandLabel(resolved?.brand || doc.brand),
+        price: Number(resolved?.price) || 0,
+        ibsherId: String(doc.ibsherId || ""),
       };
     }),
   };
@@ -391,6 +406,15 @@ export async function previewElryanSyncOne({ productId, origin = "", investigate
     assembled.connection?.environment
   );
   const writesGate = getElryanWritesGatePublic();
+  const pilotSku = String(assembled.resolved?.sku || "");
+  const productionListing =
+    assembled.config?.environment === "production" && isElryanProductionCreateSku(pilotSku)
+      ? await inspectProductionListing({
+          productId: assembled.productKey,
+          sku: pilotSku,
+          apiKey: assembled.config.apiKey,
+        })
+      : null;
   return {
     ok: true,
     classification: "READ",
@@ -399,6 +423,7 @@ export async function previewElryanSyncOne({ productId, origin = "", investigate
     writesGate,
     readiness: assembled.validation.readiness,
     blockers: assembled.validation.blockers,
+    productionListing,
     previewToken: token,
     expiresAt,
     product: {
@@ -496,6 +521,7 @@ function blockedSend(code, message, extra = {}) {
     elryanProductId: extra.elryanProductId || "",
     ...(extra.listingStatus != null && extra.listingStatus !== "" ? { listingStatus: extra.listingStatus } : {}),
     ...(extra.listing ? { listing: extra.listing } : {}),
+    ...(extra.reservation ? { reservation: extra.reservation } : {}),
   };
 }
 
@@ -922,6 +948,127 @@ async function settleProductionAttempt(productId, fields) {
   );
 }
 
+function listingStatusText(product, fallback = "") {
+  const record = product && typeof product === "object" ? product : {};
+  return String(record.status || record.reviewStatus || record.publishStatus || fallback || "").trim();
+}
+
+function productionListingView(id, sku, status) {
+  return {
+    id: String(id || "").trim(),
+    sku: String(sku || "").trim(),
+    status: String(status || "").trim(),
+  };
+}
+
+/**
+ * READ — decide whether this Production SKU already has a listing.
+ * A listing is shown only after its id and SKU are read back. An unanswered or mismatched lookup blocks creation.
+ */
+export async function inspectProductionListing({ productId, sku, apiKey } = {}) {
+  const wantedSku = String(sku || "").trim();
+  let skuState;
+  try {
+    skuState = await elryanSkuExists(wantedSku);
+  } catch (err) {
+    return {
+      state: "inconclusive",
+      code: "sku_check_failed",
+      message: sanitizeElryanText(
+        err?.message || "The Production SKU could not be checked. No product was created.",
+        [apiKey]
+      ),
+      listing: null,
+    };
+  }
+  if (skuState.available === true) {
+    return {
+      state: "absent",
+      code: "sku_available",
+      message: `No existing Production listing was found for SKU ${wantedSku}.`,
+      listing: null,
+    };
+  }
+  if (skuState.available !== false) {
+    return {
+      state: "inconclusive",
+      code: "listing_unverified",
+      message: "The Production SKU check did not say whether a listing exists. No product was created.",
+      listing: null,
+    };
+  }
+  const fromSku = elryanListingFromSkuConflict(skuState.raw);
+  const identityMatches = fromSku.id && fromSku.sku === wantedSku;
+  const identityOmitted = !fromSku.id && !fromSku.sku;
+  let listingId = identityMatches ? fromSku.id : "";
+  if (!identityMatches) {
+    if (!identityOmitted && (fromSku.id || fromSku.sku)) {
+      return {
+        state: "inconclusive",
+        code: "listing_unverified",
+        message: "Elryan reported a SKU conflict without a verified listing ID and SKU. No product was created.",
+        listing: productionListingView(fromSku.id, fromSku.sku, fromSku.status),
+      };
+    }
+    const saved = await ElryanSendAttempt.findOne({
+      environment: "production",
+      productId: String(productId || ""),
+      sku: wantedSku,
+      status: "succeeded",
+      elryanProductId: { $nin: ["", null] },
+    }).lean();
+    const reserved = saved?.elryanProductId
+      ? null
+      : await ElryanProductionSkuReservation.findOne({
+          sku: wantedSku,
+          status: "succeeded",
+          elryanProductId: { $nin: ["", null] },
+        }).lean();
+    if (!saved?.elryanProductId && !reserved?.elryanProductId) {
+      return {
+        state: "inconclusive",
+        code: "listing_unverified",
+        message: "Elryan reports this SKU is already used, but the response did not include a listing ID. No product was created.",
+        listing: null,
+      };
+    }
+    listingId = saved?.elryanProductId || reserved.elryanProductId;
+  }
+  let loaded;
+  try {
+    loaded = await elryanGetProduct(listingId);
+  } catch (err) {
+    return {
+      state: "inconclusive",
+      code: "listing_read_failed",
+      message: sanitizeElryanText(
+        err?.message || "The existing Production listing could not be read. No product was created.",
+        [apiKey]
+      ),
+      listing: null,
+    };
+  }
+  const identity = elryanListingIdentity(loaded.product);
+  if (identity.id !== listingId || identity.sku !== wantedSku) {
+    return {
+      state: "inconclusive",
+      code: "listing_unverified",
+      message: "The listing read from Production does not match this SKU. No product was created.",
+      listing: productionListingView(identity.id, identity.sku, listingStatusText(identity.product)),
+    };
+  }
+  const status = listingStatusText(identity.product, fromSku.status);
+  const listing = productionListingView(identity.id, identity.sku, status);
+  return {
+    state: "exists",
+    code: "sku_already_exists",
+    message: status
+      ? `SKU ${wantedSku} already exists in Production as listing ${listing.id} (${status}). No product was created.`
+      : `SKU ${wantedSku} already exists in Production as listing ${listing.id}. No product was created.`,
+    listing,
+  };
+}
+
 function productionListingResult(skuState) {
   const listing = elryanListingFromSkuConflict(skuState?.raw);
   return blockedSend(
@@ -938,7 +1085,138 @@ function productionListingResult(skuState) {
   );
 }
 
-async function reconcileProductionTimeout(productId, sku, apiKey, message) {
+function productionAccountKey(config) {
+  return `production:${String(config?.baseUrl || "").trim()}`;
+}
+
+function reservationView(reservation) {
+  return {
+    status: reservation?.status || "",
+    productId: String(reservation?.productId || ""),
+    sku: String(reservation?.sku || ""),
+    elryanProductId: String(reservation?.elryanProductId || ""),
+    listingStatus: String(reservation?.listingStatus || ""),
+  };
+}
+
+function reservationBlocked(reservation, code = "") {
+  const view = reservationView(reservation);
+  const resolved = code || (view.status === "uncertain" ? "send_uncertain" : view.status === "succeeded" ? "already_sent" : "sku_reserved");
+  const listing = view.elryanProductId ? ` Listing ${view.elryanProductId}.` : "";
+  return blockedSend(
+    resolved,
+    `SKU ${view.sku} is reserved for Production (${view.status || "in_progress"}) by Brown Store product ${view.productId}.${listing} No product was sent.`,
+    {
+      httpStatus: 409,
+      elryanProductId: view.elryanProductId,
+      listingStatus: view.listingStatus,
+      reservation: view,
+    }
+  );
+}
+
+let reservationIndexReady = null;
+function ensureProductionSkuReservationIndex() {
+  reservationIndexReady ||= ElryanProductionSkuReservation.createIndexes();
+  return reservationIndexReady;
+}
+
+async function acquireProductionSkuReservation({ accountKey, sku, productId }) {
+  await ensureProductionSkuReservationIndex();
+  const normalized = normalizeElryanSkuCandidate(sku);
+  const next = {
+    productId: String(productId || ""),
+    status: "in_progress",
+    elryanProductId: "",
+    listingStatus: "",
+    errorCode: "",
+    errorMessage: "",
+    startedAt: new Date(),
+    finishedAt: null,
+  };
+  try {
+    const created = await ElryanProductionSkuReservation.create({ accountKey, sku: normalized, ...next });
+    return { ok: true, reservation: created.toObject() };
+  } catch (err) {
+    if (err?.code !== 11000) throw err;
+  }
+  const existing = await ElryanProductionSkuReservation.findOne({ accountKey, sku: normalized }).lean();
+  if (!existing) return { ok: false, reservation: null };
+  if (existing.status === "failed") {
+    const updated = await ElryanProductionSkuReservation.findOneAndUpdate(
+      { accountKey, sku: normalized, status: "failed" },
+      { $set: next },
+      { new: true }
+    ).lean();
+    if (updated) return { ok: true, reservation: updated };
+    const again = await ElryanProductionSkuReservation.findOne({ accountKey, sku: normalized }).lean();
+    return { ok: false, reservation: again, needsReconciliation: again?.status === "uncertain" };
+  }
+  return { ok: false, reservation: existing, needsReconciliation: existing.status === "uncertain" };
+}
+
+async function reconcileUncertainProductionSku({ accountKey, sku, productId, apiKey }) {
+  const normalized = normalizeElryanSkuCandidate(sku);
+  const current = await ElryanProductionSkuReservation.findOne({ accountKey, sku: normalized }).lean();
+  let skuState;
+  try {
+    skuState = await elryanSkuExists(normalized);
+  } catch (err) {
+    return {
+      ok: false,
+      response: reservationBlocked(
+        current,
+        "send_uncertain"
+      ),
+    };
+  }
+  if (skuState.available === true) {
+    const claimed = await ElryanProductionSkuReservation.findOneAndUpdate(
+      { accountKey, sku: normalized, status: "uncertain" },
+      {
+        $set: {
+          status: "in_progress",
+          productId: String(productId || ""),
+          elryanProductId: "",
+          listingStatus: "",
+          errorCode: "",
+          errorMessage: "",
+          startedAt: new Date(),
+          finishedAt: null,
+        },
+      },
+      { new: true }
+    ).lean();
+    if (!claimed) {
+      const again = await ElryanProductionSkuReservation.findOne({ accountKey, sku: normalized }).lean();
+      return { ok: false, response: reservationBlocked(again) };
+    }
+    return { ok: true, reservation: claimed };
+  }
+  const listing = elryanListingFromSkuConflict(skuState.raw);
+  if (listing.id && listing.sku === normalized) {
+    await settleProductionSkuReservation(accountKey, normalized, {
+      status: "succeeded",
+      elryanProductId: listing.id,
+      listingStatus: listing.status,
+      errorCode: "",
+      errorMessage: "",
+    });
+    const saved = await ElryanProductionSkuReservation.findOne({ accountKey, sku: normalized }).lean();
+    return { ok: false, response: reservationBlocked(saved, "already_sent") };
+  }
+  return { ok: false, response: reservationBlocked(current, "send_uncertain") };
+}
+
+async function settleProductionSkuReservation(accountKey, sku, fields) {
+  const normalized = normalizeElryanSkuCandidate(sku);
+  await ElryanProductionSkuReservation.updateOne(
+    { accountKey, sku: normalized },
+    { $set: { ...fields, finishedAt: fields.finishedAt || new Date() } }
+  );
+}
+
+async function reconcileProductionTimeout(productId, sku, apiKey, message, accountKey) {
   let followUp = null;
   try {
     followUp = await elryanSkuExists(sku);
@@ -951,17 +1229,41 @@ async function reconcileProductionTimeout(productId, sku, apiKey, message) {
       httpStatus: 0,
       published: false,
     });
-    return blockedSend("create_uncertain", text, { httpStatus: 409 });
+    await settleProductionSkuReservation(accountKey, sku, {
+      status: "uncertain",
+      productId: String(productId || ""),
+      errorCode: "create_uncertain",
+      errorMessage: sanitizeElryanText(text, [apiKey]),
+    });
+    return blockedSend("create_uncertain", text, { httpStatus: 409, reservation: { status: "uncertain", productId: String(productId || ""), sku, elryanProductId: "", listingStatus: "" } });
   }
   if (followUp.exists || followUp.available === false) {
+    const listing = elryanListingFromSkuConflict(followUp.raw);
     await settleProductionAttempt(productId, {
       status: "failed",
       errorCode: "sku_already_exists",
       errorMessage: "The create timed out and the SKU is now taken. No second create was sent.",
       httpStatus: followUp.httpStatus || 409,
       published: false,
-      elryanProductId: elryanListingFromSkuConflict(followUp.raw).id,
+      elryanProductId: listing.id,
     });
+    if (listing.id) {
+      await settleProductionSkuReservation(accountKey, sku, {
+        status: "succeeded",
+        productId: String(productId || ""),
+        elryanProductId: listing.id,
+        listingStatus: listing.status,
+        errorCode: "",
+        errorMessage: "",
+      });
+    } else {
+      await settleProductionSkuReservation(accountKey, sku, {
+        status: "uncertain",
+        productId: String(productId || ""),
+        errorCode: "listing_unverified",
+        errorMessage: "The create timed out and the SKU is taken, but Elryan did not return a listing ID.",
+      });
+    }
     return productionListingResult(followUp);
   }
   const text = `${message} The SKU was checked again and is still available. No second create was sent in this request.`;
@@ -971,6 +1273,13 @@ async function reconcileProductionTimeout(productId, sku, apiKey, message) {
     errorMessage: sanitizeElryanText(text, [apiKey]),
     httpStatus: 0,
     published: false,
+  });
+  await settleProductionSkuReservation(accountKey, sku, {
+    status: "failed",
+    productId: String(productId || ""),
+    elryanProductId: "",
+    errorCode: "create_timeout",
+    errorMessage: sanitizeElryanText(text, [apiKey]),
   });
   return blockedSend("create_timeout", text, { httpStatus: 504 });
 }
@@ -1003,6 +1312,10 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
     return blockedSend("send_in_progress", "A Production create for this product is already running. No second create was sent.");
   }
   inflightSends.add(localKey);
+  let reservationHeld = false;
+  let createStarted = false;
+  let accountKey = "";
+  let normalizedSku = "";
   try {
     const config = await resolveElryanConfig();
     if (config.environment !== "production" || config.baseUrl !== ELRYAN_ENVIRONMENTS.production.baseUrl) {
@@ -1017,10 +1330,10 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
       return blockedSend("production_required", "The rebuilt preview is not Production. No product was sent.");
     }
     const sku = String(assembled.resolved?.sku || "");
-    if (sku !== ELRYAN_FIRST_STAGING_CREATE_SKU) {
+    if (!isElryanProductionCreateSku(sku)) {
       return blockedSend(
         "first_test_sku_only",
-        "Production create is limited to SKU OWCH180002. No product was sent."
+        "Production create is limited to SKU OWCH180002 and HB-8011NG. No product was sent."
       );
     }
     if (assembled.pricingApproval?.valid !== true) {
@@ -1066,18 +1379,45 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
       });
     }
 
-    let skuState;
-    try {
-      skuState = await elryanSkuExists(sku);
-    } catch (err) {
-      return blockedSend(
-        "sku_check_failed",
-        sanitizeElryanText(err?.message || "The Production SKU could not be checked. No product was sent.", [config.apiKey]),
-        { httpStatus: 502 }
-      );
+    accountKey = productionAccountKey(config);
+    normalizedSku = normalizeElryanSkuCandidate(sku);
+    const acquired = await acquireProductionSkuReservation({
+      accountKey,
+      sku: normalizedSku,
+      productId: assembled.productKey,
+    });
+    if (!acquired.ok) {
+      if (!acquired.needsReconciliation) return reservationBlocked(acquired.reservation);
+      const reconciled = await reconcileUncertainProductionSku({
+        accountKey,
+        sku: normalizedSku,
+        productId: assembled.productKey,
+        apiKey: config.apiKey,
+      });
+      if (!reconciled.ok) return reconciled.response;
     }
-    if (skuState.available !== true) {
-      return productionListingResult(skuState);
+    reservationHeld = true;
+
+    const listingCheck = await inspectProductionListing({
+      productId: assembled.productKey,
+      sku,
+      apiKey: config.apiKey,
+    });
+    if (listingCheck.state !== "absent") {
+      await settleProductionSkuReservation(accountKey, normalizedSku, {
+        status: "failed",
+        productId: assembled.productKey,
+        elryanProductId: "",
+        errorCode: listingCheck.code,
+        errorMessage: listingCheck.message,
+      });
+      reservationHeld = false;
+      return blockedSend(listingCheck.code, listingCheck.message, {
+        httpStatus: listingCheck.state === "exists" ? 409 : 502,
+        elryanProductId: listingCheck.listing?.id || "",
+        listingStatus: listingCheck.listing?.status || "",
+        listing: listingCheck.listing,
+      });
     }
 
     const claim = await claimProductionAttempt({
@@ -1086,6 +1426,13 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
       hash: assembled.hash,
     });
     if (!claim.ok) {
+      await settleProductionSkuReservation(accountKey, normalizedSku, {
+        status: "failed",
+        productId: assembled.productKey,
+        errorCode: claim.code,
+        errorMessage: "No product was sent.",
+      });
+      reservationHeld = false;
       return blockedSend(claim.code, "No product was sent.", {
         elryanProductId: claim.elryanProductId || "",
         httpStatus: 409,
@@ -1108,20 +1455,30 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
         errorCode: "preview_used",
         errorMessage: "The preview token was no longer usable.",
       });
+      await settleProductionSkuReservation(accountKey, normalizedSku, {
+        status: "failed",
+        productId: assembled.productKey,
+        errorCode: "preview_used",
+        errorMessage: "The preview token was no longer usable.",
+      });
+      reservationHeld = false;
       return blockedSend("preview_used", "This preview token was already used. No product was sent.");
     }
 
     let result;
+    createStarted = true;
     try {
       result = await elryanCreateProductionProduct(assembled.payload);
     } catch (err) {
       const timedOut = err?.code === "timeout" || err?.code === "network_error";
       if (timedOut) {
+        reservationHeld = false;
         return reconcileProductionTimeout(
           assembled.productKey,
           sku,
           config.apiKey,
-          sanitizeElryanText(err?.message || "Elryan create timed out.", [config.apiKey])
+          sanitizeElryanText(err?.message || "Elryan create timed out.", [config.apiKey]),
+          accountKey
         );
       }
       await settleProductionAttempt(assembled.productKey, {
@@ -1130,8 +1487,16 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
         errorMessage: sanitizeElryanText(err?.message || "Elryan did not return a create response.", [config.apiKey]),
         published: false,
       });
+      await settleProductionSkuReservation(accountKey, normalizedSku, {
+        status: "uncertain",
+        productId: assembled.productKey,
+        errorCode: "create_uncertain",
+        errorMessage: "Elryan did not return a create response. No second create was sent.",
+      });
+      reservationHeld = false;
       return blockedSend("create_uncertain", "Elryan did not return a create response. No second create was sent.", {
         httpStatus: 409,
+        reservation: reservationView({ status: "uncertain", productId: assembled.productKey, sku: normalizedSku }),
       });
     }
 
@@ -1163,6 +1528,15 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
         errorCode: "",
         errorMessage: "",
       });
+      await settleProductionSkuReservation(accountKey, normalizedSku, {
+        status: "succeeded",
+        productId: assembled.productKey,
+        elryanProductId: publication.elryanProductId,
+        listingStatus,
+        errorCode: "",
+        errorMessage: "",
+      });
+      reservationHeld = false;
       return {
         ok: true,
         classification: "WRITE",
@@ -1180,11 +1554,13 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
     }
 
     if (!definiteClientError) {
+      reservationHeld = false;
       return reconcileProductionTimeout(
         assembled.productKey,
         sku,
         config.apiKey,
-        "Elryan did not return a confirmed product id."
+        "Elryan did not return a confirmed product id.",
+        accountKey
       );
     }
 
@@ -1196,8 +1572,25 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
       errorCode: "elryan_rejected",
       errorMessage: message,
     });
+    await settleProductionSkuReservation(accountKey, normalizedSku, {
+      status: "failed",
+      productId: assembled.productKey,
+      elryanProductId: "",
+      errorCode: "elryan_rejected",
+      errorMessage: message,
+    });
+    reservationHeld = false;
     return blockedSend("elryan_rejected", message, { httpStatus: result.httpStatus });
   } finally {
+    if (reservationHeld) {
+      await settleProductionSkuReservation(accountKey, normalizedSku, {
+        status: createStarted ? "uncertain" : "failed",
+        errorCode: createStarted ? "create_uncertain" : "released",
+        errorMessage: createStarted
+          ? "The Production create outcome is unknown. Reconcile this SKU before another create."
+          : "The Production create reservation was released because no listing was created.",
+      });
+    }
     inflightSends.delete(localKey);
   }
 }
