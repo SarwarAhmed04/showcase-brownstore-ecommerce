@@ -70,6 +70,7 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
   let savedListing;
   let patches;
   let skuConflictId;
+  let skuConflictOmitsIdentity;
 
   before(async () => {
     memory = await MongoMemoryServer.create();
@@ -96,6 +97,7 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     savedListing = null;
     patches = [];
     skuConflictId = "elr-existing";
+    skuConflictOmitsIdentity = false;
     __resetElryanAttributeValueCatalogCacheForTests();
     delete process.env.ELRYAN_PRODUCT_WRITES_ENABLED;
     delete process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES;
@@ -159,7 +161,9 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
           return mockResponse(409, {
             success: false,
             error: { code: "CONFLICT", message: "SKU already used" },
-            data: { id: skuConflictId, sku: "OWCH180002", status: "in_review" },
+            data: skuConflictOmitsIdentity
+              ? {}
+              : { id: skuConflictId, sku: "OWCH180002", status: "in_review" },
           });
         }
         if (failNextSku) {
@@ -798,6 +802,111 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
       previewToken: foreign.previewToken,
     });
     assert.equal(blocked.code, "dimension_fields_missing");
+    assert.equal(patches.length, 0);
+    assert.equal(posts, 0);
+  });
+
+  async function saveProductionCreate({
+    id = productId,
+    listingId = LISTING_ID,
+    sku = "OWCH180002",
+    status = "succeeded",
+  } = {}) {
+    await ElryanSendAttempt.create({
+      environment: "production",
+      productId: id,
+      sku,
+      status,
+      payloadHash: "production-create",
+      elryanProductId: listingId,
+      httpStatus: status === "succeeded" ? 201 : 0,
+      published: false,
+      finishedAt: new Date(),
+    });
+  }
+
+  it("continues a Production update preview when the SKU conflict omits identity and the saved create names this listing", async () => {
+    await prepareReady();
+    createMode = "duplicate";
+    skuConflictOmitsIdentity = true;
+    const missing = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(missing.code, "listing_mismatch");
+    assert.equal(missing.updateAllowed, false);
+
+    await saveProductionCreate({ status: "failed" });
+    const failed = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(failed.code, "listing_mismatch");
+    await ElryanSendAttempt.deleteMany({});
+
+    await saveProductionCreate({ id: otherId });
+    const otherProduct = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(otherProduct.code, "listing_mismatch");
+    await ElryanSendAttempt.deleteMany({});
+
+    await saveProductionCreate({ sku: "OTHER-1" });
+    const otherSku = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(otherSku.code, "listing_mismatch");
+    await ElryanSendAttempt.deleteMany({});
+
+    await saveProductionCreate({ listingId: OTHER_LISTING_ID });
+    const otherListing = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(otherListing.code, "listing_mismatch");
+    await ElryanSendAttempt.deleteMany({});
+
+    skuConflictOmitsIdentity = false;
+    skuConflictId = OTHER_LISTING_ID;
+    await saveProductionCreate();
+    const explicit = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(explicit.code, "listing_mismatch");
+    assert.equal(explicit.listing.id, OTHER_LISTING_ID);
+    await ElryanSendAttempt.deleteMany({});
+
+    skuConflictOmitsIdentity = true;
+    await saveProductionCreate();
+    const preview = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(preview.matched, true);
+    assert.equal(preview.code, "update_preview");
+    assert.equal(preview.sku, "OWCH180002");
+    assert.equal(preview.listingId, LISTING_ID);
+    assert.equal(preview.listing.sku, "OWCH180002");
+    assert.equal(preview.rows.find((row) => row.apiField === "width").current, 10);
+    assert.deepEqual(preview.dimensionPatch, { width: 20 });
+    assert.equal(patches.length, 0);
+    assert.equal(posts, 0);
+  });
+
+  it("rejects a Production update preview when the listing read after a missing-identity conflict does not match", async () => {
+    await prepareReady();
+    createMode = "duplicate";
+    skuConflictOmitsIdentity = true;
+    await saveProductionCreate();
+    listingBody = {
+      id: LISTING_ID,
+      sku: "OTHER-1",
+      width: 10,
+      height: 30,
+      depth: 40,
+    };
+    const wrongSku = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(wrongSku.code, "listing_mismatch");
+    assert.equal(wrongSku.updateAllowed, false);
+    assert.equal(wrongSku.listing.id, LISTING_ID);
+    assert.equal(wrongSku.listing.sku, "OTHER-1");
+    assert.equal(patches.length, 0);
+    assert.equal(posts, 0);
+
+    listingBody = {
+      id: OTHER_LISTING_ID,
+      sku: "OWCH180002",
+      width: 10,
+      height: 30,
+      depth: 40,
+    };
+    const wrongId = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(wrongId.code, "listing_mismatch");
+    assert.equal(wrongId.updateAllowed, false);
+    assert.equal(wrongId.listing.id, OTHER_LISTING_ID);
+    assert.equal(wrongId.listing.sku, "OWCH180002");
     assert.equal(patches.length, 0);
     assert.equal(posts, 0);
   });

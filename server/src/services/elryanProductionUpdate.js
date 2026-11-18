@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { ElryanSendAttempt } from "../models/ElryanSendAttempt.js";
 import { ElryanSyncOnePreview } from "../models/ElryanSyncOnePreview.js";
 import { ELRYAN_ENVIRONMENTS, elryanLiveProductWritesEnabled, elryanProductWritesEnabled } from "../utils/elryanConstants.js";
 import {
@@ -57,7 +58,23 @@ function proposedValues(assembled) {
   };
 }
 
-async function matchProductionListing({ sku, listingId, apiKey }) {
+function conflictOmitsListingIdentity(listing) {
+  return !listing?.id && !listing?.sku;
+}
+
+/** A conflict with no listing id or SKU is accepted only when this product's saved Production create names that exact listing. */
+async function savedProductionCreateMatches({ productId, sku, listingId }) {
+  const row = await ElryanSendAttempt.findOne({
+    environment: "production",
+    productId: String(productId || ""),
+    sku,
+    status: "succeeded",
+    elryanProductId: listingId,
+  }).lean();
+  return Boolean(row);
+}
+
+async function matchProductionListing({ productId, sku, listingId, apiKey }) {
   const wantedId = String(listingId || "").trim();
   const wantedSku = String(sku || "").trim();
   if (!wantedId) return blocked("listing_id_required", "Production update preview requires the existing listing ID.");
@@ -78,10 +95,18 @@ async function matchProductionListing({ sku, listingId, apiKey }) {
     return blocked("sku_not_listed", "This SKU is not an existing Production listing. No update was sent.");
   }
   const fromSku = elryanListingFromSkuConflict(skuState.raw);
-  if (fromSku.id !== wantedId || fromSku.sku !== wantedSku) {
+  if (!conflictOmitsListingIdentity(fromSku) && (fromSku.id !== wantedId || fromSku.sku !== wantedSku)) {
     return blocked("listing_mismatch", "The SKU and listing ID do not identify the same Production listing. No update was sent.", {
       listing: fromSku,
     });
+  }
+  if (conflictOmitsListingIdentity(fromSku)) {
+    const saved = await savedProductionCreateMatches({ productId, sku: wantedSku, listingId: wantedId });
+    if (!saved) {
+      return blocked("listing_mismatch", "The SKU and listing ID do not identify the same Production listing. No update was sent.", {
+        listing: fromSku,
+      });
+    }
   }
   let loaded;
   try {
@@ -123,6 +148,7 @@ export async function previewElryanProductionUpdate({ productId, listingId } = {
   const context = await productionContext(productId);
   if (!context.ok) return context;
   const matched = await matchProductionListing({
+    productId: context.assembled.productKey,
     sku: context.sku,
     listingId,
     apiKey: context.config.apiKey,
@@ -229,6 +255,7 @@ export async function updateElryanProductionDimensions({ productId, listingId, c
       });
     }
     const matched = await matchProductionListing({
+      productId: context.assembled.productKey,
       sku: context.sku,
       listingId,
       apiKey: context.config.apiKey,
