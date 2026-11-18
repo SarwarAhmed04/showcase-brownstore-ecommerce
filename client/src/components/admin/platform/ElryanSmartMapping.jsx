@@ -15,8 +15,10 @@ import {
   ELRYAN_COLLECTION_PAGE_SIZE,
   applyElryanMappingSaveResult,
   buildElryanMappingSaveBody,
+  acceptElryanAttributeResponse,
   canReviewElryanMapping,
   elryanCollectionPreviewQuery,
+  isElryanConfirmedLeaf,
   elryanManualSearchQuery,
   isElryanCategoryPicked,
   nextManualSearchOffset,
@@ -153,6 +155,8 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
 
   const requestSeq = useRef(0);
   const manualSeq = useRef(0);
+  const compatSeq = useRef(0);
+  const compatRequest = useRef({ generation: 0, categoryId: "" });
   const filtersRef = useRef({ q: "", status: "", confidence: "" });
   const pagingRef = useRef({ offset: 0, history: [0] });
   const draftsRef = useRef(drafts);
@@ -239,7 +243,57 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
     } else {
       setDrafts(result.drafts);
     }
-    setCompat(null);
+    const picked = result.drafts?.[String(collectionId || "")] || null;
+    loadLeafAttributes(collectionId, picked?.pickedSnapshot || category);
+  }
+
+  function loadLeafAttributes(collectionId, category) {
+    const categoryId = String(category?.categoryId ?? category?.id ?? "").trim();
+    const generation = ++compatSeq.current;
+    compatRequest.current = { generation, categoryId };
+    if (!isElryanConfirmedLeaf(category) || !categoryId) {
+      setCompat(null);
+      return;
+    }
+    setCompat({
+      forId: String(collectionId || ""),
+      categoryId,
+      generation,
+      loading: true,
+      data: null,
+    });
+    api
+      .elryanCategoryAttributeCompatibility(categoryId)
+      .then((data) => {
+        const active = compatRequest.current;
+        if (
+          !acceptElryanAttributeResponse({
+            generation,
+            categoryId,
+            activeGeneration: active.generation,
+            activeCategoryId: active.categoryId,
+          })
+        ) {
+          return;
+        }
+        setCompat({
+          forId: String(collectionId || ""),
+          categoryId,
+          generation,
+          loading: false,
+          data,
+        });
+      })
+      .catch((err) => {
+        if (generation !== compatSeq.current) return;
+        setCompat({
+          forId: String(collectionId || ""),
+          categoryId,
+          generation,
+          loading: false,
+          data: { blockers: [err.message] },
+        });
+      });
   }
 
   async function runManualSearch(offset = 0, leafOnly = manualLeafOnly, forId = pickerFor, term = manualQ) {
@@ -289,15 +343,8 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
     }
   }
 
-  async function inspectAttributes(collectionId, categoryId) {
-    if (!categoryId) return;
-    setCompat(null);
-    try {
-      const data = await api.elryanCategoryAttributeCompatibility(categoryId);
-      setCompat({ forId: collectionId, data });
-    } catch (err) {
-      setCompat({ forId: collectionId, data: { blockers: [err.message] } });
-    }
+  function inspectAttributes(collectionId, category) {
+    loadLeafAttributes(collectionId, category);
   }
 
   async function buildReview(collectionId) {
@@ -324,7 +371,23 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
           [collectionId]: { ...latest, review: data, overwriteAck: false, error: "" },
         };
       });
-      if (data.attributes) setCompat({ forId: collectionId, data: data.attributes });
+      if (
+        data.attributes &&
+        acceptElryanAttributeResponse({
+          generation: compatRequest.current.generation,
+          categoryId: current.pickedCategoryId,
+          activeGeneration: compatRequest.current.generation,
+          activeCategoryId: compatRequest.current.categoryId,
+        })
+      ) {
+        setCompat({
+          forId: collectionId,
+          categoryId: String(current.pickedCategoryId),
+          generation: compatRequest.current.generation,
+          loading: false,
+          data: data.attributes,
+        });
+      }
     } catch (err) {
       updateDraft(collectionId, (prev) => ({ ...prev, review: null, error: err.message }));
     } finally {
@@ -612,7 +675,10 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
               totalMatching: manualResult?.totalMatching || 0,
               direction: "next",
             });
-            const cardCompat = compat?.forId === id ? compat.data : null;
+            const cardCompat =
+              compat?.forId === id && String(compat.categoryId || "") === String(draft.pickedCategoryId || "")
+                ? compat
+                : null;
 
             return (
               <article
@@ -718,6 +784,47 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
                         {chosen.confidence ? ` · ${chosen.confidence}` : ""}
                       </p>
                       <p className="mt-1 text-brown/50">{t.elryanReviewReadyHint}</p>
+                    </div>
+                  ) : null}
+
+                  {cardCompat ? (
+                    <div className="rounded-xl bg-white p-3 text-xs text-brown/80 ring-1 ring-brown/10" data-elryan-attributes={id}>
+                      <p className="font-semibold text-brown">{t.elryanAttributeCompatibility}</p>
+                      {cardCompat.loading ? <p className="mt-1">{t.loading}</p> : null}
+                      <p className="mt-1">
+                        {t.elryanAttributeSetLabel}: {cardCompat.data?.attributeSetId || "—"}{" "}
+                        {cardCompat.data?.attributeSetName || ""}
+                      </p>
+                      <ul className="mt-2 space-y-2">
+                        {(cardCompat.data?.attributes || []).map((attr) => (
+                          <li key={attr.code}>
+                            <p className="font-semibold text-brown">
+                              {attr.name || attr.code}{" "}
+                              <span className="font-normal text-brown/60">
+                                {attr.status === "required"
+                                  ? t.elryanAttributeRequired || "Required"
+                                  : t.elryanAttributeOptional || "Optional"}
+                              </span>
+                            </p>
+                            {attr.variesByProduct ? (
+                              <p className="mt-0.5 text-amber-900">
+                                {t.elryanWattPerProduct ||
+                                  "Wattage is stored per product from verified specifications and Elryan value IDs. It is not saved with the category."}
+                              </p>
+                            ) : null}
+                            <p className="mt-0.5" dir="ltr">
+                              {(attr.values || [])
+                                .map((value) => `${value.name || "—"}${value.id != null ? ` (${value.id})` : ""}`)
+                                .join(", ") || "—"}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                      {(cardCompat.data?.blockers || []).map((blocker) => (
+                        <p key={blocker} className="mt-1 text-amber-900">
+                          {blocker}
+                        </p>
+                      ))}
                     </div>
                   ) : null}
 
@@ -941,28 +1048,10 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
                         type="button"
                         className={BUTTON_GHOST}
                         disabled={!draft.pickedCategoryId}
-                        onClick={() => inspectAttributes(id, draft.pickedCategoryId)}
+                        onClick={() => inspectAttributes(id, draft.pickedSnapshot)}
                       >
                         {t.elryanInspectAttributes}
                       </button>
-                      {cardCompat ? (
-                        <div className="rounded-xl bg-cream p-2">
-                          <p className="font-semibold text-brown">{t.elryanAttributeCompatibility}</p>
-                          <p className="mt-1">
-                            {t.elryanAttributeSetLabel}: {cardCompat.attributeSetId || "—"}{" "}
-                            {cardCompat.attributeSetName || ""}
-                          </p>
-                          <p className="mt-1">
-                            {(cardCompat.mandatoryAttributes || []).map((attr) => attr.code || attr.name).join(", ") ||
-                              "—"}
-                          </p>
-                          {(cardCompat.blockers || []).map((blocker) => (
-                            <p key={blocker} className="mt-1 text-amber-900">
-                              {blocker}
-                            </p>
-                          ))}
-                        </div>
-                      ) : null}
                     </div>
                   </details>
 

@@ -31,6 +31,7 @@ const elryanSyncJobSchema = new mongoose.Schema(
     missingRequired: { type: Number, default: 0 },
     variationBlocked: { type: Number, default: 0 },
     sentToElryan: { type: Number, default: 0 },
+    lastBatchId: { type: String, default: "" },
     warrantySummary: { type: mongoose.Schema.Types.Mixed, default: null },
     pricingSummary: { type: mongoose.Schema.Types.Mixed, default: null },
     packageDimensions: { type: mongoose.Schema.Types.Mixed, default: null },

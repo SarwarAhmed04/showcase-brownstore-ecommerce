@@ -284,6 +284,83 @@ test("ownership preview registers a process-local snapshot and save stays gated 
   }
 });
 
+test("a valid IT Lobby 38104 save records one owner and one operation, and a repeat inserts nothing", async () => {
+  const memory = await MongoMemoryServer.create();
+  const server = await listen();
+  try {
+    await mongoose.connect(memory.getUri(), { dbName: "brownstore" });
+    const db = mongoose.connection.db;
+    await seed(db);
+    const review = await post(server, "/platforms/gini/variant-sync/ownership/preview", {
+      parentSku: "38104",
+      productId: IT,
+      confirm: true,
+    });
+    assert.equal(review.status, 200);
+    assert.equal(review.body.code, "selection_prepared_not_saved");
+    assert.equal(review.body.selected.vendor, "IT Lobby");
+    assert.equal(review.body.selected.productId, IT);
+    assert.equal(review.body.authorizationSnapshot.administratorId, ADMIN);
+    const input = saveInput(review.body.authorizationSnapshot.id, {
+      vendorId: review.body.selected.vendorId,
+    });
+
+    const httpSave = await post(server, "/platforms/gini/variant-sync/ownership/save", input);
+    assert.equal(httpSave.status, 409);
+    assert.equal(httpSave.body.code, "ownership_save_disabled");
+    assert.equal(httpSave.body.saved, false);
+    assert.equal(httpSave.body.sentToGini, 0);
+    assert.equal(await db.collection("ginivariantparentowners").countDocuments(), 0);
+    assert.equal(await db.collection("ginivariantownershipoperations").countDocuments(), 0);
+
+    const deps = { host: "127.0.0.1", db, unitCommit: OWNERSHIP_COMMIT_TEST, env: ENABLED };
+    const first = await commitOwnershipSave(input, deps);
+    assert.equal(first.ok, true);
+    assert.equal(first.saved, true);
+    assert.equal(first.code, "ownership_recorded");
+    assert.equal(first.sentToGini, 0);
+    assert.equal(first.canSend, false);
+    assert.equal(first.publishesToGini, false);
+    assert.equal(first.remoteVerification, "not_performed");
+    assert.deepEqual(first.writes, ["GiniVariantParentOwner.create", "GiniVariantOwnershipOperation.create"]);
+    assert.equal(await db.collection("ginivariantparentowners").countDocuments(), 1);
+    assert.equal(await db.collection("ginivariantownershipoperations").countDocuments(), 1);
+    const owner = await db.collection("ginivariantparentowners").findOne({});
+    const operation = await db.collection("ginivariantownershipoperations").findOne({});
+    assert.equal(owner.parentSku, "38104");
+    assert.equal(owner.productId, IT);
+    assert.equal(owner.vendorId, review.body.selected.vendorId);
+    assert.equal(owner.status, "approved");
+    assert.equal(owner.giniProductId, "");
+    assert.equal(operation.parentSku, "38104");
+    assert.equal(operation.productId, IT);
+    assert.equal(operation.sourceItemId, IT_SOURCE);
+    assert.equal(operation.status, "recorded");
+    assert.equal(operation.administratorId, ADMIN);
+    assert.deepEqual(operation.excludedProductIds, [JAWAL]);
+
+    const second = await commitOwnershipSave(input, deps);
+    assert.equal(second.code, "ownership_already_recorded");
+    assert.equal(second.idempotent, true);
+    assert.equal(second.saved, false);
+    assert.equal(second.sentToGini, 0);
+    assert.deepEqual(second.writes, []);
+    assert.equal(await db.collection("ginivariantparentowners").countDocuments(), 1);
+    assert.equal(await db.collection("ginivariantownershipoperations").countDocuments(), 1);
+    const ownerAgain = await db.collection("ginivariantparentowners").findOne({});
+    const operationAgain = await db.collection("ginivariantownershipoperations").findOne({});
+    assert.equal(String(ownerAgain._id), String(owner._id));
+    assert.equal(String(operationAgain._id), String(operation._id));
+    assert.equal(OWNERSHIP_SAVE_RELEASED, false);
+    assert.equal(OWNERSHIP_SAVE_INDEXES_READY, false);
+  } finally {
+    clearOwnershipAuthorizations();
+    await new Promise((resolve) => server.close(resolve));
+    await mongoose.disconnect();
+    await memory.stop();
+  }
+});
+
 test("an authorization snapshot from another process is rejected", async () => {
   const { registerOwnershipAuthorization } = await import("./utils/giniOwnershipProductionContext.js");
   const snapshot = registerOwnershipAuthorization({

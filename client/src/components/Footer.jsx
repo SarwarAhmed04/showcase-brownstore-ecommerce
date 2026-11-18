@@ -84,7 +84,7 @@ export default function Footer() {
           dir="ltr"
           className="pointer-events-none mt-8 select-none whitespace-nowrap text-center font-display text-[19vw] font-extrabold leading-[0.78] tracking-[-0.06em] text-bean-50/[0.06] lg:text-[248px]"
         >
-          brownstore
+          Brown Store
         </div>
       </div>
     </footer>

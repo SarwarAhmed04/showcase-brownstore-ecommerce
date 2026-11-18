@@ -1,6 +1,6 @@
 export default function Logo({
   className = "h-11 w-11",
-  title = "BrownStore",
+  title = "Brown Store",
 }) {
   return (
     <img

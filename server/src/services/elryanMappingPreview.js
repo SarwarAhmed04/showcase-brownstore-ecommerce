@@ -16,6 +16,7 @@ import {
   prepareElryanCatalogForMatching,
   suggestElryanCategoriesForCollection,
 } from "../utils/elryanMappingSuggest.js";
+import { describeElryanAttributeSet } from "../utils/elryanAttributeSet.js";
 import { ElryanClientError } from "./elryanClient.js";
 import { elryanAttributeSetForCategory, elryanCategoryAttributes } from "./elryanCatalog.js";
 import { getElryanConnectionPublic } from "./elryanConnection.js";
@@ -462,29 +463,27 @@ export async function elryanAttributeCompatibility(categoryId) {
     blockers.push(`Attribute set request failed: ${err?.message || "error"}`);
   }
 
-  const setAttrs = Array.isArray(attributeSet?.attributes) ? attributeSet.attributes : [];
-  const mandatory = setAttrs.filter((a) => a?.mandatory === true);
-
-  const codes = mandatory.map((a) => String(a.code || a.name || "").toLowerCase());
-  const looksBrand = codes.some((c) => c.includes("brand"));
-  const looksColor = codes.some((c) => c.includes("color") || c.includes("colour"));
-  const looksSize = codes.some((c) => c.includes("size"));
-
-  if (!mandatory.length && !blockers.length) {
-    blockers.push("No mandatory attributes reported for this category in the attribute set response.");
-  }
+  const described = describeElryanAttributeSet(attributeSet);
+  const mandatory = described.filter((row) => row.status === "required");
+  const codes = described.map((row) => `${row.code} ${row.name}`.toLowerCase());
+  const looksBrand = codes.some((code) => code.includes("brand"));
+  const looksColor = codes.some((code) => code.includes("color") || code.includes("colour"));
+  const looksSize = codes.some((code) => code.includes("size"));
 
   return {
     categoryId: id,
     attributeSetId: attributeSet?.id ?? null,
     attributeSetName: attributeSet?.name || "",
     productNameFormat: attributeSet?.productNameFormat || "",
-    mandatoryAttributes: mandatory.map((a) => ({
-      id: a.id ?? null,
-      code: a.code || "",
-      name: a.name || "",
-      input: a.input || "",
-      valueCount: Array.isArray(a.values) ? a.values.length : 0,
+    attributes: described,
+    mandatoryAttributes: mandatory.map((row) => ({
+      id: row.id ?? null,
+      code: row.code,
+      name: row.name,
+      status: row.status,
+      variesByProduct: row.variesByProduct === true,
+      values: row.values,
+      valueCount: row.values.length,
     })),
     categoryAttributes: attributes.map((a) => ({
       attributeId: a.attributeId ?? null,

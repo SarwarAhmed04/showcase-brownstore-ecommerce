@@ -55,6 +55,7 @@ import {
 import {
   previewElryanProductionUpdate,
   updateElryanProductionDimensions,
+  updateElryanProductionPrice,
 } from "../services/elryanProductionUpdate.js";
 import {
   confirmElryanStagingDimensions,
@@ -603,6 +604,23 @@ elryanConnectionRouter.post("/platforms/elryan/sync-one/production-update", asyn
   }
 });
 
+elryanConnectionRouter.post("/platforms/elryan/sync-one/production-price-update", async (req, res) => {
+  try {
+    const result = assertNoElryanSecretLeak(
+      await updateElryanProductionPrice({
+        productId: req.body?.productId,
+        listingId: req.body?.listingId,
+        confirm: req.body?.confirm === true,
+        previewToken: req.body?.previewToken,
+      }),
+      ""
+    );
+    res.status(result.ok ? 200 : result.httpStatus >= 400 && result.httpStatus < 600 ? result.httpStatus : 403).json(result);
+  } catch (err) {
+    fail(res, err, "Failed to update the Elryan Production selling price");
+  }
+});
+
 elryanConnectionRouter.post("/platforms/elryan/sync-one/send", async (req, res) => {
   try {
     const result = assertNoElryanSecretLeak(
@@ -800,7 +818,12 @@ elryanConnectionRouter.post("/platforms/elryan/sync-all/stop", async (_req, res)
   }
 });
 
-elryanConnectionRouter.post("/platforms/elryan/sync-all/start", async (_req, res) => {
-  const result = await startElryanSyncAll();
-  res.status(403).json(result);
+elryanConnectionRouter.post("/platforms/elryan/sync-all/start", async (req, res) => {
+  const result = await startElryanSyncAll({
+    confirm: req.body?.confirm === true,
+    strategy: req.body?.strategy,
+  });
+  const status =
+    result.ok === true ? 200 : result.code === "writes_disabled" || result.code === "writes_gated" ? 403 : 409;
+  res.status(status).json(result);
 });

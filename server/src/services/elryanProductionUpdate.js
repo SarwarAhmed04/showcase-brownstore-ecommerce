@@ -12,10 +12,18 @@ import {
   hashElryanDimensionUpdateBinding,
   reviewedElryanDimensions,
 } from "../utils/elryanDimensionCompare.js";
+import {
+  ELRYAN_PRICE_UPDATE_ACTION,
+  elryanPriceReviewMessage,
+  elryanPriceUpdateBinding,
+  hashElryanPriceUpdateBinding,
+  readElryanSellingPrice,
+  reviewElryanSellingPrice,
+} from "../utils/elryanPriceUpdate.js";
 import { sanitizeElryanText } from "../utils/elryanRedact.js";
 import { elryanListingFromSkuConflict } from "../utils/elryanSku.js";
 import { ELRYAN_FIRST_STAGING_CREATE_SKU } from "../utils/elryanStagingGate.js";
-import { elryanGetProduct, elryanSkuExists, elryanUpdateProductionDimensions } from "./elryanCatalog.js";
+import { elryanGetProduct, elryanSkuExists, elryanUpdateProductionDimensions, elryanUpdateProductionPrice } from "./elryanCatalog.js";
 import { resolveElryanConfig } from "./elryanConnection.js";
 import { assembleElryanSyncOne } from "./elryanSyncOne.js";
 
@@ -183,6 +191,31 @@ export async function previewElryanProductionUpdate({ productId, listingId } = {
     : compared.updateAllowed
       ? "Confirmed package dimensions differ. An explicit update can send only those fields."
       : "The confirmed package dimensions already match this listing.";
+  const priceReview = reviewElryanSellingPrice({
+    product: matched.product,
+    approvedPrice: context.assembled.payload?.price,
+    approvalValid: context.assembled.pricingApproval?.valid === true,
+  });
+  let pricePreviewToken = "";
+  if (priceReview.priceCode === "price_differs" || priceReview.priceCode === "price_unchanged") {
+    const priceBinding = elryanPriceUpdateBinding({
+      listingId: matched.listing.id,
+      currentSellingPrice: priceReview.currentSellingPrice,
+      price: priceReview.pricePatch.price,
+    });
+    const priceBindingHash = hashElryanPriceUpdateBinding(priceBinding);
+    pricePreviewToken = crypto.randomBytes(24).toString("base64url");
+    await ElryanSyncOnePreview.create({
+      tokenHash: hashToken(pricePreviewToken),
+      productId: context.assembled.productKey,
+      payloadHash: priceBindingHash,
+      purpose: ELRYAN_PRICE_UPDATE_ACTION,
+      listingId: matched.listing.id,
+      bindingHash: priceBindingHash,
+      readiness: context.assembled.validation.readiness,
+      expiresAt,
+    });
+  }
   return {
     ok: true,
     classification: "READ",
@@ -201,6 +234,14 @@ export async function previewElryanProductionUpdate({ productId, listingId } = {
     updateAllowed: compared.updateAllowed,
     dimensionsConfirmed: context.assembled.dimensions?.confirmed === true,
     previewToken: token,
+    currentSellingPrice: priceReview.currentSellingPrice,
+    approvedPrice: priceReview.approvedPrice,
+    priceCurrency: priceReview.currency,
+    pricePatch: priceReview.pricePatch,
+    priceUpdateAllowed: priceReview.priceUpdateAllowed,
+    priceCode: priceReview.priceCode,
+    pricePreviewToken,
+    priceMessage: elryanPriceReviewMessage(priceReview.priceCode),
     expiresAt,
     message,
   };
@@ -337,6 +378,181 @@ export async function updateElryanProductionDimensions({ productId, listingId, c
       rows: savedCompared.rows,
       httpStatus: result.httpStatus,
       message: `Elryan saved width ${savedDimensions.width} cm, height ${savedDimensions.height} cm, and depth ${savedDimensions.depth} cm.`,
+    };
+  } finally {
+    inflightUpdates.delete(localKey);
+  }
+}
+
+/**
+ * WRITE — PATCH the existing Production listing with only the selling price.
+ * The preview token is bound to the reviewed sellingPrice and the exact price patch.
+ */
+export async function updateElryanProductionPrice({ productId, listingId, confirm, previewToken } = {}) {
+  if (!elryanProductWritesEnabled() || !elryanLiveProductWritesEnabled()) {
+    const code = elryanProductWritesEnabled() ? "writes_gated" : "writes_disabled";
+    return blocked(code, "Both write flags must be true before a Production price update.", {
+      classification: "WRITE",
+      httpStatus: 403,
+      priceUpdateAllowed: false,
+      pricePatch: {},
+    });
+  }
+  if (confirm !== true) {
+    return blocked("confirm_required", "Production price update requires explicit confirm=true.", {
+      classification: "WRITE",
+      priceUpdateAllowed: false,
+      pricePatch: {},
+    });
+  }
+  const token = String(previewToken || "").trim();
+  if (!token) {
+    return blocked("preview_required", "Production price update requires the price preview token.", {
+      classification: "WRITE",
+      priceUpdateAllowed: false,
+      pricePatch: {},
+    });
+  }
+  const localKey = `production-update:${String(productId || "")}`;
+  if (inflightUpdates.has(localKey)) {
+    return blocked("update_in_progress", "A Production update for this product is already running.", {
+      classification: "WRITE",
+      priceUpdateAllowed: false,
+      pricePatch: {},
+    });
+  }
+  inflightUpdates.add(localKey);
+  try {
+    const context = await productionContext(productId);
+    if (!context.ok) return { ...context, classification: "WRITE", priceUpdateAllowed: false, pricePatch: {} };
+    const preview = await ElryanSyncOnePreview.findOne({ tokenHash: hashToken(token) }).lean();
+    if (
+      !preview ||
+      preview.purpose !== ELRYAN_PRICE_UPDATE_ACTION ||
+      preview.productId !== context.assembled.productKey ||
+      preview.listingId !== String(listingId || "").trim()
+    ) {
+      return blocked("preview_mismatch", "This preview token is not bound to this price update. No listing was changed.", {
+        classification: "WRITE",
+        priceUpdateAllowed: false,
+        pricePatch: {},
+      });
+    }
+    if (new Date(preview.expiresAt).getTime() <= Date.now()) {
+      return blocked("preview_expired", "The price preview has expired. No listing was changed.", {
+        classification: "WRITE",
+        priceUpdateAllowed: false,
+        pricePatch: {},
+      });
+    }
+    const matched = await matchProductionListing({
+      productId: context.assembled.productKey,
+      sku: context.sku,
+      listingId,
+      apiKey: context.config.apiKey,
+    });
+    if (!matched.ok) return { ...matched, classification: "WRITE", priceUpdateAllowed: false, pricePatch: {} };
+    const priceReview = reviewElryanSellingPrice({
+      product: matched.product,
+      approvedPrice: context.assembled.payload?.price,
+      approvalValid: context.assembled.pricingApproval?.valid === true,
+    });
+    const binding = elryanPriceUpdateBinding({
+      listingId: matched.listing.id,
+      currentSellingPrice: priceReview.currentSellingPrice,
+      price: priceReview.pricePatch.price,
+    });
+    if (hashElryanPriceUpdateBinding(binding) !== preview.bindingHash) {
+      return blocked(
+        "preview_stale",
+        "The reviewed selling price or the approved price changed. Preview the update again. No listing was changed.",
+        {
+          classification: "WRITE",
+          currentSellingPrice: priceReview.currentSellingPrice,
+          approvedPrice: priceReview.approvedPrice,
+          pricePatch: priceReview.pricePatch,
+          priceUpdateAllowed: false,
+        }
+      );
+    }
+    if (!priceReview.priceUpdateAllowed) {
+      return blocked(priceReview.priceCode, elryanPriceReviewMessage(priceReview.priceCode), {
+        classification: "WRITE",
+        currentSellingPrice: priceReview.currentSellingPrice,
+        approvedPrice: priceReview.approvedPrice,
+        priceCurrency: priceReview.currency,
+        pricePatch: {},
+        priceUpdateAllowed: false,
+      });
+    }
+    const result = await elryanUpdateProductionPrice(matched.listing.id, priceReview.pricePatch.price);
+    if (!result.ok) {
+      return blocked("elryan_rejected", "Elryan did not accept the selling-price update.", {
+        classification: "WRITE",
+        httpStatus: result.httpStatus,
+        priceUpdateAllowed: false,
+        pricePatch: priceReview.pricePatch,
+      });
+    }
+    let saved;
+    try {
+      saved = await elryanGetProduct(matched.listing.id);
+    } catch (err) {
+      return blocked(
+        "saved_read_failed",
+        sanitizeElryanText(err?.message || "The price update was sent, and the saved listing could not be reread.", [context.config.apiKey]),
+        {
+          classification: "WRITE",
+          httpStatus: result.httpStatus,
+          listingId: matched.listing.id,
+          pricePatch: priceReview.pricePatch,
+          priceUpdateAllowed: false,
+        }
+      );
+    }
+    const savedIdentity = elryanListingIdentity(saved.product);
+    if (savedIdentity.id !== matched.listing.id || savedIdentity.sku !== context.sku) {
+      return blocked(
+        "listing_mismatch",
+        "The listing read after the price update does not match this SKU and listing ID.",
+        {
+          classification: "WRITE",
+          httpStatus: result.httpStatus,
+          listing: { id: savedIdentity.id, sku: savedIdentity.sku },
+          priceUpdateAllowed: false,
+          pricePatch: priceReview.pricePatch,
+        }
+      );
+    }
+    const savedPrice = readElryanSellingPrice(savedIdentity.product);
+    if (!savedPrice.present || savedPrice.amount == null) {
+      return blocked(
+        "saved_price_unreadable",
+        "The price update was sent, and the reread listing did not include sellingPrice.",
+        {
+          classification: "WRITE",
+          httpStatus: result.httpStatus,
+          listingId: matched.listing.id,
+          pricePatch: priceReview.pricePatch,
+          priceUpdateAllowed: false,
+        }
+      );
+    }
+    return {
+      ok: true,
+      classification: "WRITE",
+      code: "price_updated",
+      environment: "production",
+      sku: context.sku,
+      listingId: matched.listing.id,
+      currentSellingPrice: priceReview.currentSellingPrice,
+      approvedPrice: priceReview.approvedPrice,
+      savedSellingPrice: savedPrice.amount,
+      priceCurrency: priceReview.currency,
+      pricePatch: priceReview.pricePatch,
+      priceUpdateAllowed: false,
+      httpStatus: result.httpStatus,
+      message: `Elryan saved selling price ${savedPrice.amount} IQD.`,
     };
   } finally {
     inflightUpdates.delete(localKey);

@@ -8,6 +8,21 @@ export function normalizeElryanCategoryPickId(categoryId) {
   return String(categoryId).trim();
 }
 
+export function isElryanConfirmedLeaf(category) {
+  if (!category || typeof category !== "object") return false;
+  if (category.kind === "parent" || category.isParent === true) return false;
+  return category.kind === "leaf" || category.isParent === false;
+}
+
+export function acceptElryanAttributeResponse({ generation, categoryId, activeGeneration, activeCategoryId } = {}) {
+  return (
+    Number.isInteger(generation) &&
+    generation === activeGeneration &&
+    String(categoryId || "") !== "" &&
+    String(categoryId) === String(activeCategoryId || "")
+  );
+}
+
 export function isElryanCategoryPicked(pickedCategoryId, categoryId) {
   const picked = normalizeElryanCategoryPickId(pickedCategoryId);
   const candidate = normalizeElryanCategoryPickId(categoryId);

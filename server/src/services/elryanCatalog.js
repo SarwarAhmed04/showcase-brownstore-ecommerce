@@ -442,3 +442,60 @@ export async function elryanUpdateProductionDimensions(listingId, body) {
     retries: 0,
   });
 }
+
+/**
+ * WRITE — PATCH /v1/products/{id} with only `price`.
+ * Marketplace v1 uses `price` for what the customer pays. GET reads that amount as sellingPrice.
+ * cost is omitted because sending cost recalculates the selling price from commission.
+ * Does not retry and does not send any other product field.
+ */
+export async function elryanUpdateProductionPrice(listingId, price) {
+  if (!elryanProductWritesEnabled()) {
+    throw new ElryanClientError("Elryan product publishing is disabled.", {
+      status: 403,
+      code: "writes_disabled",
+      classification: "WRITE",
+    });
+  }
+  if (!elryanLiveProductWritesEnabled()) {
+    throw new ElryanClientError("Live Elryan product writes are not enabled.", {
+      status: 403,
+      code: "writes_gated",
+      classification: "WRITE",
+    });
+  }
+  const config = await resolveElryanConfig();
+  const productionBase = ELRYAN_ENVIRONMENTS.production.baseUrl;
+  if (config.environment !== "production" || config.baseUrl !== productionBase) {
+    throw new ElryanClientError("Production update requires the active Production connection.", {
+      status: 403,
+      code: "production_required",
+      classification: "WRITE",
+    });
+  }
+  const id = String(listingId || "").trim();
+  if (!elryanProductIdValid(id)) {
+    throw new ElryanClientError("Marketplace v1 product ids are 24 hexadecimal characters.", {
+      status: 403,
+      code: "listing_id_invalid",
+      classification: "WRITE",
+    });
+  }
+  const amount = Number(price);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new ElryanClientError("The selling price must be a number above zero.", {
+      status: 403,
+      code: "invalid_price",
+      classification: "WRITE",
+    });
+  }
+  return elryanRequest({
+    baseUrl: productionBase,
+    apiKey: config.apiKey,
+    path: ELRYAN_PATHS.productById(id),
+    method: "PATCH",
+    body: { price: amount },
+    classification: "WRITE",
+    retries: 0,
+  });
+}

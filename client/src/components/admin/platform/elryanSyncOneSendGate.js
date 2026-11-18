@@ -226,6 +226,16 @@ export function elryanProductionPriceApprovalRequest({ preview, confirm } = {}) 
   return { productId, confirm: true, reviewedPrice };
 }
 
+/** Confirm sends the preview identity only. The server rebuilds the price patch from sellingPrice and the approval. */
+export function elryanProductionPriceUpdateRequest({ updatePreview, confirm } = {}) {
+  if (confirm !== true || updatePreview?.priceUpdateAllowed !== true) return null;
+  const productId = String(updatePreview.productId || "").trim();
+  const listingId = String(updatePreview.listingId || "").trim();
+  const previewToken = String(updatePreview.pricePreviewToken || "").trim();
+  if (!productId || !listingId || !previewToken) return null;
+  if (String(updatePreview.sku || "") !== ELRYAN_STAGING_SEND_SKU) return null;
+  return { productId, listingId, previewToken, confirm: true };
+}
 
 /** Confirm sends the preview identity only. The server rebuilds the dimension patch. */
 export function elryanProductionDimensionUpdateRequest({ updatePreview, confirm } = {}) {

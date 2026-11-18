@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  acceptElryanAttributeResponse,
   applyElryanCategoryPick,
+  isElryanConfirmedLeaf,
   applyElryanMappingSaveResult,
   buildElryanMappingSaveBody,
   elryanCollectionPreviewQuery,
@@ -293,5 +295,30 @@ describe("Elryan quick mapping selection", () => {
     });
     assert.equal(saved.message, "saved");
     assert.equal(nextUnmappedCollectionId(saved.rows, "b"), "c");
+  });
+
+  it("loads attributes for a confirmed leaf and ignores a stale category response", () => {
+    assert.equal(isElryanConfirmedLeaf({ isParent: false, categoryId: 339 }), true);
+    assert.equal(isElryanConfirmedLeaf({ kind: "leaf", categoryId: "111" }), true);
+    assert.equal(isElryanConfirmedLeaf({ isParent: true, categoryId: 71 }), false);
+    assert.equal(isElryanConfirmedLeaf({ isParent: null, categoryId: 80 }), false);
+    assert.equal(
+      acceptElryanAttributeResponse({
+        generation: 2,
+        categoryId: "339",
+        activeGeneration: 3,
+        activeCategoryId: "111",
+      }),
+      false
+    );
+    assert.equal(
+      acceptElryanAttributeResponse({
+        generation: 3,
+        categoryId: "111",
+        activeGeneration: 3,
+        activeCategoryId: "111",
+      }),
+      true
+    );
   });
 });

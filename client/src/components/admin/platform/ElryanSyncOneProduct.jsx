@@ -6,6 +6,7 @@ import {
   elryanProductionConfirmFacts,
   elryanProductionDimensionUpdateRequest,
   elryanProductionPriceApprovalRequest,
+  elryanProductionPriceUpdateRequest,
   productionPriceApprovalReady,
   elryanProductionSendGate,
   elryanProductionSendRequest,
@@ -36,6 +37,7 @@ export default function ElryanSyncOneProduct({ t, lang }) {
   const [listingId, setListingId] = useState("");
   const [updatePreview, setUpdatePreview] = useState(null);
   const [updateConfirm, setUpdateConfirm] = useState(false);
+  const [priceConfirm, setPriceConfirm] = useState(false);
   const [approvalConfirm, setApprovalConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -208,6 +210,7 @@ export default function ElryanSyncOneProduct({ t, lang }) {
     setBusy(true);
     setError("");
     setUpdateConfirm(false);
+    setPriceConfirm(false);
     try {
       const data = await api.elryanProductionUpdatePreview({
         productId: selected.id,
@@ -238,6 +241,22 @@ export default function ElryanSyncOneProduct({ t, lang }) {
     }
   }
 
+  async function onConfirmPriceUpdate() {
+    const body = elryanProductionPriceUpdateRequest({ updatePreview, confirm: true });
+    if (!body) return;
+    setBusy(true);
+    setError("");
+    try {
+      const data = await api.elryanProductionPriceUpdate(body);
+      setUpdatePreview((current) => ({ ...(current || {}), ...data, priceUpdateAllowed: false }));
+      setPriceConfirm(false);
+      if (!data.ok) setError(data.message || "");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function onRefreshSendAttempt() {
     const productId = preview?.product?.id || selected?.id;
@@ -561,6 +580,33 @@ export default function ElryanSyncOneProduct({ t, lang }) {
               </table>
             ) : null}
             {updatePreview?.message ? <p className="text-sm text-brown/70">{updatePreview.message}</p> : null}
+            {updatePreview && (updatePreview.currentSellingPrice != null || updatePreview.approvedPrice != null || updatePreview.priceMessage) ? (
+              <dl className="grid gap-2 rounded-2xl bg-cream px-3 py-2 text-sm">
+                <div>
+                  <dt className="text-brown/45">{t.elryanCurrentSellingPrice}</dt>
+                  <dd className="font-semibold">
+                    {updatePreview.currentSellingPrice == null
+                      ? "—"
+                      : `${updatePreview.currentSellingPrice} ${updatePreview.priceCurrency || "IQD"}`}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-brown/45">{t.elryanApprovedPrice}</dt>
+                  <dd className="font-semibold">{updatePreview.approvedPrice == null ? "—" : `${updatePreview.approvedPrice} IQD`}</dd>
+                </div>
+              </dl>
+            ) : null}
+            {updatePreview?.priceMessage ? <p className="text-sm text-brown/70">{updatePreview.priceMessage}</p> : null}
+            {updatePreview?.savedSellingPrice != null ? (
+              <p className="text-sm font-semibold text-brown">
+                {t.elryanSavedSellingPrice}: {updatePreview.savedSellingPrice} {updatePreview.priceCurrency || "IQD"}
+              </p>
+            ) : null}
+            {updatePreview?.priceUpdateAllowed ? (
+              <button type="button" className={BUTTON} disabled={busy} onClick={() => setPriceConfirm(true)}>
+                {t.elryanUpdateSellingPrice}
+              </button>
+            ) : null}
             {updatePreview?.savedDimensions ? (
               <p className="text-sm font-semibold text-brown">
                 {t.elryanSavedDimensions}: {updatePreview.savedDimensions.width} × {updatePreview.savedDimensions.height} ×{" "}
@@ -663,6 +709,45 @@ export default function ElryanSyncOneProduct({ t, lang }) {
                 }}
               >
                 {t.elryanApproveProductionPrice}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {priceConfirm ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-brown/40 p-4 sm:items-center" role="dialog" aria-modal="true">
+          <div className="w-full max-w-lg space-y-4 rounded-3xl bg-white p-5">
+            <p className="text-lg font-semibold text-brown">{t.elryanUpdateSellingPrice}</p>
+            <p className="text-sm text-red-800">{t.elryanSellingPriceWarning}</p>
+            <dl className="grid gap-2 text-sm">
+              <div>
+                <dt className="text-brown/45">SKU</dt>
+                <dd className="font-semibold">{updatePreview?.sku}</dd>
+              </div>
+              <div>
+                <dt className="text-brown/45">{t.elryanListingId}</dt>
+                <dd className="font-semibold">{updatePreview?.listingId}</dd>
+              </div>
+              <div>
+                <dt className="text-brown/45">{t.elryanCurrentSellingPrice}</dt>
+                <dd className="font-semibold">
+                  {updatePreview?.currentSellingPrice == null
+                    ? "—"
+                    : `${updatePreview.currentSellingPrice} ${updatePreview.priceCurrency || "IQD"}`}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-brown/45">{t.elryanApprovedPrice}</dt>
+                <dd className="font-semibold">{updatePreview?.approvedPrice == null ? "—" : `${updatePreview.approvedPrice} IQD`}</dd>
+              </div>
+            </dl>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className={GHOST} onClick={() => setPriceConfirm(false)}>
+                {t.elryanSendCancel}
+              </button>
+              <button type="button" className={BUTTON} disabled={busy} onClick={onConfirmPriceUpdate}>
+                {t.elryanUpdateSellingPrice}
               </button>
             </div>
           </div>

@@ -2,11 +2,24 @@ import mongoose from "mongoose";
 import { Commission } from "../models/Commission.js";
 import { ElryanCategoryCatalogSnapshot } from "../models/ElryanCategoryCatalogSnapshot.js";
 import { ElryanConfirmedSend } from "../models/ElryanConfirmedSend.js";
+import { ElryanStagingProductOverride } from "../models/ElryanStagingProductOverride.js";
 import { ElryanSyncJob } from "../models/ElryanSyncJob.js";
 import { ElryanSyncProductResult } from "../models/ElryanSyncProductResult.js";
 import { Product } from "../models/Product.js";
-import { inspectElryanAttributeValues } from "../utils/elryanAttributeSet.js";
-import { ELRYAN_READINESS, ELRYAN_PATHS, elryanProductWritesEnabled } from "../utils/elryanConstants.js";
+import { inspectElryanAttributeValues, resolveElryanSavedAttributes } from "../utils/elryanAttributeSet.js";
+import {
+  buildElryanBatchCreateBody,
+  buildElryanBatchUpdateBody,
+  classifyElryanBatchResult,
+  partitionElryanBatchCreates,
+  reconcileElryanBatchResult,
+} from "../utils/elryanBatch.js";
+import {
+  ELRYAN_READINESS,
+  ELRYAN_PATHS,
+  elryanLiveProductWritesEnabled,
+  elryanProductWritesEnabled,
+} from "../utils/elryanConstants.js";
 import {
   ELRYAN_PACKAGE_DIMENSIONS_NOTE,
   ELRYAN_PRICING_NOTE,
@@ -37,7 +50,7 @@ import {
 } from "../utils/elryanWarrantyResolve.js";
 import { resolveElryanScopedValue } from "../utils/elryanValueResolve.js";
 import { brownCollectionIdentity, resolveElryanDimensions } from "../utils/elryanDimensionResolve.js";
-import { elryanDimensionBlockers } from "../utils/elryanStagingGate.js";
+import { ELRYAN_FIRST_STAGING_CREATE_SKU, elryanDimensionBlockers } from "../utils/elryanStagingGate.js";
 import { ElryanClientError, elryanRequest } from "./elryanClient.js";
 import { resolveElryanConfig } from "./elryanConnection.js";
 import {
@@ -96,8 +109,12 @@ function kick(jobId) {
 }
 
 function mappingAttributes(mappingValues, environment) {
-  const nested = mappingValues?.environments?.[environment]?.attributes;
+  const env = environment === "production" ? "production" : "staging";
+  const nested = mappingValues?.environments?.[env]?.attributes;
   if (nested && typeof nested === "object" && !Array.isArray(nested)) return nested;
+  const categoryId = String(mappingValues?.categoryId || "").trim();
+  const tagged = String(mappingValues?.elryanEnvironment || "staging").trim().toLowerCase();
+  if (!categoryId || tagged !== env) return {};
   if (mappingValues?.attributes && typeof mappingValues.attributes === "object" && !Array.isArray(mappingValues.attributes)) {
     return mappingValues.attributes;
   }
@@ -162,7 +179,7 @@ function publicJob(job, extras = {}) {
     pricingUnverified: raw.pricingUnverified || 0,
     missingRequired: raw.missingRequired || 0,
     variationBlocked: raw.variationBlocked || 0,
-    sentToElryan: 0,
+    sentToElryan: Number(raw.sentToElryan) || 0,
     percent: total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0,
     warrantySummary: raw.warrantySummary || null,
     pricingSummary: raw.pricingSummary || null,
@@ -304,12 +321,11 @@ async function prepareContext(environment) {
   };
 }
 
-async function attributeInspection(context, categoryId, attributes) {
+async function attributeInspection(context, categoryId, mappingAttributes, product, override) {
   const id = String(categoryId || "").trim();
-  if (!id) return { requiredCodes: [], rejectedCodes: [], unverified: false, attributeSet: null };
   if (!context.attributeSets.has(id)) {
-    if (!context.config?.hasApiKey) {
-      context.attributeSets.set(id, { unverified: true, attributeSet: null });
+    if (!id || !context.config?.hasApiKey) {
+      context.attributeSets.set(id, { unverified: Boolean(id), attributeSet: null });
     } else {
       try {
         const result = await elryanRequest({
@@ -330,9 +346,21 @@ async function attributeInspection(context, categoryId, attributes) {
       }
     }
   }
-  const cached = context.attributeSets.get(id);
+  const cached = context.attributeSets.get(id) || { unverified: false, attributeSet: null };
+  const attributes = resolveElryanSavedAttributes({
+    environment: context.environment,
+    mappingAttributes,
+    override: context.environment === "staging" ? override : null,
+    attributeSet: cached.attributeSet,
+    product,
+  });
   const inspected = inspectElryanAttributeValues(cached.attributeSet, attributes);
-  return { ...inspected, unverified: cached.unverified === true, attributeSet: cached.attributeSet };
+  return {
+    ...inspected,
+    attributes,
+    unverified: cached.unverified === true,
+    attributeSet: cached.attributeSet,
+  };
 }
 
 function lookupWarranty(context, doc) {
@@ -345,7 +373,7 @@ function lookupWarranty(context, doc) {
   }).mapping;
 }
 
-export async function evaluateElryanProductForSync(doc, context, { origin = "", dimensionRow = null, excluded = false } = {}) {
+export async function evaluateElryanProductForSync(doc, context, { origin = "", dimensionRow = null, excluded = false, productOverride = null } = {}) {
   const productId = String(doc._id);
   const resolved = toResolvedProduct(doc);
   const sku = resolved?.sku || doc.itemCode || "";
@@ -374,7 +402,7 @@ export async function evaluateElryanProductForSync(doc, context, { origin = "", 
     ? resolveElryanScopedValue(context.colorRows, { environment: context.environment, subject: colourKey })?.row || null
     : null;
   const warranty = lookupWarranty(context, doc);
-  const attributes = mappingAttributes(mapping, context.environment);
+  const mappedAttributes = mappingAttributes(mapping, context.environment);
   const collectionIdentity = brownCollectionIdentity(doc);
   const dimensions = resolveElryanDimensions({
     environment: context.environment,
@@ -390,7 +418,14 @@ export async function evaluateElryanProductForSync(doc, context, { origin = "", 
   const category = mapping.categoryId ? context.categoryIndex.get(String(mapping.categoryId)) : null;
   const parentBlock = elryanParentCategoryBlocker(category);
   if (parentBlock) extraBlockers.push(parentBlock);
-  const attributeInfo = await attributeInspection(context, mapping.categoryId, attributes);
+  const attributeInfo = await attributeInspection(
+    context,
+    mapping.categoryId,
+    mappedAttributes,
+    doc,
+    productOverride
+  );
+  const attributes = attributeInfo.attributes;
   const pricing = await buildElryanPricingView(doc, { commissionRules: context.rules });
   const images = collectElryanImageUrls(resolved);
   extraBlockers.push(...(await verifyElryanPublicImages(images)));
@@ -442,6 +477,23 @@ export async function evaluateElryanProductForSync(doc, context, { origin = "", 
     readiness: validation.readiness,
     dimensionSource: dimensions.source,
     dimensionReason: dimensions.reason,
+    batchItem: {
+      sku: payload.sku,
+      brand: brand?.elryanLabel || brand?.brownLabel || "",
+      color: color?.elryanLabel || color?.brownLabel || "",
+      categoryId: payload.categoryId || "",
+      sellingPrice: payload.price,
+      quantity: payload.quantity,
+      vendorTitle: payload.vendorTitle,
+      vendorTitleAr: payload.vendorTitleAr,
+      vendorDescription: payload.vendorDescription,
+      warrantyCode: payload.warrantyCode,
+      images: images,
+      width: payload.width,
+      height: payload.height,
+      depth: payload.depth,
+      attributes: payload.attributes,
+    },
   };
 }
 
@@ -532,7 +584,7 @@ export async function getElryanSyncAllStatus() {
     job: publicJob(job, { blockedSamples }),
     environment,
     dryRun: true,
-    sentToElryan: 0,
+    sentToElryan: Number(job.sentToElryan) || 0,
     productWritesEnabled: elryanProductWritesEnabled(),
   };
 }
@@ -621,6 +673,14 @@ async function processPreviewBatch(job, context, token) {
     batch,
     context.collectionDimensions
   );
+  const overrideByProduct = new Map();
+  if (context.environment === "staging") {
+    const overrides = await ElryanStagingProductOverride.find({
+      environment: "staging",
+      productId: { $in: batch.map((doc) => String(doc._id)) },
+    }).lean();
+    for (const row of overrides) overrideByProduct.set(String(row.productId), row);
+  }
   const evaluated = [];
   for (const doc of batch) {
     if (!loopIsCurrent(job._id, token)) return { done: true };
@@ -630,6 +690,7 @@ async function processPreviewBatch(job, context, token) {
         origin: context.origin || "",
         dimensionRow: dimensionInputs.checks.get(productId) || null,
         excluded: dimensionInputs.exclusions.has(productId),
+        productOverride: overrideByProduct.get(productId) || null,
       });
       evaluated.push(result);
     } catch (err) {
@@ -758,17 +819,265 @@ export async function stopElryanSyncAll() {
   return { job: publicJob(job), sentToElryan: 0 };
 }
 
-/** Product writes stay refused. This does not call Elryan. */
-export async function startElryanSyncAll() {
+function blockedBatch(code, message, extra = {}) {
   return {
     ok: false,
     blocked: true,
     classification: "WRITE",
-    code: "writes_disabled",
+    code,
     productWritesEnabled: elryanProductWritesEnabled(),
-    liveWritesAllowed: false,
+    liveWritesAllowed: elryanLiveProductWritesEnabled(),
     sentToElryan: 0,
-    message:
-      "Elryan product sending is disabled. Start Full Sync and Start Changed Sync stay off until publishing is explicitly approved. No product create, update, or bulk write was called.",
+    message,
+    ...extra,
+  };
+}
+
+async function readBatchOperation(config, batchId) {
+  return elryanRequest({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    path: ELRYAN_PATHS.batchById(batchId),
+    method: "GET",
+    classification: "READ",
+    retries: 0,
+  });
+}
+
+async function postBatch(config, action, body) {
+  return elryanRequest({
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    path: action === "update" ? ELRYAN_PATHS.batchUpdate : ELRYAN_PATHS.batchCreate,
+    method: "POST",
+    classification: "WRITE",
+    body,
+    retries: 0,
+  });
+}
+
+async function recordSendOutcomes(job, results) {
+  const saved = results.filter((row) => row.outcome === "saved").length;
+  if (results.length) {
+    await ElryanSyncProductResult.bulkWrite(
+      results.map((row) => ({
+        updateOne: {
+          filter: { jobId: job._id, sku: row.sku },
+          update: {
+            $set: {
+              sendOutcome: row.outcome,
+              sendErrors: row.errors || [],
+            },
+          },
+        },
+      })),
+      { ordered: false }
+    );
+  }
+  job.sentToElryan = (Number(job.sentToElryan) || 0) + saved;
+  await job.save();
+  return saved;
+}
+
+/**
+ * Sends a finished preview when both write flags are on.
+ * Flags off, Production, and an unreconciled batch do not call product create or update.
+ */
+export async function startElryanSyncAll({ confirm, strategy } = {}) {
+  if (!elryanProductWritesEnabled()) {
+    return blockedBatch(
+      "writes_disabled",
+      "Elryan product sending is disabled. Start Full Sync and Start Changed Sync stay off until publishing is explicitly approved. No product create, update, or bulk write was called."
+    );
+  }
+  if (!elryanLiveProductWritesEnabled()) {
+    return blockedBatch(
+      "writes_gated",
+      "Live Elryan product writes require both write flags. No product create or update was called."
+    );
+  }
+  if (confirm !== true) {
+    return blockedBatch("confirm_required", "Bulk send requires confirm=true. No product was sent.");
+  }
+  const config = await resolveElryanConfig();
+  const environment = config.environment === "production" ? "production" : "staging";
+  if (environment !== "staging") {
+    return blockedBatch(
+      "staging_only",
+      "Production sending is refused. Staging mappings, dimensions, prices, and permissions are not reused."
+    );
+  }
+  const requested = strategy === "changed" ? "changed" : "full";
+  const job = await ElryanSyncJob.findOne({ environment: "staging", status: "preview", strategy: requested }).sort({
+    createdAt: -1,
+  });
+  if (!job) {
+    return blockedBatch("preview_required", "Finish a Staging preview before sending. No product was sent.");
+  }
+
+  const ambiguous = await ElryanSyncProductResult.find({
+    jobId: job._id,
+    sendOutcome: "ambiguous",
+  })
+    .select("sku")
+    .lean();
+  if (ambiguous.length) {
+    if (!job.lastBatchId) {
+      return blockedBatch(
+        "reconcile_required",
+        "A previous batch has no operation id, so it cannot be retried. No product was sent.",
+        { results: ambiguous.map((row) => ({ sku: row.sku, outcome: "ambiguous", errors: [] })) }
+      );
+    }
+    let followUp;
+    try {
+      followUp = await readBatchOperation(config, job.lastBatchId);
+    } catch (err) {
+      return blockedBatch("reconcile_required", err?.message || "The batch could not be read. No product was sent.", {
+        results: ambiguous.map((row) => ({ sku: row.sku, outcome: "ambiguous", errors: [] })),
+      });
+    }
+    const reconciled = reconcileElryanBatchResult(
+      { ambiguous: true },
+      {
+        requestedSkus: ambiguous.map((row) => row.sku),
+        httpStatus: followUp.httpStatus,
+        json: followUp.ok ? followUp.json : null,
+        transportError: followUp.ok ? "" : "batch read failed",
+      }
+    );
+    await recordSendOutcomes(job, reconciled.results);
+    if (reconciled.ambiguous) {
+      return blockedBatch(
+        "reconcile_required",
+        "The batch is still ambiguous. It was not sent again.",
+        { batchId: job.lastBatchId, results: reconciled.results }
+      );
+    }
+    return {
+      ok: true,
+      blocked: false,
+      classification: "WRITE",
+      code: reconciled.partial ? "partial" : "reconciled",
+      sentToElryan: reconciled.results.filter((row) => row.outcome === "saved").length,
+      results: reconciled.results,
+      message: "The earlier batch was reconciled. No second write was sent.",
+    };
+  }
+
+  const wanted = requested === "changed" ? ["new", "changed"] : ["new", "changed"];
+  const ready = await ElryanSyncProductResult.find({
+    jobId: job._id,
+    status: "READY",
+    changeType: { $in: wanted },
+  }).lean();
+  if (!ready.length) {
+    return blockedBatch("nothing_ready", "No new or changed READY products are in this preview. No product was sent.");
+  }
+  const docs = await Product.find({ _id: { $in: ready.map((row) => row.productId) } }).lean();
+  const context = await prepareContext("staging");
+  const dimensionInputs = await loadElryanDimensionInputs("staging", docs, context.collectionDimensions);
+  const overrides = await ElryanStagingProductOverride.find({
+    environment: "staging",
+    productId: { $in: docs.map((doc) => String(doc._id)) },
+  }).lean();
+  const overrideByProduct = new Map(overrides.map((row) => [String(row.productId), row]));
+  const byChange = new Map(ready.map((row) => [row.productId, row.changeType]));
+  const creates = [];
+  const updates = [];
+  for (const doc of docs) {
+    const evaluated = await evaluateElryanProductForSync(doc, context, {
+      dimensionRow: dimensionInputs.checks.get(String(doc._id)) || null,
+      excluded: dimensionInputs.exclusions.has(String(doc._id)),
+      productOverride: overrideByProduct.get(String(doc._id)) || null,
+    });
+    if (evaluated.status !== "READY") continue;
+    const item = evaluated.batchItem;
+    if (byChange.get(String(doc._id)) === "changed") updates.push(item);
+    else creates.push(item);
+  }
+
+  const confirmed = await ElryanConfirmedSend.find({
+    environment: "staging",
+    sku: ELRYAN_FIRST_STAGING_CREATE_SKU,
+  })
+    .select("sku")
+    .lean();
+  let pilotAvailability = null;
+  if (creates.some((item) => item.sku === ELRYAN_FIRST_STAGING_CREATE_SKU)) {
+    try {
+      const probe = await elryanRequest({
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        path: ELRYAN_PATHS.skuExists,
+        method: "GET",
+        query: { sku: ELRYAN_FIRST_STAGING_CREATE_SKU },
+        classification: "READ",
+        retries: 0,
+      });
+      const data = probe.json?.data;
+      pilotAvailability = data?.available === true ? true : data?.available === false || probe.httpStatus === 409 ? false : null;
+    } catch {
+      pilotAvailability = null;
+    }
+  }
+  const partitioned = partitionElryanBatchCreates({
+    items: creates,
+    confirmedSkus: confirmed.map((row) => row.sku),
+    skuAvailability: { [ELRYAN_FIRST_STAGING_CREATE_SKU]: pilotAvailability },
+  });
+
+  const results = [...partitioned.results];
+  let partial = false;
+  async function submit(action, items) {
+    if (!items.length) return;
+    const body = action === "update" ? buildElryanBatchUpdateBody(items) : buildElryanBatchCreateBody(items);
+    let classified;
+    try {
+      const response = await postBatch(config, action, body);
+      classified = classifyElryanBatchResult({
+        requestedSkus: items.map((item) => item.sku),
+        httpStatus: response.httpStatus,
+        json: response.json,
+        transportError: response.ok || (response.httpStatus >= 400 && response.httpStatus < 500) ? "" : "batch rejected",
+      });
+      if (!response.ok && response.httpStatus >= 500) {
+        classified = classifyElryanBatchResult({
+          requestedSkus: items.map((item) => item.sku),
+          httpStatus: 0,
+          json: null,
+          transportError: "batch rejected",
+        });
+      }
+    } catch (err) {
+      classified = classifyElryanBatchResult({
+        requestedSkus: items.map((item) => item.sku),
+        httpStatus: 0,
+        json: null,
+        transportError: err?.message || "batch failed",
+      });
+    }
+    if (classified.batchId) job.lastBatchId = classified.batchId;
+    if (classified.partial) partial = true;
+    results.push(...classified.results);
+  }
+
+  await submit("create", partitioned.send);
+  await submit("update", updates);
+  const saved = await recordSendOutcomes(job, results);
+  const ambiguousLeft = results.some((row) => row.outcome === "ambiguous");
+  return {
+    ok: !ambiguousLeft,
+    blocked: ambiguousLeft,
+    classification: "WRITE",
+    code: ambiguousLeft ? "reconcile_required" : partial ? "partial" : "sent",
+    sentToElryan: saved,
+    partial,
+    results,
+    message: ambiguousLeft
+      ? "Some SKUs are ambiguous and will not be retried until the batch operation is read."
+      : partial
+        ? "Elryan saved part of the batch. Failed SKUs were recorded and were not retried."
+        : "The Staging batch finished.",
   };
 }

@@ -14,6 +14,8 @@ import { ElryanConfirmedSend } from "./models/ElryanConfirmedSend.js";
 import { ElryanConnection } from "./models/ElryanConnection.js";
 import { ElryanDimensionExclusion } from "./models/ElryanDimensionExclusion.js";
 import { ElryanStagingDimensionCheck } from "./models/ElryanStagingDimensionCheck.js";
+import { ElryanStagingPriceApproval } from "./models/ElryanStagingPriceApproval.js";
+import { ElryanStagingProductOverride } from "./models/ElryanStagingProductOverride.js";
 import { ElryanSyncJob } from "./models/ElryanSyncJob.js";
 import { ElryanSyncProductResult } from "./models/ElryanSyncProductResult.js";
 import { ElryanValueMapping } from "./models/ElryanValueMapping.js";
@@ -226,11 +228,11 @@ describe("Elryan warranty and pricing contract", () => {
     assert.equal(payload.warrantyCode, undefined);
   });
 
-  it("does not call product writes from the sync-all service", () => {
+  it("does not update BrownStore products from the sync-all service", () => {
     const source = fs.readFileSync(path.join(__dirname, "services/elryanSyncAll.js"), "utf8");
     assert.equal(/miswag|gini/i.test(source), false);
-    assert.equal(source.includes("batchCreate"), false);
-    assert.equal(source.includes('method: "POST"'), false);
+    assert.equal(source.includes("ELRYAN_PATHS.batchCreate"), true);
+    assert.equal(source.includes("ELRYAN_PATHS.batchUpdate"), true);
     assert.equal(source.includes("ElryanConfirmedSend.create"), false);
     assert.equal(/Product\.(update|findOneAndUpdate|create|delete)/.test(source), false);
   });
@@ -270,6 +272,8 @@ describe("Elryan Sync All preview", { concurrency: 1 }, () => {
     await Promise.all([
       ElryanSyncJob.deleteMany({}),
       ElryanSyncProductResult.deleteMany({}),
+      ElryanStagingProductOverride.deleteMany({}),
+      ElryanStagingPriceApproval.deleteMany({}),
       ElryanConfirmedSend.deleteMany({}),
       ElryanCollectionDimension.deleteMany({}),
       ElryanStagingDimensionCheck.deleteMany({}),
@@ -696,5 +700,227 @@ describe("Elryan Sync All preview", { concurrency: 1 }, () => {
     assert.equal(await ElryanConfirmedSend.countDocuments({}), 0);
     assert.equal(done.job.sentToElryan, 0);
     assert.equal(calls.some((line) => line.startsWith("POST") || line.startsWith("PATCH") || line.startsWith("PUT")), false);
+  });
+
+  it("agrees on saved attributes in sync one, full preview, and changed preview", async () => {
+    setElryanFetch(async (url, options = {}) => {
+      const method = String(options.method || "GET").toUpperCase();
+      const target = String(url);
+      calls.push(`${method} ${target}`);
+      if (method !== "GET" && method !== "HEAD") throw new Error(`Unexpected Elryan write: ${method} ${target}`);
+      if (target.includes("/v1/warranty")) {
+        return mockResponse(200, { success: true, data: [{ warranty_code: "W-STD", warranty_name: "Standard" }] });
+      }
+      if (target.includes("/v1/attribute-sets/category/")) {
+        return mockResponse(200, {
+          success: true,
+          data: {
+            id: "as-power",
+            attributes: [
+              { code: "plug_type", mandatory: true, values: [{ id: 5, name: "Two pin" }] },
+              {
+                code: "chopper_power",
+                name: "Power",
+                mandatory: true,
+                values: [
+                  { id: 6150, name: "0 - 400 W" },
+                  { id: 6151, name: "401 - 800 W" },
+                ],
+              },
+            ],
+          },
+        });
+      }
+      return mockResponse(200, { success: true, data: [] });
+    });
+    const product = await Product.findOne({ itemCode: "EL-ATTR-1" });
+    await Product.updateOne({ _id: product._id }, { $set: { "description.en": "Motor 350 W" } });
+    await PlatformTaxonomyConfig.updateOne(
+      { brownCollectionId: "col-2" },
+      { $set: { "values.attributes.chopper_power": 1, "values.attributes.plug_type": 5 } }
+    );
+    await ElryanStagingProductOverride.create({
+      environment: "staging",
+      productId: String(product._id),
+      sku: "EL-ATTR-1",
+      attributes: { chopper_power: 6151 },
+    });
+    await ElryanCollectionDimension.create({
+      environment: "staging",
+      brownCollectionId: "col-1",
+      width: 10,
+      height: 20,
+      depth: 20,
+      unit: "cm",
+      applyMode: "AUTO_APPLY",
+      enabled: true,
+      verifiedForCollection: true,
+      verificationSource: "operator",
+      confirmedAt: new Date(),
+      confirmedBy: "elryan-sync@brownstore.test",
+    });
+    await ElryanStagingPriceApproval.create({
+      environment: "staging",
+      productId: String(product._id),
+      sku: "EL-ATTR-1",
+      price: 10000,
+      currency: "IQD",
+      commissionRate: 0,
+      payloadHash: "staging-only",
+      costOmitted: true,
+      sendPriceOnly: true,
+      payoutUnknownAccepted: true,
+      approvedAt: new Date(),
+    });
+
+    function attributeBlockers(codes) {
+      return (codes || [])
+        .filter((code) => code.startsWith("missing_attribute_") || code.startsWith("unverified_attribute_"))
+        .sort();
+    }
+
+    await runElryanSyncPreview({ strategy: "full" });
+    const full = await waitFor((status) => status.job?.strategy === "full" && status.job?.status === "preview");
+    const fullRow = await ElryanSyncProductResult.findOne({ jobId: full.job.id, sku: "EL-ATTR-1" }).lean();
+    const syncOne = await previewElryanSyncOne({ productId: String(product._id) });
+    assert.equal(syncOne.proposedPayload.attributes.chopper_power, 6151);
+    assert.equal(syncOne.proposedPayload.attributes.plug_type, 5);
+    assert.deepEqual(
+      attributeBlockers(fullRow.blockerCodes),
+      attributeBlockers(syncOne.blockers.map((blocker) => blocker.code))
+    );
+    const readyProduct = await Product.findOne({ itemCode: "EL-READY-1" });
+    const readyRow = await ElryanSyncProductResult.findOne({ jobId: full.job.id, sku: "EL-READY-1" }).lean();
+    const readyPreview = await previewElryanSyncOne({ productId: String(readyProduct._id) });
+    assert.equal(readyRow.blockerCodes.includes("missing_attribute_chopper_power"), true);
+    assert.equal(readyPreview.blockers.some((blocker) => blocker.code === "missing_attribute_chopper_power"), true);
+    assert.deepEqual(
+      attributeBlockers(readyRow.blockerCodes),
+      attributeBlockers(readyPreview.blockers.map((blocker) => blocker.code))
+    );
+    await runElryanSyncPreview({ strategy: "changed" });
+    const changed = await waitFor((status) => status.job?.strategy === "changed" && status.job?.status === "preview");
+    const changedRow = await ElryanSyncProductResult.findOne({ jobId: changed.job.id, sku: "EL-ATTR-1" }).lean();
+    assert.deepEqual(attributeBlockers(changedRow.blockerCodes), attributeBlockers(fullRow.blockerCodes));
+
+    await ElryanConnection.updateOne({ singletonKey: "default" }, { $set: { environment: "production" } });
+    const productionPreview = await previewElryanSyncOne({ productId: String(product._id) });
+    assert.equal(productionPreview.mapping.categoryId, "");
+    assert.equal(productionPreview.proposedPayload.attributes, undefined);
+    assert.equal(productionPreview.packageDimensions.source, "MISSING");
+    assert.equal(productionPreview.packageDimensions.reason, "production_isolated");
+    assert.equal(productionPreview.pricingApproval.valid, false);
+    await runElryanSyncPreview({ strategy: "full" });
+    const productionJob = await waitFor(
+      (status) => status.environment === "production" && status.job?.status === "preview"
+    );
+    assert.equal(productionJob.job.dimensionSummary.collectionAuto, 0);
+    assert.equal(productionJob.job.missingCategory >= 1, true);
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const refused = await startElryanSyncAll({ confirm: true, strategy: "full" });
+    assert.equal(refused.code, "staging_only");
+    assert.equal(refused.sentToElryan, 0);
+    assert.equal(calls.some((line) => line.startsWith("POST")), false);
+    delete process.env.ELRYAN_PRODUCT_WRITES_ENABLED;
+    delete process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES;
+    await ElryanConnection.updateOne({ singletonKey: "default" }, { $set: { environment: "staging" } });
+  });
+
+  it("sends a mocked partial batch and does not retry an ambiguous result or the Kenwood pilot", async () => {
+    await ElryanCollectionDimension.create({
+      environment: "staging",
+      brownCollectionId: "col-1",
+      width: 10,
+      height: 20,
+      depth: 20,
+      unit: "cm",
+      applyMode: "AUTO_APPLY",
+      enabled: true,
+      verifiedForCollection: true,
+      verificationSource: "operator",
+      confirmedAt: new Date(),
+      confirmedBy: "elryan-sync@brownstore.test",
+    });
+    const pilot = await Product.create(productShape({
+      ibsherId: "ibs-pilot",
+      itemCode: "OWCH180002",
+      collectionName: { _id: "col-1", name: { en: "Lamps" } },
+    }));
+    await Product.create(productShape({
+      ibsherId: "ibs-new-send",
+      itemCode: "EL-NEW-1",
+      collectionName: { _id: "col-1", name: { en: "Lamps" } },
+    }));
+    let posts = 0;
+    setElryanFetch(async (url, options = {}) => {
+      const method = String(options.method || "GET").toUpperCase();
+      const target = String(url);
+      calls.push(`${method} ${target}`);
+      if (target.includes("/v1/warranty")) {
+        return mockResponse(200, { success: true, data: [{ warranty_code: "W-STD", warranty_name: "Standard" }] });
+      }
+      if (target.includes("/v1/attribute-sets/category/")) {
+        return mockResponse(200, {
+          success: true,
+          data: { id: "as-1", attributes: [{ code: "plug_type", mandatory: true, values: [{ id: "5", name: "Two pin" }] }] },
+        });
+      }
+      if (target.includes("/sku-exists")) {
+        return mockResponse(409, { success: false, error: { code: "CONFLICT", message: "SKU already used" } });
+      }
+      if (method === "POST" && target.includes("/v1/batch/product/create")) {
+        posts += 1;
+        const body = JSON.parse(options.body || "{}");
+        assert.equal(body.data.some((row) => row.sku === "OWCH180002"), false);
+        assert.equal(body.data.some((row) => row.costPrice != null), false);
+        return mockResponse(200, {
+          success: true,
+          data: {
+            _id: "c".repeat(24),
+            status: null,
+            failedItems: 0,
+            totalItems: body.data.length,
+          },
+        });
+      }
+      if (method === "POST" || method === "PUT" || method === "PATCH") {
+        throw new Error(`Unexpected Elryan write: ${method} ${target}`);
+      }
+      if (method === "GET" && target.includes("/v1/batch/product/")) {
+        return mockResponse(200, { success: true, data: { _id: "c".repeat(24), status: null, failedItems: 0 } });
+      }
+      return mockResponse(200, { success: true, data: [] });
+    });
+    await runElryanSyncPreview({ strategy: "full" });
+    const preview = await waitFor((status) => status.job?.status === "preview" && status.job?.finishedAt);
+    const pilotRow = await ElryanSyncProductResult.findOne({ sku: "OWCH180002" }).lean();
+    await ElryanConfirmedSend.create({
+      environment: "staging",
+      productId: String(pilot._id),
+      sku: "OWCH180002",
+      payloadHash: pilotRow.payloadHash,
+      elryanProductId: "elr-pilot",
+      httpStatus: 201,
+      published: false,
+      confirmedAt: new Date(),
+    });
+    await runElryanSyncPreview({ strategy: "full" });
+    await waitFor((status) => status.job?.status === "preview" && status.job?.finishedAt && status.job?.id !== preview.job.id);
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    try {
+      const first = await startElryanSyncAll({ confirm: true, strategy: "full" });
+      assert.equal(posts, 1);
+      assert.equal(first.code, "reconcile_required");
+      assert.notEqual(first.results.find((row) => row.sku === "OWCH180002")?.outcome, "saved");
+      const second = await startElryanSyncAll({ confirm: true, strategy: "full" });
+      assert.equal(posts, 1);
+      assert.equal(second.code, "reconcile_required");
+      assert.equal(second.sentToElryan, 0);
+    } finally {
+      delete process.env.ELRYAN_PRODUCT_WRITES_ENABLED;
+      delete process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES;
+    }
   });
 });

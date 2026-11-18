@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { readElryanSellingPrice } from "./elryanPriceUpdate.js";
 
 /**
  * Marketplace v1 PATCH /v1/products/{id} packed size fields.
@@ -95,12 +96,14 @@ export function compareElryanListing({ listing, proposed, dimensionsConfirmed = 
     ...ELRYAN_PACKAGE_DIMENSION_FIELDS,
   ];
   const rows = displayFields.map((field) => {
-    const presentOnListing = Object.prototype.hasOwnProperty.call(product, field);
-    const current = presentOnListing ? product[field] : null;
+    const selling = field === "price" ? readElryanSellingPrice(product) : null;
+    const presentOnListing =
+      field === "price" ? selling.present && selling.amount != null : Object.prototype.hasOwnProperty.call(product, field);
+    const current = field === "price" ? (presentOnListing ? selling.amount : null) : presentOnListing ? product[field] : null;
     const proposedValue = next[field] == null || next[field] === "" ? null : next[field];
     return {
       field,
-      apiField: field,
+      apiField: field === "price" ? "sellingPrice" : field,
       current,
       proposed: proposedValue,
       presentOnListing,

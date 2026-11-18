@@ -35,7 +35,7 @@ export function Wordmark({ light = false, className }) {
           light ? 'text-bean-50' : 'text-bean-900',
         )}
       >
-        brown<span className="text-primary">store</span>
+        Brown <span className="text-primary">Store</span>
       </span>
     </Link>
   )

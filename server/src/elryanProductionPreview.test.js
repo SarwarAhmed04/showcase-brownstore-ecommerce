@@ -28,6 +28,7 @@ import { startElryanSyncAll } from "./services/elryanSyncAll.js";
 import {
   previewElryanProductionUpdate,
   updateElryanProductionDimensions,
+  updateElryanProductionPrice,
 } from "./services/elryanProductionUpdate.js";
 import {
   approveElryanStagingPrice,
@@ -71,6 +72,7 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
   let patches;
   let skuConflictId;
   let skuConflictOmitsIdentity;
+  let productGets;
 
   before(async () => {
     memory = await MongoMemoryServer.create();
@@ -98,6 +100,7 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     patches = [];
     skuConflictId = "elr-existing";
     skuConflictOmitsIdentity = false;
+    productGets = 0;
     __resetElryanAttributeValueCatalogCacheForTests();
     delete process.env.ELRYAN_PRODUCT_WRITES_ENABLED;
     delete process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES;
@@ -172,6 +175,7 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
         return mockResponse(200, { success: true, data: { available: true } });
       }
       if (method === "GET" && /\/v1\/products\/[^/?]+$/.test(new URL(target).pathname)) {
+        productGets += 1;
         const id = decodeURIComponent(target.split("/").pop());
         const body = savedListing || listingBody || {
           id,
@@ -197,6 +201,12 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
           depth: 40,
         };
         savedListing = { ...prior, ...parsed, id, sku: prior.sku || "OWCH180002" };
+        if (Object.prototype.hasOwnProperty.call(parsed, "price")) {
+          savedListing.sellingPrice = parsed.price;
+          delete savedListing.price;
+          delete savedListing.cost;
+          delete savedListing.costPrice;
+        }
         return mockResponse(200, { data: savedListing });
       }
       if (method === "POST" && target.endsWith("/v1/products")) {
@@ -980,6 +990,165 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
     assert.equal(posts, 0);
   });
 
+  it("shows the Elryan selling price and approved price, then sends only price and rereads sellingPrice", async () => {
+    await prepareReady();
+    createMode = "duplicate";
+    skuConflictId = LISTING_ID;
+    listingBody = {
+      id: LISTING_ID,
+      sku: "OWCH180002",
+      currency: "IQD",
+      sellingPrice: 50000,
+      costPrice: 40000,
+      width: 10,
+      height: 30,
+      depth: 40,
+    };
+    const preview = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(preview.matched, true);
+    assert.equal(preview.currentSellingPrice, 50000);
+    assert.equal(preview.approvedPrice, 66500);
+    assert.equal(preview.priceCurrency, "IQD");
+    assert.equal(preview.priceUpdateAllowed, true);
+    assert.deepEqual(preview.pricePatch, { price: 66500 });
+    assert.equal(preview.rows.find((row) => row.field === "price").apiField, "sellingPrice");
+    assert.equal(preview.rows.find((row) => row.field === "price").current, 50000);
+    assert.equal(patches.length, 0);
+
+    const refused = await updateElryanProductionPrice({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: preview.pricePreviewToken,
+    });
+    assert.equal(refused.code, "writes_disabled");
+    assert.equal(patches.length, 0);
+    const dimensionToken = await updateElryanProductionPrice({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: preview.previewToken,
+    });
+    assert.equal(dimensionToken.code, "writes_disabled");
+
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    const wrongToken = await updateElryanProductionPrice({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: preview.previewToken,
+    });
+    assert.equal(wrongToken.code, "preview_mismatch");
+    assert.equal(patches.length, 0);
+
+    const readsBefore = productGets;
+    const updated = await updateElryanProductionPrice({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: preview.pricePreviewToken,
+    });
+    assert.equal(updated.ok, true);
+    assert.equal(updated.code, "price_updated");
+    assert.equal(updated.savedSellingPrice, 66500);
+    assert.match(updated.message, /66500/);
+    assert.equal(productGets, readsBefore + 2);
+    assert.equal(patches.length, 1);
+    assert.equal(patches[0].url, `https://marketplace-api.elryan.com/api/v1/products/${LISTING_ID}`);
+    assert.deepEqual(patches[0].body, { price: 66500 });
+    assert.equal(patches[0].body.cost, undefined);
+    assert.equal(patches[0].body.costPrice, undefined);
+    assert.equal(patches[0].body.sellingPrice, undefined);
+    assert.equal(posts, 0);
+  });
+
+  it("does not send a selling price when the reviewed price changed, the currency differs, or the prices already match", async () => {
+    await prepareReady();
+    createMode = "duplicate";
+    skuConflictId = LISTING_ID;
+    process.env.ELRYAN_PRODUCT_WRITES_ENABLED = "true";
+    process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES = "true";
+    listingBody = {
+      id: LISTING_ID,
+      sku: "OWCH180002",
+      currency: "USD",
+      sellingPrice: 50000,
+      width: 20,
+      height: 30,
+      depth: 40,
+    };
+    const foreignCurrency = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(foreignCurrency.priceCode, "currency_mismatch");
+    assert.equal(foreignCurrency.priceUpdateAllowed, false);
+    assert.equal(foreignCurrency.currentSellingPrice, 50000);
+    assert.equal(foreignCurrency.approvedPrice, 66500);
+    assert.equal(foreignCurrency.pricePreviewToken, "");
+
+    listingBody = {
+      id: LISTING_ID,
+      sku: "OWCH180002",
+      currency: "IQD",
+      sellingPrice: 66500,
+      width: 20,
+      height: 30,
+      depth: 40,
+    };
+    const same = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.equal(same.currentSellingPrice, 66500);
+    assert.equal(same.approvedPrice, 66500);
+    assert.equal(same.priceUpdateAllowed, false);
+    assert.deepEqual(same.pricePatch, {});
+    const unchanged = await updateElryanProductionPrice({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: same.pricePreviewToken,
+    });
+    assert.equal(unchanged.code, "price_unchanged");
+    assert.equal(patches.length, 0);
+
+    listingBody = {
+      id: LISTING_ID,
+      sku: "OWCH180002",
+      currency: "IQD",
+      sellingPrice: 50000,
+      width: 20,
+      height: 30,
+      depth: 40,
+    };
+    const preview = await previewElryanProductionUpdate({ productId, listingId: LISTING_ID });
+    assert.deepEqual(preview.pricePatch, { price: 66500 });
+    listingBody = { ...listingBody, sellingPrice: 61000 };
+    const stale = await updateElryanProductionPrice({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: preview.pricePreviewToken,
+    });
+    assert.equal(stale.code, "preview_stale");
+    assert.equal(patches.length, 0);
+
+    listingBody = {
+      id: LISTING_ID,
+      sku: "OTHER-1",
+      currency: "IQD",
+      sellingPrice: 50000,
+      width: 20,
+      height: 30,
+      depth: 40,
+    };
+    const mismatch = await updateElryanProductionPrice({
+      productId,
+      listingId: LISTING_ID,
+      confirm: true,
+      previewToken: preview.pricePreviewToken,
+    });
+    assert.equal(mismatch.code, "listing_mismatch");
+    assert.equal(patches.length, 0);
+    assert.equal(posts, 0);
+  });
+
   it("approves the HB-8011NG Production price locally and does not write to Elryan", async () => {
     const heater = await Product.create({
       ibsherId: "ibs-heater",
@@ -1097,11 +1266,11 @@ describe("Elryan Production preview for OWCH180002", { concurrency: 1 }, () => {
       previewToken: ready.previewToken,
     });
     assert.equal(created.code, "first_test_sku_only");
-    const updated = await updateElryanProductionDimensions({
+    const updated = await updateElryanProductionPrice({
       productId: heaterId,
       listingId: LISTING_ID,
       confirm: true,
-      previewToken: "not-a-dimension-token",
+      previewToken: "not-a-price-token",
     });
     delete process.env.ELRYAN_PRODUCT_WRITES_ENABLED;
     delete process.env.ELRYAN_ALLOW_LIVE_PRODUCT_WRITES;

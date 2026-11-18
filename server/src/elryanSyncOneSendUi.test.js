@@ -8,6 +8,7 @@ import {
   elryanProductionConfirmFacts,
   elryanProductionDimensionUpdateRequest,
   elryanProductionPriceApprovalRequest,
+  elryanProductionPriceUpdateRequest,
   productionPriceApprovalReady,
   elryanProductionSendGate,
   elryanProductionSendRequest,
@@ -296,6 +297,38 @@ describe("Elryan Sync One send UI gate", () => {
       confirm: true,
     });
     assert.equal("width" in request, false);
+  });
+
+  it("confirms a Production selling-price update without sending the price from the screen", () => {
+    const request = elryanProductionPriceUpdateRequest({
+      updatePreview: {
+        priceUpdateAllowed: true,
+        productId: "6adc7937b3764a909f692978",
+        sku: "OWCH180002",
+        listingId: "64b7c2e1a9f0d4c3b2a19001",
+        pricePreviewToken: "price-token",
+        currentSellingPrice: 50000,
+        approvedPrice: 66500,
+        pricePatch: { price: 66500 },
+      },
+      confirm: true,
+    });
+    assert.deepEqual(request, {
+      productId: "6adc7937b3764a909f692978",
+      listingId: "64b7c2e1a9f0d4c3b2a19001",
+      previewToken: "price-token",
+      confirm: true,
+    });
+    assert.equal("price" in request, false);
+    assert.equal("approvedPrice" in request, false);
+    const ui = fs.readFileSync(
+      new URL("../../client/src/components/admin/platform/ElryanSyncOneProduct.jsx", import.meta.url),
+      "utf8"
+    );
+    assert.match(ui, /elryanCurrentSellingPrice/);
+    assert.match(ui, /elryanApprovedPrice/);
+    assert.match(ui, /elryanSavedSellingPrice/);
+    assert.equal(ui.split("api.elryanProductionPriceUpdate(").length - 1, 1);
   });
 
   it("confirms a Production price approval with the reviewed selling price and no Elryan write", () => {

@@ -13,6 +13,8 @@ const elryanSyncProductResultSchema = new mongoose.Schema(
     payloadHash: { type: String, default: "" },
     readiness: { type: String, default: "" },
     dimensionSource: { type: String, default: "" },
+    sendOutcome: { type: String, default: "" },
+    sendErrors: { type: [mongoose.Schema.Types.Mixed], default: [] },
   },
   { timestamps: true }
 );
