@@ -13,6 +13,7 @@ import { resolveTaxonomyNotices } from "../utils/taxonomyNotices.js";
 import { ElryanClientError } from "./elryanClient.js";
 import { getElryanConnectionPublic } from "./elryanConnection.js";
 import { elryanAttributeCompatibility } from "./elryanMappingPreview.js";
+import { elryanCatalogBrowseScope, filterElryanCatalogRows } from "../utils/elryanCategoryBrowse.js";
 
 function localized(name) {
   if (!name) return { en: "", ar: "", ku: "" };
@@ -95,13 +96,14 @@ export async function searchElryanSnapshotCategories({
   limit = 30,
   offset = 0,
   leafOnly = false,
+  parentId = "",
+  roots = false,
 } = {}) {
   const connection = await getElryanConnectionPublic();
   const environment = normalizeElryanMappingEnvironment(connection.environment);
   const { categories, snapshot } = await loadSnapshotForEnvironment(environment);
 
-  const needle = String(q || "").trim().toLowerCase();
-  let rows = categories.map((row) => ({
+  const rows = categories.map((row) => ({
     categoryId: row.id ?? row._id ?? null,
     categoryName: String(row.name || ""),
     hierarchy: String(row.hierarchy || ""),
@@ -112,30 +114,29 @@ export async function searchElryanSnapshotCategories({
     attributeSetId: row.attributeSetId ?? null,
     attributeSet: row.attributeSet || "",
   }));
+  const scope = elryanCatalogBrowseScope({ q, parentId, roots });
+  const matched = filterElryanCatalogRows(rows, { q, leafOnly, parentId, roots });
 
-  if (leafOnly) rows = rows.filter((row) => row.isParent === false);
-  if (needle) {
-    rows = rows.filter((row) => {
-      const hay = `${row.categoryId} ${row.categoryName} ${row.hierarchy}`.toLowerCase();
-      return hay.includes(needle);
-    });
-  }
-
-  // Prefer leaves in result order without hiding parents unless leafOnly.
-  rows.sort((a, b) => {
-    if (a.isParent === false && b.isParent !== false) return -1;
-    if (b.isParent === false && a.isParent !== false) return 1;
-    return String(a.categoryName).localeCompare(String(b.categoryName));
+  // Browse stays in hierarchy order. Search still prefers leaves without hiding parents.
+  matched.sort((a, b) => {
+    if (scope === "search") {
+      if (a.isParent === false && b.isParent !== false) return -1;
+      if (b.isParent === false && a.isParent !== false) return 1;
+      return String(a.categoryName).localeCompare(String(b.categoryName));
+    }
+    return String(a.hierarchy || a.categoryName).localeCompare(String(b.hierarchy || b.categoryName));
   });
 
   const start = Math.max(0, Number(offset) || 0);
   const take = Math.min(100, Math.max(1, Number(limit) || 30));
   return {
     environment,
-    totalMatching: rows.length,
+    scope,
+    parentId: scope === "children" ? String(parentId) : "",
+    totalMatching: matched.length,
     offset: start,
     limit: take,
-    categories: rows.slice(start, start + take),
+    categories: matched.slice(start, start + take),
     snapshot: {
       uniqueCount: snapshot.uniqueCount || categories.length,
       status: snapshot.status || "complete",

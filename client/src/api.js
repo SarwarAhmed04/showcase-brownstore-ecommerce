@@ -589,8 +589,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body || {}),
     }),
-  elryanPairMapping: (kind) =>
-    request(`/api/admin/platforms/elryan/pair-mapping?kind=${encodeURIComponent(kind)}`),
+  elryanPairMapping: (kind, params = {}) => {
+    const qs = new URLSearchParams({ kind: String(kind || "") });
+    for (const [key, value] of Object.entries(params || {})) {
+      if (value === "" || value == null) continue;
+      qs.set(key, String(value));
+    }
+    return request(`/api/admin/platforms/elryan/pair-mapping?${qs}`);
+  },
   elryanValueMappings: (kind) => {
     const qs = kind ? `?kind=${encodeURIComponent(kind)}` : "";
     return request(`/api/admin/platforms/elryan/value-mappings${qs}`);
@@ -600,7 +606,13 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
-  elryanWarrantyMapping: () => request("/api/admin/platforms/elryan/warranty-mapping"),
+  elryanWarrantyMapping: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.fromEntries(Object.entries(params).filter(([, value]) => value !== "" && value != null))
+    );
+    const suffix = qs.toString();
+    return request(`/api/admin/platforms/elryan/warranty-mapping${suffix ? `?${suffix}` : ""}`);
+  },
   saveElryanWarrantyMapping: (body) =>
     request("/api/admin/platforms/elryan/warranty-mapping", {
       method: "POST",
@@ -660,7 +672,13 @@ export const api = {
     request("/api/admin/platforms/elryan/sync-all/resume", { method: "POST", body: "{}" }),
   elryanSyncAllStop: () =>
     request("/api/admin/platforms/elryan/sync-all/stop", { method: "POST", body: "{}" }),
-  elryanCollectionDimensions: () => request("/api/admin/platforms/elryan/collection-dimensions"),
+  elryanCollectionDimensions: (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.fromEntries(Object.entries(params).filter(([, value]) => value !== "" && value != null))
+    );
+    const suffix = qs.toString();
+    return request(`/api/admin/platforms/elryan/collection-dimensions${suffix ? `?${suffix}` : ""}`);
+  },
   elryanCollectionDimensionDetail: (brownCollectionId) =>
     request(
       `/api/admin/platforms/elryan/collection-dimensions/detail?brownCollectionId=${encodeURIComponent(brownCollectionId || "")}`

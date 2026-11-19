@@ -76,7 +76,7 @@ describe("Elryan brand and colour mapping pages", () => {
     assert.equal(merged.black.elryanId, "");
 
     const ui = read("client/src/components/admin/platform/ElryanValueMapping.jsx");
-    assert.match(ui, /api\.elryanPairMapping\(kind\)/);
+    assert.match(ui, /api\.elryanPairMapping\(kind,/);
     assert.match(ui, /api\.elryanAttributeValues\(attribute/);
     assert.match(ui, /search: String\(nextQuery \|\| ""\)\.trim\(\) \|\| undefined/);
     assert.match(ui, /api\.saveElryanValueMapping/);

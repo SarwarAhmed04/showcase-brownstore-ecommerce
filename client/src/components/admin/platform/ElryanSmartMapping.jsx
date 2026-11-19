@@ -4,22 +4,20 @@ import {
   applySaveToCardDraft,
   brownStoreTaxonomyPath,
   cardDraft,
-  locName,
+  elryanCategoryRowStatus,
   pickCategoryOnCard,
-  reviewBrownStorePath,
   searchHitsForCollection,
-  toggleElryanPicker,
   unmappedCollectionCount,
 } from "../../../utils/elryanCategoryMappingPage";
+import ElryanMappingPager from "./ElryanMappingPager";
 import {
-  ELRYAN_COLLECTION_PAGE_SIZE,
   applyElryanMappingSaveResult,
   buildElryanMappingSaveBody,
   acceptElryanAttributeResponse,
   canReviewElryanMapping,
   elryanCollectionPreviewQuery,
   isElryanConfirmedLeaf,
-  elryanManualSearchQuery,
+  elryanCategorySelectorQuery,
   isElryanCategoryPicked,
   nextManualSearchOffset,
   nextUnmappedCollectionId,
@@ -30,21 +28,12 @@ import {
 } from "../../../utils/elryanSmartMappingSelect";
 import ElryanCatalogBrowse from "./ElryanCatalogBrowse";
 import { elryanCatalogEnvironmentLabel } from "../../../utils/elryanCatalogStatusUi";
-import { formatCount, StatusBadge } from "./platformUi";
+import { formatCount } from "./platformUi";
 
 const BUTTON =
   "rounded-full bg-brown px-4 py-2 text-xs font-semibold text-cream disabled:opacity-50";
 const BUTTON_GHOST =
   "rounded-full bg-white px-4 py-2 text-xs font-semibold text-brown ring-1 ring-brown/10 disabled:opacity-50";
-const BUTTON_DANGER =
-  "rounded-full border border-amber-700/30 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-950 disabled:opacity-50";
-
-function confidenceClass(band) {
-  if (band === "HIGH") return "bg-emerald-50 text-emerald-800";
-  if (band === "MEDIUM") return "bg-white text-brown ring-1 ring-brown/10";
-  if (band === "LOW" || band === "NEEDS_REVIEW") return "bg-amber-50 text-amber-900";
-  return "bg-brown/10 text-brown/55";
-}
 
 function kindLabel(t, kind, isParent) {
   if (kind === "leaf" || isParent === false) return t.elryanCategoryLeaf;
@@ -77,42 +66,6 @@ function ProgressLine({ t, payload }) {
   );
 }
 
-function Stat({ label, value }) {
-  return (
-    <article className="rounded-2xl bg-cream px-4 py-3">
-      <p className="text-[11px] font-semibold tracking-wide text-brown/45 uppercase">{label}</p>
-      <p className="mt-1 font-display text-2xl tabular-nums">{value}</p>
-    </article>
-  );
-}
-
-function CategoryHit({ active, title, meta, detail, onSelect, dataAttr, dataValue, forId }) {
-  return (
-    <li>
-      <button
-        type="button"
-        aria-pressed={active}
-        data-elryan-suggestion-for={forId}
-        {...{ [dataAttr]: dataValue }}
-        onClick={onSelect}
-        className={`w-full rounded-xl px-3 py-2 text-start hover:bg-cream ${
-          active ? "bg-cream ring-2 ring-brown" : "bg-white"
-        }`}
-      >
-        <span className="font-semibold text-brown">{title || "—"}</span>
-        <span className="mt-0.5 block break-words text-xs text-brown/55" dir="ltr">
-          {meta}
-        </span>
-        {detail ? (
-          <span className="mt-0.5 block break-words text-xs text-brown/45" dir="ltr">
-            {detail}
-          </span>
-        ) : null}
-      </button>
-    </li>
-  );
-}
-
 function hitMeta(t, row) {
   return [
     `${t.elryanCategoryIdLabel || "ID"} ${row.categoryId}`,
@@ -126,6 +79,155 @@ function hitMeta(t, row) {
     .join(" · ");
 }
 
+function elryanChoiceLabel(category) {
+  const hierarchy = String(category?.hierarchy || category?.categoryHierarchy || "").trim();
+  const name = String(category?.categoryName || "").trim();
+  return hierarchy || name;
+}
+
+function ElryanLeafSelect({
+  id,
+  open,
+  query,
+  busy,
+  hits,
+  searchError,
+  scope,
+  canGoBack,
+  selectedLabel,
+  disabled,
+  t,
+  onOpen,
+  onQuery,
+  onSelect,
+  onExpand,
+  onBrowseAll,
+  onBack,
+  pageLabel,
+  onPrev,
+  onNext,
+  prevDisabled,
+  nextDisabled,
+}) {
+  const searching = String(query || "").trim().length > 0;
+  const emptyMessage = searchError
+    ? searchError
+    : searching
+      ? t.elryanCategoryNoMatches || "No Elryan categories match this search."
+      : scope === "children"
+        ? t.elryanCategoryBranchEmpty || "No subcategories in this Elryan category."
+        : t.elryanNoCategoriesYet;
+  return (
+    <div id={`elryan-leaf-select-${id}`} className="relative min-w-0" data-elryan-picker={id}>
+      <label className="mb-1 block text-[11px] font-semibold tracking-wide text-brown/45 uppercase lg:sr-only">
+        {t.elryanCategory || "Elryan category"}
+      </label>
+      <input
+        role="combobox"
+        aria-expanded={open}
+        aria-autocomplete="list"
+        aria-controls={`elryan-leaf-list-${id}`}
+        autoComplete="off"
+        disabled={disabled}
+        placeholder={t.elryanSearchCategoryPlaceholder}
+        aria-label={t.elryanSearchCategoryPlaceholder}
+        value={open ? query : selectedLabel}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          onOpen();
+        }}
+        onFocus={onOpen}
+        onChange={(event) => onQuery(event.target.value)}
+        className="w-full rounded-full border border-brown/10 bg-white px-4 py-2 text-sm font-medium text-brown outline-none ring-tan/40 focus:ring-2 disabled:opacity-50"
+      />
+      {open ? (
+        <div className="mt-2 w-full rounded-2xl bg-white p-2 shadow-lg ring-1 ring-brown/10">
+          <ul
+            id={`elryan-leaf-list-${id}`}
+            role="listbox"
+            data-elryan-active-results={id}
+            className="max-h-60 space-y-1 overflow-auto"
+          >
+            {!searching ? (
+              <li>
+                <button
+                  type="button"
+                  data-elryan-browse-all={id}
+                  onClick={onBrowseAll}
+                  className="block w-full rounded-xl px-3 py-2 text-start text-sm font-semibold text-brown hover:bg-cream"
+                >
+                  {t.elryanBrowseAllCategories || "Browse all Elryan categories"}
+                </button>
+              </li>
+            ) : null}
+            {canGoBack && !searching ? (
+              <li>
+                <button
+                  type="button"
+                  data-elryan-browse-back={id}
+                  onClick={onBack}
+                  className="block w-full rounded-xl px-3 py-2 text-start text-sm font-semibold text-brown/70 hover:bg-cream"
+                >
+                  {t.elryanBrowseBack || "Back"}
+                </button>
+              </li>
+            ) : null}
+            {hits.map((hit) => {
+              const leaf = isElryanConfirmedLeaf(hit);
+              const label = elryanChoiceLabel(hit);
+              return (
+                <li key={String(hit.categoryId)}>
+                  <button
+                    type="button"
+                    role="option"
+                    data-elryan-search-hit={leaf ? String(hit.categoryId) : undefined}
+                    data-elryan-expand={leaf ? undefined : String(hit.categoryId)}
+                    onClick={() => (leaf ? onSelect(hit) : onExpand(hit))}
+                    className="block w-full rounded-xl px-3 py-2 text-start text-sm text-brown hover:bg-cream"
+                  >
+                    <span className="block break-words font-semibold" dir="auto">
+                      {label || "—"}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-brown/50" dir="ltr">
+                      {`${t.elryanCategoryIdLabel || "ID"} ${hit.categoryId}`}
+                      {leaf ? "" : ` · ${t.elryanExpandCategory || "Expand"}`}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+            {!busy && !hits.length ? (
+              <li className="px-3 py-2 text-sm text-brown/55">
+                <p>{emptyMessage}</p>
+                {searching ? (
+                  <button
+                    type="button"
+                    data-elryan-return-browse={id}
+                    onClick={onBrowseAll}
+                    className="mt-2 font-semibold text-brown underline"
+                  >
+                    {t.elryanBrowseAllCategories || "Browse all Elryan categories"}
+                  </button>
+                ) : null}
+              </li>
+            ) : null}
+            {busy ? <li className="px-3 py-2 text-sm text-brown/55">{t.loading}</li> : null}
+          </ul>
+          <div className="mt-2 flex items-center justify-between gap-2 text-xs text-brown/55">
+            <button type="button" className={BUTTON_GHOST} disabled={prevDisabled} onClick={onPrev}>
+              {t.pagePrevious}
+            </button>
+            <span dir="ltr">{pageLabel}</span>
+            <button type="button" className={BUTTON_GHOST} disabled={nextDisabled} onClick={onNext}>
+              {t.pageNext}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ElryanSmartMapping({ t, lang = "en" }) {
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
@@ -136,6 +238,7 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
   const [pageError, setPageError] = useState("");
   const [pageNotice, setPageNotice] = useState("");
   const [pageOffset, setPageOffset] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
   const [offsetHistory, setOffsetHistory] = useState([0]);
   const [drafts, setDrafts] = useState({});
   const [pickerFor, setPickerFor] = useState("");
@@ -143,27 +246,34 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
   const [catalogOpen, setCatalogOpen] = useState(false);
 
   const [manualQ, setManualQ] = useState("");
-  const [manualLeafOnly, setManualLeafOnly] = useState(true);
   const [manualBusy, setManualBusy] = useState(false);
   const [manualOffset, setManualOffset] = useState(0);
   const [manualResult, setManualResult] = useState(null);
+  const [manualError, setManualError] = useState("");
   const [manualFor, setManualFor] = useState("");
+  const [manualScope, setManualScope] = useState("roots");
+  const [browseParentId, setBrowseParentId] = useState("");
+  const [browseTrail, setBrowseTrail] = useState([]);
 
   const [compat, setCompat] = useState(null);
   const [reviewBusyId, setReviewBusyId] = useState("");
   const [saveBusyId, setSaveBusyId] = useState("");
 
   const requestSeq = useRef(0);
+  const searchTimer = useRef(null);
+  const pageSizeRef = useRef(25);
+  const filterKeyRef = useRef(null);
+  const environmentRef = useRef("");
+  pageSizeRef.current = pageSize;
   const manualSeq = useRef(0);
+  const pickerRef = useRef("");
   const compatSeq = useRef(0);
   const compatRequest = useRef({ generation: 0, categoryId: "" });
   const filtersRef = useRef({ q: "", status: "", confidence: "" });
   const pagingRef = useRef({ offset: 0, history: [0] });
   const draftsRef = useRef(drafts);
-  const leafRef = useRef(true);
   filtersRef.current = { q: query, status, confidence };
   draftsRef.current = drafts;
-  leafRef.current = manualLeafOnly;
 
   const rows = payload?.rows || [];
   const history = offsetHistory.length ? offsetHistory : [0];
@@ -178,10 +288,14 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
     setPageNotice("");
     if (resetDrafts) {
       setDrafts({});
+      pickerRef.current = "";
       setPickerFor("");
       setCursorId("");
       setManualResult(null);
       setManualFor("");
+      setManualScope("roots");
+      setBrowseParentId("");
+      setBrowseTrail([]);
     }
     try {
       const data = await api.elryanMappingPreview(
@@ -190,10 +304,17 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
           status: filters.status,
           confidence: filters.confidence,
           offset,
-          limit: ELRYAN_COLLECTION_PAGE_SIZE,
+          limit: pageSizeRef.current,
         })
       );
       if (seq !== requestSeq.current) return null;
+      const nextEnvironment = data.environment === "production" ? "production" : data.environment || "";
+      if (environmentRef.current && nextEnvironment && environmentRef.current !== nextEnvironment && offset !== 0) {
+        environmentRef.current = nextEnvironment;
+        loadCollections({ offset: 0, history: [0], resetDrafts: false });
+        return data;
+      }
+      if (nextEnvironment) environmentRef.current = nextEnvironment;
       const resolvedOffset = data.offset ?? offset;
       setPayload(data);
       setPageOffset(resolvedOffset);
@@ -211,15 +332,32 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
   }
 
   useEffect(() => {
+    const key = `${query}\0${status}\0${confidence}`;
+    const filtersChanged = filterKeyRef.current !== key;
+    filterKeyRef.current = key;
     const reset = resetCollectionPaging();
     loadCollections({
       offset: reset.offset,
       history: reset.history,
-      resetDrafts: true,
+      resetDrafts: filtersChanged,
     });
-    // Search text is applied on submit. Status and confidence reload from the server.
+    // Search text is applied on submit. Status, confidence, and page size reload from the server.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, status, confidence]);
+  }, [query, status, confidence, pageSize]);
+
+  useEffect(() => {
+    if (!pickerFor) return undefined;
+    function onPointer(event) {
+      const target = event.target;
+      if (target instanceof Element && target.closest("[data-elryan-picker]")) return;
+      pickerRef.current = "";
+      setPickerFor("");
+    }
+    document.addEventListener("pointerdown", onPointer);
+    return () => document.removeEventListener("pointerdown", onPointer);
+  }, [pickerFor]);
+
+  useEffect(() => () => clearTimeout(searchTimer.current), []);
 
   function updateDraft(collectionId, updater) {
     setDrafts((prev) => {
@@ -243,8 +381,8 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
     } else {
       setDrafts(result.drafts);
     }
-    const picked = result.drafts?.[String(collectionId || "")] || null;
-    loadLeafAttributes(collectionId, picked?.pickedSnapshot || category);
+    pickerRef.current = "";
+    setPickerFor("");
   }
 
   function loadLeafAttributes(collectionId, category) {
@@ -296,11 +434,15 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
       });
   }
 
-  async function runManualSearch(offset = 0, leafOnly = manualLeafOnly, forId = pickerFor, term = manualQ) {
+  async function runManualSearch(offset = 0, forId = pickerFor, term = manualQ, parentId = "") {
     const owner = String(forId || "");
     if (!owner) return;
     const seq = ++manualSeq.current;
+    const needle = String(term || "").trim();
+    const parent = needle ? "" : String(parentId || "").trim();
     setManualBusy(true);
+    setManualError("");
+    setManualScope(needle ? "search" : parent && parent !== "0" ? "children" : "roots");
     if (manualFor !== owner) {
       setManualResult(null);
       setManualOffset(0);
@@ -308,21 +450,22 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
     setManualFor(owner);
     try {
       const data = await api.elryanMappingSnapshotSearch(
-        elryanManualSearchQuery({
-          q: term,
+        elryanCategorySelectorQuery({
+          q: needle,
           offset,
-          leafOnly,
+          parentId: parent,
           limit: 25,
         })
       );
       if (seq !== manualSeq.current) return;
       setManualResult(data);
       setManualOffset(data.offset ?? offset);
+      setManualScope(data.scope || (needle ? "search" : parent ? "children" : "roots"));
       setManualFor(owner);
     } catch (err) {
       if (seq !== manualSeq.current) return;
       setManualResult(null);
-      updateDraft(owner, (prev) => ({ ...prev, error: err.message }));
+      setManualError(err.message || "");
     } finally {
       if (seq === manualSeq.current) setManualBusy(false);
     }
@@ -330,17 +473,65 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
 
   function openPicker(row) {
     const id = String(row.brownCollectionId || "");
-    const next = toggleElryanPicker(pickerFor, id);
-    setPickerFor(next);
-    if (next) setCursorId(next);
-    if (!next) return;
-    const term = locName(row.brownCollectionName, lang);
+    if (!id) return;
+    setCursorId(id);
+    if (pickerRef.current === id) return;
+    pickerRef.current = id;
+    clearTimeout(searchTimer.current);
+    setPickerFor(id);
+    setManualQ("");
+    setBrowseParentId("");
+    setBrowseTrail([]);
+    runManualSearch(0, id, "", "");
+  }
+
+  function queueLeafSearch(id, term) {
+    pickerRef.current = id;
     setManualQ(term);
-    if (term) runManualSearch(0, leafRef.current, id, term);
-    else {
-      setManualResult(null);
-      setManualFor(id);
+    setPickerFor(id);
+    const needle = String(term || "").trim();
+    if (!needle) {
+      setBrowseParentId("");
+      setBrowseTrail([]);
     }
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      runManualSearch(0, id, term, "");
+    }, 200);
+  }
+
+  function browseAllCategories(id) {
+    clearTimeout(searchTimer.current);
+    setManualQ("");
+    setBrowseParentId("");
+    setBrowseTrail([]);
+    pickerRef.current = id;
+    setPickerFor(id);
+    runManualSearch(0, id, "", "");
+  }
+
+  function expandCategory(id, hit) {
+    const parentId = String(hit?.categoryId || "").trim();
+    if (!parentId) return;
+    clearTimeout(searchTimer.current);
+    setManualQ("");
+    setBrowseParentId(parentId);
+    setBrowseTrail((trail) => [...trail, { categoryId: parentId, categoryName: hit.categoryName || "", hierarchy: hit.hierarchy || "" }]);
+    pickerRef.current = id;
+    setPickerFor(id);
+    runManualSearch(0, id, "", parentId);
+  }
+
+  function browseBack(id) {
+    clearTimeout(searchTimer.current);
+    const next = browseTrail.slice(0, -1);
+    const parentId = next.length ? String(next[next.length - 1].categoryId || "") : "";
+    setBrowseTrail(next);
+    setBrowseParentId(parentId);
+    setManualQ("");
+    pickerRef.current = id;
+    setPickerFor(id);
+    runManualSearch(0, id, "", parentId);
   }
 
   function inspectAttributes(collectionId, category) {
@@ -354,14 +545,14 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
         ...prev,
         error: t.elryanSelectCollectionAndCategory || "Select a collection and an Elryan category.",
       }));
-      return;
+      return null;
     }
     setReviewBusyId(collectionId);
     try {
       const data = await api.elryanMappingPreviewSave({
         brownCollectionId: collectionId,
         categoryId: current.pickedCategoryId,
-        includeAttributes: true,
+        includeAttributes: false,
       });
       setDrafts((prev) => {
         const latest = cardDraft(prev, collectionId);
@@ -388,8 +579,10 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
           data: data.attributes,
         });
       }
+      return data;
     } catch (err) {
       updateDraft(collectionId, (prev) => ({ ...prev, review: null, error: err.message }));
+      return null;
     } finally {
       setReviewBusyId("");
     }
@@ -397,25 +590,37 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
 
   async function saveMapping(collectionId) {
     const current = cardDraft(draftsRef.current, collectionId);
-    const decision = buildElryanMappingSaveBody({
-      brownCollectionId: collectionId,
-      categoryId: current.pickedCategoryId,
-      review: current.review,
-      overwriteAck: current.overwriteAck,
-      source: current.pickSource,
-    });
-    if (!decision.allowed) {
+    if (!isElryanConfirmedLeaf(current.pickedSnapshot)) {
       updateDraft(collectionId, (prev) => ({
         ...prev,
-        error:
-          decision.reason === "overwrite_required"
-            ? t.elryanOverwriteRequired || "Confirm overwrite of the existing mapping first."
-            : t.elryanSelectCollectionAndCategory || "Select a collection and an Elryan category.",
+        error: t.elryanSelectCandidate || "Select category",
       }));
       return;
     }
     setSaveBusyId(collectionId);
     try {
+      const review = await buildReview(collectionId);
+      const latest = cardDraft(draftsRef.current, collectionId);
+      if (!review || !isElryanCategoryPicked(latest.pickedCategoryId, current.pickedCategoryId)) return;
+      const decision = buildElryanMappingSaveBody({
+        brownCollectionId: collectionId,
+        categoryId: latest.pickedCategoryId,
+        review,
+        overwriteAck: review.requiresOverwriteConfirmation === true,
+        source: latest.pickSource,
+      });
+      if (!decision.allowed) {
+        updateDraft(collectionId, (prev) => ({
+          ...prev,
+          error:
+            decision.reason === "blocked"
+              ? (review.blockers || []).join(" ") || t.elryanSelectCandidate || "Select category"
+              : decision.reason === "overwrite_required"
+                ? t.elryanOverwriteRequired || "Confirm overwrite of the existing mapping first."
+                : t.elryanSelectCollectionAndCategory || "Select a collection and an Elryan category.",
+        }));
+        return;
+      }
       const data = await api.elryanMappingSave(decision.body);
       const applied = applyElryanMappingSaveResult({
         rows: payload?.rows || [],
@@ -445,6 +650,7 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
         })
       );
       setCursorId(String(applied.selectedId || collectionId));
+      pickerRef.current = "";
       setPickerFor("");
       setCompat(null);
     } catch (err) {
@@ -480,14 +686,20 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
     loadCollections({ offset: plan.offset, history: plan.history, resetDrafts: false });
   }
 
+  function goToPage(next) {
+    if (payload?.totalMatchingExact === false) {
+      if (next < historyIndex + 1) goPrev();
+      else goNext();
+      return;
+    }
+    const offset = (Math.max(1, next) - 1) * pageSizeRef.current;
+    loadCollections({ offset, history: [offset], resetDrafts: false });
+  }
+
   function focusCollection(id, row) {
     const nextId = String(id || "");
     if (!nextId) return;
-    setPickerFor(nextId);
-    setCursorId(nextId);
-    const term = locName(row?.brownCollectionName, lang);
-    setManualQ(term);
-    if (term) runManualSearch(0, leafRef.current, nextId, term);
+    openPicker(row || { brownCollectionId: nextId });
     requestAnimationFrame(() => {
       document.getElementById(`elryan-collection-${nextId}`)?.scrollIntoView({ block: "nearest" });
     });
@@ -559,16 +771,16 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
         <p className="mt-2 max-w-2xl text-sm text-brown/55">
           {t.elryanCategoryMappingHint || t.elryanSmartMappingHint}
         </p>
-        <p className="mt-2 text-xs font-semibold text-amber-900">{t.elryanSmartMappingExplicitSave}</p>
-
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          <Stat label={t.statTotalCollections} value={showStat(counts.collections)} />
-          <Stat label={t.elryanStatMapped || t.elryanFilterMapped} value={showStat(counts.mapped)} />
-          <Stat
-            label={t.elryanStatUnmapped || t.elryanFilterUnmapped}
-            value={unmapped == null ? "—" : formatCount(unmapped)}
-          />
-        </div>
+        {payload?.environment ? (
+          <p className="mt-3 text-sm font-semibold text-brown">
+            {payload.environment === "production" ? t.elryanValueProductionBanner : t.elryanValueStagingBanner}
+          </p>
+        ) : null}
+        <p className="mt-3 text-sm text-brown/60">
+          {t.statTotalCollections}: {showStat(counts.collections)} · {t.elryanStatMapped || t.elryanFilterMapped}:{" "}
+          {showStat(counts.mapped)} · {t.elryanStatUnmapped || t.elryanFilterUnmapped}:{" "}
+          {unmapped == null ? "—" : formatCount(unmapped)}
+        </p>
 
         <form
           className="mt-4 flex flex-wrap gap-2"
@@ -635,34 +847,43 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
           </p>
         ) : null}
         {pageNotice ? <p className="mt-3 text-sm text-brown/70">{pageNotice}</p> : null}
-        {payload?.catalog ? (
-          <p className="mt-3 text-[11px] text-brown/45">
-            {t.elryanCatalogStatus}: {elryanCatalogEnvironmentLabel(payload.catalog) || payload.environment} ·{" "}
-            {payload.catalog.status} · {payload.catalog.uniqueCount}
-          </p>
-        ) : null}
 
         <div className="mt-5 space-y-3">
           {rows.map((row) => {
             const id = row.brownCollectionId;
             const draft = cardDraft(drafts, id);
             const mapped = Boolean(row.existingMapping?.configured);
-            const taxonomy = brownStoreTaxonomyPath(row, lang);
+            const taxonomy = brownStoreTaxonomyPath(row, lang, " > ");
             const open = pickerFor === id;
             const hits = searchHitsForCollection({
               manualFor,
               collectionId: id,
               categories: manualResult?.categories,
             });
+            const savedValues = row.existingMapping?.values || {};
+            const savedId = String(savedValues.categoryId || "");
+            const selectedId = String(draft.pickedCategoryId || savedId);
+            const selectedLabel = draft.pickedCategoryId
+              ? elryanChoiceLabel(draft.pickedSnapshot)
+              : elryanChoiceLabel({
+                  hierarchy: savedValues.categoryHierarchy,
+                  categoryName: savedValues.categoryName,
+                });
+            const rowState = elryanCategoryRowStatus({
+              savedId,
+              selectedId,
+              error: draft.error,
+            });
             const chosen = resolveDisplayedElryanCategory({
-              pickedCategoryId: draft.pickedCategoryId,
-              snapshot: draft.pickedSnapshot,
+              pickedCategoryId: selectedId,
+              snapshot: draft.pickedSnapshot || {
+                categoryId: savedId,
+                categoryName: savedValues.categoryName,
+                hierarchy: savedValues.categoryHierarchy,
+              },
               candidates: row.candidates || [],
               manualCategories: hits,
             });
-            const top = (row.candidates || [])[0] || null;
-            const savedValues = row.existingMapping?.values || {};
-            const reviewReady = canReviewElryanMapping(id, draft.pickedCategoryId);
             const manualPrev = nextManualSearchOffset({
               offset: manualOffset,
               limit: manualResult?.limit || 25,
@@ -679,6 +900,7 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
               compat?.forId === id && String(compat.categoryId || "") === String(draft.pickedCategoryId || "")
                 ? compat
                 : null;
+            const saving = saveBusyId === id;
 
             return (
               <article
@@ -687,376 +909,160 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
                 data-elryan-collection-card={id}
                 data-product-count={row.productCount}
                 data-mapping-status={mapped ? "mapped" : "unmapped"}
-                className="rounded-2xl bg-cream p-4"
+                className="rounded-2xl bg-cream px-3 py-3 sm:px-4"
               >
-                <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="grid items-center gap-3 lg:grid-cols-[minmax(0,1.05fr)_minmax(14rem,1.2fr)_auto_auto]">
                   <div className="min-w-0">
-                    <p className="text-[11px] font-semibold tracking-wide text-brown/45 uppercase">
+                    <p className="mb-1 text-[11px] font-semibold tracking-wide text-brown/45 uppercase lg:sr-only">
                       {t.elryanBrownStoreLabel || "BrownStore"}
                     </p>
-                    <p className="mt-1 break-words text-sm font-semibold text-brown">{taxonomy}</p>
-                    <p className="mt-1 text-xs text-brown/50">
-                      <span dir="ltr">{t.elryanCategoryIdLabel || "ID"} {id}</span>
-                      {" · "}
-                      {formatCount(row.productCount)} {t.products}
+                    <p className="break-words text-sm font-semibold text-brown" dir="auto">
+                      {taxonomy}
                     </p>
-                    {savedValues.categoryId ? (
-                      <p className="mt-2 break-words text-xs text-brown/60" dir="ltr">
-                        {t.elryanCurrentMapping}: {savedValues.categoryName || "—"} · {savedValues.categoryId}
-                        {savedValues.categoryHierarchy ? ` · ${savedValues.categoryHierarchy}` : ""}
-                      </p>
+                  </div>
+                  <ElryanLeafSelect
+                    id={id}
+                    open={open}
+                    query={manualQ}
+                    busy={manualBusy && manualFor === id}
+                    hits={open ? hits : []}
+                    searchError={manualFor === id ? manualError : ""}
+                    scope={manualFor === id ? manualScope : "roots"}
+                    canGoBack={manualFor === id && browseTrail.length > 0}
+                    selectedLabel={selectedLabel}
+                    disabled={saving}
+                    t={t}
+                    onOpen={() => openPicker(row)}
+                    onQuery={(value) => queueLeafSearch(id, value)}
+                    onSelect={(hit) => pickCategory(id, hit, "manual")}
+                    onExpand={(hit) => expandCategory(id, hit)}
+                    onBrowseAll={() => browseAllCategories(id)}
+                    onBack={() => browseBack(id)}
+                    pageLabel={
+                      manualResult && manualFor === id
+                        ? `${manualResult.offset + 1}–${manualResult.offset + (manualResult.categories?.length || 0)}`
+                        : ""
+                    }
+                    prevDisabled={manualBusy || manualFor !== id || !manualPrev.moved}
+                    nextDisabled={manualBusy || manualFor !== id || !manualNext.moved}
+                    onPrev={() => runManualSearch(manualPrev.offset, id, manualQ, browseParentId)}
+                    onNext={() => runManualSearch(manualNext.offset, id, manualQ, browseParentId)}
+                  />
+                  <button
+                    type="button"
+                    data-elryan-confirm-save={id}
+                    className={BUTTON}
+                    disabled={
+                      saving ||
+                      selectedId === savedId ||
+                      !isElryanConfirmedLeaf(draft.pickedSnapshot) ||
+                      (draft.review && !draft.review.canSave)
+                    }
+                    onClick={() => saveMapping(id)}
+                  >
+                    {saving ? t.elryanCategorySaving || "Saving..." : t.elryanValueSave || "Save"}
+                  </button>
+                  <div className="min-w-[8.5rem]">
+                    {saving ? (
+                      <span className="text-xs font-semibold text-brown/60">{t.elryanCategorySaving || "Saving..."}</span>
+                    ) : null}
+                    {!saving && rowState === "confirmed" ? (
+                      <span className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">
+                        {t.elryanValueConfirmed}
+                      </span>
+                    ) : null}
+                    {!saving && rowState === "unsaved" ? (
+                      <span className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-900">
+                        {t.elryanValueUnsaved}
+                      </span>
                     ) : null}
                   </div>
-                  <StatusBadge kind={mapped ? "ready" : "missing_setup"} t={t}>
-                    {mapped ? t.elryanFilterMapped : t.elryanFilterUnmapped}
-                  </StatusBadge>
                 </div>
-
-                {draft.message ? (
-                  <p
-                    className="mt-3 rounded-2xl bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800"
-                    role="status"
-                  >
-                    {draft.message}
-                  </p>
-                ) : null}
                 {draft.error ? (
-                  <p className="mt-3 rounded-2xl bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+                  <p className="mt-2 text-sm text-red-700" role="alert">
                     {draft.error}
                   </p>
                 ) : null}
-
-                <div className="mt-4 space-y-3">
-                  <p className="text-xs font-semibold text-brown/60">{t.elryanCategory || "Elryan Category"}</p>
-                  <button
-                    type="button"
-                    aria-expanded={open}
-                    onClick={() => openPicker(row)}
-                    className={BUTTON_GHOST}
-                  >
-                    {open && manualBusy && manualFor === id
-                      ? t.loading
-                      : t.elryanPickCategory || "Search / Select Elryan Category"}
-                  </button>
-
-                  {!chosen && top ? (
-                    <button
-                      type="button"
-                      data-elryan-suggestion={String(top.categoryId)}
-                      data-elryan-suggestion-for={id}
-                      aria-pressed={false}
-                      onClick={() => pickCategory(id, top, "smart")}
-                      className="w-full rounded-xl bg-white px-3 py-2 text-start ring-1 ring-brown/10"
-                    >
-                      <span className="text-[11px] font-semibold tracking-wide text-brown/45 uppercase">
-                        {t.elryanSuggestedLabel || "Suggested"}
-                      </span>
-                      <span className="mt-1 block break-words text-sm font-semibold text-brown">
-                        {top.categoryName || "—"}
-                      </span>
-                      <span className="mt-0.5 block break-words text-xs text-brown/55" dir="ltr">
-                        {hitMeta(t, top)}
-                      </span>
-                      {top.hierarchy ? (
-                        <span className="mt-0.5 block break-words text-xs text-brown/45" dir="ltr">
-                          {top.hierarchy}
-                        </span>
-                      ) : null}
-                    </button>
-                  ) : null}
-
-                  {chosen ? (
-                    <div className="rounded-xl bg-white p-3 text-xs text-brown/75 ring-2 ring-brown/25">
-                      <p className="font-semibold text-brown">
-                        {t.elryanCategorySelected || "Selected"}: {chosen.categoryName || "—"}
-                      </p>
-                      <p className="mt-1 break-words" dir="ltr">
+                <details className="mt-2 text-xs text-brown/70">
+                  <summary className="cursor-pointer font-semibold text-brown/70">
+                    {t.elryanAdvancedDetails || "Advanced details"}
+                  </summary>
+                  <div className="mt-2 space-y-2 rounded-xl bg-white p-3 ring-1 ring-brown/5">
+                    <p dir="ltr">
+                      {t.elryanCategoryIdLabel || "ID"} {id}
+                      {" · "}
+                      {formatCount(row.productCount)} {t.products}
+                    </p>
+                    {chosen?.categoryId ? (
+                      <p dir="ltr">
+                        {t.elryanCurrentMapping}: {chosen.categoryName || selectedLabel || "—"}
+                        {" · "}
                         {t.elryanCategoryIdLabel || "ID"} {chosen.categoryId}
-                      </p>
-                      {chosen.hierarchy ? (
-                        <p className="mt-1 break-words" dir="ltr">
-                          {chosen.hierarchy}
-                        </p>
-                      ) : null}
-                      <p className="mt-1 text-brown/50">
-                        {kindLabel(t, chosen.kind, chosen.isParent)}
-                        {chosen.attributeSetId != null ? ` · ${t.elryanAttributeSetLabel} ${chosen.attributeSetId}` : ""}
+                        {chosen.hierarchy ? ` · ${chosen.hierarchy}` : ""}
                         {chosen.confidence ? ` · ${chosen.confidence}` : ""}
+                        {chosen.attributeSetId != null ? ` · ${t.elryanAttributeSetLabel} ${chosen.attributeSetId}` : ""}
                       </p>
-                      <p className="mt-1 text-brown/50">{t.elryanReviewReadyHint}</p>
-                    </div>
-                  ) : null}
-
-                  {cardCompat ? (
-                    <div className="rounded-xl bg-white p-3 text-xs text-brown/80 ring-1 ring-brown/10" data-elryan-attributes={id}>
-                      <p className="font-semibold text-brown">{t.elryanAttributeCompatibility}</p>
-                      {cardCompat.loading ? <p className="mt-1">{t.loading}</p> : null}
-                      <p className="mt-1">
-                        {t.elryanAttributeSetLabel}: {cardCompat.data?.attributeSetId || "—"}{" "}
-                        {cardCompat.data?.attributeSetName || ""}
-                      </p>
-                      <ul className="mt-2 space-y-2">
-                        {(cardCompat.data?.attributes || []).map((attr) => (
-                          <li key={attr.code}>
-                            <p className="font-semibold text-brown">
-                              {attr.name || attr.code}{" "}
-                              <span className="font-normal text-brown/60">
-                                {attr.status === "required"
-                                  ? t.elryanAttributeRequired || "Required"
-                                  : t.elryanAttributeOptional || "Optional"}
-                              </span>
-                            </p>
-                            {attr.variesByProduct ? (
-                              <p className="mt-0.5 text-amber-900">
-                                {t.elryanWattPerProduct ||
-                                  "Wattage is stored per product from verified specifications and Elryan value IDs. It is not saved with the category."}
-                              </p>
-                            ) : null}
-                            <p className="mt-0.5" dir="ltr">
-                              {(attr.values || [])
-                                .map((value) => `${value.name || "—"}${value.id != null ? ` (${value.id})` : ""}`)
-                                .join(", ") || "—"}
-                            </p>
-                          </li>
-                        ))}
-                      </ul>
-                      {(cardCompat.data?.blockers || []).map((blocker) => (
-                        <p key={blocker} className="mt-1 text-amber-900">
-                          {blocker}
-                        </p>
+                    ) : null}
+                    {savedId && selectedId !== savedId ? <p>{t.elryanOverwriteConfirm}</p> : null}
+                    <p className="text-[11px] font-semibold tracking-wide text-brown/45 uppercase">
+                      {t.elryanSuggestionsTitle || "Suggested categories"}
+                    </p>
+                    <ul className="space-y-1">
+                      {(row.candidates || []).map((candidate) => (
+                        <li key={String(candidate.categoryId)}>
+                          <button
+                            type="button"
+                            data-elryan-suggestion={String(candidate.categoryId)}
+                            data-elryan-suggestion-for={id}
+                            disabled={!isElryanConfirmedLeaf(candidate)}
+                            className="w-full rounded-xl px-2 py-1.5 text-start hover:bg-cream disabled:opacity-40"
+                            onClick={() => {
+                              if (!isElryanConfirmedLeaf(candidate)) return;
+                              pickCategory(id, candidate, "smart");
+                            }}
+                          >
+                            <span className="font-semibold text-brown">{elryanChoiceLabel(candidate) || "—"}</span>
+                            <span className="mt-0.5 block text-brown/50" dir="ltr">
+                              {hitMeta(t, candidate)}
+                            </span>
+                          </button>
+                        </li>
                       ))}
-                    </div>
-                  ) : null}
-
-                  {open ? (
-                    <div
-                      className="rounded-2xl bg-white p-3 ring-1 ring-brown/10"
-                      data-elryan-picker={id}
-                    >
-                      <p className="text-[11px] font-semibold tracking-wide text-brown/45 uppercase">
-                        {t.elryanSuggestionsTitle || "Suggested categories"}
+                      {!row.candidates?.length ? <li className="text-brown/45">{t.elryanNoSuggestions}</li> : null}
+                    </ul>
+                    {(draft.pickedSnapshot?.reasons || []).slice(0, 6).map((reason) => (
+                      <p key={reason}>{reason}</p>
+                    ))}
+                    {draft.pickedSnapshot?.productEvidence?.length ? (
+                      <p>
+                        {t.elryanProductEvidence}: {draft.pickedSnapshot.productEvidence.join(", ")}
                       </p>
-                      <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto text-sm">
-                        {(row.candidates || []).map((candidate) => (
-                          <CategoryHit
-                            key={String(candidate.categoryId)}
-                            forId={id}
-                            active={isElryanCategoryPicked(draft.pickedCategoryId, candidate.categoryId)}
-                            title={candidate.categoryName}
-                            meta={hitMeta(t, candidate)}
-                            detail={candidate.hierarchy}
-                            dataAttr="data-elryan-suggestion"
-                            dataValue={String(candidate.categoryId)}
-                            onSelect={() => pickCategory(id, candidate, "smart")}
-                          />
-                        ))}
-                        {!row.candidates?.length ? (
-                          <li className="px-2 py-2 text-xs text-brown/45">{t.elryanNoSuggestions}</li>
-                        ) : null}
-                      </ul>
-
-                      <form
-                        className="mt-3 flex flex-wrap gap-2"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          runManualSearch(0, manualLeafOnly, id, manualQ);
-                        }}
-                      >
-                        <input
-                          id={`elryan-category-search-${id}`}
-                          value={manualQ}
-                          onChange={(event) => setManualQ(event.target.value)}
-                          placeholder={t.elryanSearchCategoryPlaceholder}
-                          aria-label={t.elryanSearchCategoryPlaceholder}
-                          className="min-w-[10rem] flex-1 rounded-full border border-brown/10 bg-cream px-3 py-1.5 text-sm text-brown"
-                        />
-                        <button type="submit" disabled={manualBusy} className={`${BUTTON} disabled:opacity-50`}>
-                          {t.categorySearch || t.search}
-                        </button>
-                      </form>
-                      <label className="mt-2 flex items-center gap-2 text-xs font-semibold text-brown/70">
-                        <input
-                          type="checkbox"
-                          checked={manualLeafOnly}
-                          onChange={(event) => {
-                            const next = event.target.checked;
-                            setManualLeafOnly(next);
-                            runManualSearch(0, next, id, manualQ);
-                          }}
-                        />
-                        {t.elryanLeafOnly || "Leaves preferred"}
-                      </label>
-                      <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto text-sm">
-                        {hits.map((hit) => (
-                          <CategoryHit
-                            key={String(hit.categoryId)}
-                            forId={id}
-                            active={isElryanCategoryPicked(draft.pickedCategoryId, hit.categoryId)}
-                            title={hit.categoryName}
-                            meta={hitMeta(t, hit)}
-                            detail={hit.hierarchy}
-                            dataAttr="data-elryan-search-hit"
-                            dataValue={String(hit.categoryId)}
-                            onSelect={() => pickCategory(id, hit, "manual")}
-                          />
-                        ))}
-                        {manualResult && manualFor === id && !hits.length ? (
-                          <li className="px-2 py-2 text-xs text-brown/45">{t.elryanNoCategoriesYet}</li>
-                        ) : null}
-                      </ul>
-                      {manualResult && manualFor === id ? (
-                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-brown/55">
-                          <span>
-                            {elryanCatalogEnvironmentLabel(manualResult)
-                              ? `${elryanCatalogEnvironmentLabel(manualResult)} · `
-                              : ""}
-                            {manualResult.totalMatching} {t.elryanTotalResults || "results"} ·{" "}
-                            {manualResult.offset + 1}–{manualResult.offset + (manualResult.categories?.length || 0)}
-                          </span>
-                          <button
-                            type="button"
-                            className={BUTTON_GHOST}
-                            disabled={manualBusy || !manualPrev.moved}
-                            onClick={() => runManualSearch(manualPrev.offset, manualLeafOnly, id, manualQ)}
-                          >
-                            {t.pagePrevious}
-                          </button>
-                          <button
-                            type="button"
-                            className={BUTTON_GHOST}
-                            disabled={manualBusy || !manualNext.moved}
-                            onClick={() => runManualSearch(manualNext.offset, manualLeafOnly, id, manualQ)}
-                          >
-                            {t.pageNext}
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  <div className="flex flex-wrap items-center gap-2">
+                    ) : null}
+                    {(draft.pickedSnapshot?.missing || []).map((item) => (
+                      <p key={item} className="text-amber-900">
+                        {item}
+                      </p>
+                    ))}
                     <button
                       type="button"
-                      className={BUTTON}
-                      disabled={reviewBusyId === id || !reviewReady}
-                      onClick={() => buildReview(id)}
+                      className={BUTTON_GHOST}
+                      disabled={!draft.pickedCategoryId}
+                      onClick={() => inspectAttributes(id, draft.pickedSnapshot)}
                     >
-                      {reviewBusyId === id ? t.loading : t.elryanReviewAndSave || "Review & Save"}
+                      {t.elryanInspectAttributes}
                     </button>
-                  </div>
-
-                  {draft.review ? (
-                    <div
-                      className="space-y-3 rounded-xl bg-white p-4 text-sm ring-1 ring-brown/10"
-                      data-elryan-review={id}
-                    >
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-tan">
-                        {t.elryanSaveConfirmation || "Pre-save confirmation"}
-                      </p>
-                      <div className="text-xs text-brown/80">
-                        <p className="font-semibold text-brown">
-                          {t.elryanBrownStoreLabel || "BrownStore"}
-                        </p>
-                        <p className="mt-1 break-words">
-                          {reviewBrownStorePath(draft.review.brownStore, lang)}
-                        </p>
-                        <p className="mt-1">
-                          {t.elryanCategoryIdLabel || "ID"} {draft.review.brownStore?.brownCollectionId} · {t.products}{" "}
-                          {draft.review.brownStore?.productCount}
-                        </p>
-                        <p className="mt-3 font-semibold text-brown">{t.elryanCategory || "Elryan Category"}</p>
-                        <p className="mt-1 break-words" dir="ltr">
-                          {draft.review.elryan?.categoryName}
-                        </p>
-                        <p className="mt-1 break-words" dir="ltr">
-                          {draft.review.elryan?.categoryHierarchy}
-                        </p>
+                    {cardCompat ? (
+                      <div data-elryan-attributes={id}>
+                        <p className="font-semibold text-brown">{t.elryanAttributeCompatibility}</p>
+                        {cardCompat.loading ? <p className="mt-1">{t.loading}</p> : null}
                         <p className="mt-1" dir="ltr">
-                          {t.elryanCategoryIdLabel || "ID"} {draft.review.elryan?.categoryId} ·{" "}
-                          {kindLabel(t, draft.review.elryan?.kind, draft.review.elryan?.isParent)} ·{" "}
-                          {t.elryanAttributeSetLabel} {draft.review.elryan?.attributeSetId || "—"} ·{" "}
-                          {draft.review.environment}
+                          {t.elryanAttributeSetLabel}: {cardCompat.data?.attributeSetId || "—"}{" "}
+                          {cardCompat.data?.attributeSetName || ""}
                         </p>
                       </div>
-                      {(draft.review.blockers || []).map((blocker) => (
-                        <p key={blocker} className="text-xs text-red-700">
-                          {blocker}
-                        </p>
-                      ))}
-                      {(draft.review.warnings || []).map((warning) => (
-                        <p key={warning} className="text-xs text-amber-900">
-                          {warning}
-                        </p>
-                      ))}
-                      {draft.review.requiresOverwriteConfirmation ? (
-                        <div className="rounded-xl bg-amber-50 p-3 text-xs text-amber-950 ring-1 ring-amber-700/20">
-                          <p className="font-semibold">{t.elryanOverwriteTitle || "Existing mapping will change"}</p>
-                          <ul className="mt-2 list-disc ps-4">
-                            {(draft.review.changes || []).map((change) => (
-                              <li key={change.key}>
-                                {change.key}: {change.before || "—"} → {change.after || "—"}
-                              </li>
-                            ))}
-                          </ul>
-                          <label className="mt-3 flex items-center gap-2 font-semibold">
-                            <input
-                              type="checkbox"
-                              checked={draft.overwriteAck}
-                              onChange={(event) =>
-                                updateDraft(id, (prev) => ({ ...prev, overwriteAck: event.target.checked }))
-                              }
-                            />
-                            {t.elryanOverwriteConfirm || "I confirm overwriting the existing mapping"}
-                          </label>
-                        </div>
-                      ) : null}
-                      <button
-                        type="button"
-                        data-elryan-confirm-save={id}
-                        className={draft.review.requiresOverwriteConfirmation ? BUTTON_DANGER : BUTTON}
-                        disabled={
-                          saveBusyId === id ||
-                          !draft.review.canSave ||
-                          (draft.review.requiresOverwriteConfirmation && !draft.overwriteAck)
-                        }
-                        onClick={() => saveMapping(id)}
-                      >
-                        {saveBusyId === id ? t.loading : t.elryanConfirmSave || "Confirm and save"}
-                      </button>
-                    </div>
-                  ) : null}
-
-                  <details className="rounded-xl bg-white p-3 text-xs text-brown/70 ring-1 ring-brown/5">
-                    <summary className="cursor-pointer font-semibold text-brown">
-                      {t.elryanAdvancedDetails || "Advanced details"}
-                    </summary>
-                    <div className="mt-2 space-y-2">
-                      {(draft.pickedSnapshot?.reasons || []).slice(0, 6).map((reason) => (
-                        <p key={reason}>{reason}</p>
-                      ))}
-                      {draft.pickedSnapshot?.productEvidence?.length ? (
-                        <p>
-                          {t.elryanProductEvidence}: {draft.pickedSnapshot.productEvidence.join(", ")}
-                        </p>
-                      ) : null}
-                      {(draft.pickedSnapshot?.missing || []).map((item) => (
-                        <p key={item} className="text-amber-900">
-                          {item}
-                        </p>
-                      ))}
-                      <button
-                        type="button"
-                        className={BUTTON_GHOST}
-                        disabled={!draft.pickedCategoryId}
-                        onClick={() => inspectAttributes(id, draft.pickedSnapshot)}
-                      >
-                        {t.elryanInspectAttributes}
-                      </button>
-                    </div>
-                  </details>
-
-                  <p className="text-xs text-brown/50">{t.elryanNoAutoSave}</p>
-                </div>
+                    ) : null}
+                  </div>
+                </details>
               </article>
             );
           })}
@@ -1070,27 +1076,32 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
         </div>
 
         {payload ? (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm">
-            <button
-              type="button"
-              disabled={busy || !canPrev}
-              onClick={goPrev}
-              className="rounded-full px-3 py-1.5 font-semibold text-brown/60 disabled:opacity-40"
-            >
-              {t.pagePrevious}
-            </button>
+          <div className="mt-4 space-y-3">
             <ProgressLine t={t} payload={payload} />
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <ElryanMappingPager
+                t={t}
+                page={
+                  payload.totalMatchingExact === false
+                    ? historyIndex + 1
+                    : Math.floor((payload.offset || 0) / (Number(payload.limit) || pageSize)) + 1
+                }
+                pages={
+                  payload.totalMatchingExact === false
+                    ? 1
+                    : Math.max(1, Math.ceil((payload.totalMatching || 0) / (Number(payload.limit) || pageSize)))
+                }
+                total={payload.totalMatchingExact === false ? payload.counts?.filtered || 0 : payload.totalMatching || 0}
+                limit={pageSize}
+                busy={busy}
+                numbered={payload.totalMatchingExact !== false}
+                hasPrevious={payload.totalMatchingExact === false ? canPrev : undefined}
+                hasNext={payload.totalMatchingExact === false ? Boolean(payload.hasMore) : undefined}
+                onPage={goToPage}
+                onLimit={setPageSize}
+              />
               <button type="button" className={BUTTON_GHOST} disabled={busy} onClick={goNextUnmapped}>
                 {t.elryanNextUnmapped || "Next unmapped"}
-              </button>
-              <button
-                type="button"
-                disabled={busy || !payload.hasMore}
-                onClick={goNext}
-                className="rounded-full px-3 py-1.5 font-semibold text-brown/60 disabled:opacity-40"
-              >
-                {t.pageNext}
               </button>
             </div>
           </div>
@@ -1105,6 +1116,12 @@ export default function ElryanSmartMapping({ t, lang = "en" }) {
           {t.elryanOfficialCatalogAdvanced || "Official Elryan catalog"}
         </summary>
         <p className="mt-2 max-w-2xl text-sm text-brown/55">{t.elryanOfficialCatalogAdvancedHint}</p>
+        {payload?.catalog ? (
+          <p className="mt-2 text-[11px] text-brown/45">
+            {t.elryanCatalogStatus}: {elryanCatalogEnvironmentLabel(payload.catalog) || payload.environment} ·{" "}
+            {payload.catalog.status} · {payload.catalog.uniqueCount}
+          </p>
+        ) : null}
         {catalogOpen ? (
           <div className="mt-4">
             <ElryanCatalogBrowse t={t} embedded />

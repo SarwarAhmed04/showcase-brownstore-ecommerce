@@ -134,6 +134,18 @@ export function unmappedCollectionCount(counts) {
   return Math.max(0, total - mapped);
 }
 
+/**
+ * Row status for one collection.
+ * A saved category that still matches the selection is Confirmed, including after reload.
+ * Changing the selection clears Confirmed until that collection is saved again.
+ */
+export function elryanCategoryRowStatus({ savedId = "", selectedId = "", error = "" } = {}) {
+  if (String(error || "").trim()) return "error";
+  if (String(selectedId || "").trim() !== String(savedId || "").trim()) return "unsaved";
+  if (String(savedId || "").trim()) return "confirmed";
+  return "empty";
+}
+
 export const EMPTY_ELRYAN_CARD_DRAFT = Object.freeze({
   pickedCategoryId: "",
   pickSource: "",

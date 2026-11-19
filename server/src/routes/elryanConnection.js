@@ -290,6 +290,8 @@ elryanConnectionRouter.get("/platforms/elryan/mapping/snapshot-search", async (r
           limit: req.query.limit,
           offset: req.query.offset,
           leafOnly: req.query.leafOnly === "1" || req.query.leafOnly === "true",
+          parentId: req.query.parentId,
+          roots: req.query.roots === "1" || req.query.roots === "true",
         }),
         ""
       )
@@ -411,9 +413,9 @@ elryanConnectionRouter.get("/platforms/elryan/warranties", async (req, res) => {
   }
 });
 
-elryanConnectionRouter.get("/platforms/elryan/warranty-mapping", async (_req, res) => {
+elryanConnectionRouter.get("/platforms/elryan/warranty-mapping", async (req, res) => {
   try {
-    res.json(assertNoElryanSecretLeak(await listElryanWarrantyMappingPage(), ""));
+    res.json(assertNoElryanSecretLeak(await listElryanWarrantyMappingPage(req.query), ""));
   } catch (err) {
     fail(res, err, "Failed to load Elryan warranty mapping");
   }
@@ -471,7 +473,7 @@ elryanConnectionRouter.get("/platforms/elryan/sku-exists", async (req, res) => {
 elryanConnectionRouter.get("/platforms/elryan/pair-mapping", async (req, res) => {
   try {
     const { listElryanPairMapping } = await import("../services/elryanPairMapping.js");
-    res.json(assertNoElryanSecretLeak(await listElryanPairMapping(req.query.kind), ""));
+    res.json(assertNoElryanSecretLeak(await listElryanPairMapping(req.query.kind, req.query), ""));
   } catch (err) {
     fail(res, err, "Failed to load Elryan pair mapping");
   }
@@ -659,9 +661,9 @@ elryanConnectionRouter.post("/platforms/elryan/staging-overrides", async (req, r
   }
 });
 
-elryanConnectionRouter.get("/platforms/elryan/collection-dimensions", async (_req, res) => {
+elryanConnectionRouter.get("/platforms/elryan/collection-dimensions", async (req, res) => {
   try {
-    res.json(await listElryanCollectionDimensionCatalog());
+    res.json(await listElryanCollectionDimensionCatalog(req.query));
   } catch (err) {
     fail(res, err, "Failed to load Elryan collection dimensions");
   }

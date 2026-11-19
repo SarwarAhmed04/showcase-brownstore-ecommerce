@@ -7,6 +7,7 @@ import {
   ELRYAN_CATEGORY_MAPPING_TAB,
   applySaveToCardDraft,
   brownStoreTaxonomyPath,
+  elryanCategoryRowStatus,
   elryanLoadError,
   elryanPlatformSectionEntries,
   isElryanCategoryMappingTab,
@@ -24,8 +25,10 @@ import {
   ELRYAN_COLLECTION_PAGE_SIZE,
   applyElryanMappingSaveResult,
   buildElryanMappingSaveBody,
+  elryanCategorySelectorQuery,
   elryanCollectionPreviewQuery,
 } from "../../client/src/utils/elryanSmartMappingSelect.js";
+import { filterElryanCatalogRows } from "./utils/elryanCategoryBrowse.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
@@ -104,7 +107,12 @@ describe("Elryan unified category mapping page", () => {
     assert.match(ui, /data-elryan-collection-card=\{id\}/);
     assert.match(ui, /data-product-count=\{row\.productCount\}/);
     assert.match(ui, /data-mapping-status=\{mapped \? "mapped" : "unmapped"\}/);
-    assert.match(ui, /brownStoreTaxonomyPath\(row, lang\)/);
+    assert.match(ui, /brownStoreTaxonomyPath\(row, lang, " > "\)/);
+    assert.match(ui, /elryanValueConfirmed/);
+    assert.match(ui, /elryanValueUnsaved/);
+    assert.match(ui, /elryanCategorySaving/);
+    assert.match(ui, /data-elryan-browse-all/);
+    assert.match(ui, /elryanCategorySelectorQuery/);
     assert.match(ui, /formatCount\(row\.productCount\)/);
     assert.equal(ui.includes("lg:grid-cols-2"), false);
     assert.equal(ui.includes("saveCategorySetup"), false);
@@ -160,6 +168,9 @@ describe("Elryan unified category mapping page", () => {
     const pick = sliceFn(ui, "function pickCategory", "async function runManualSearch");
     const search = sliceFn(ui, "async function runManualSearch", "function openPicker");
     assert.match(ui, /data-elryan-picker=\{id\}/);
+    assert.match(ui, /onPointerDown/);
+    assert.match(ui, /stopPropagation\(\)/);
+    assert.match(ui, /data-elryan-active-results=\{id\}/);
     assert.match(ui, /pickerFor === id/);
     assert.match(ui, /data-elryan-suggestion=/);
     assert.match(ui, /data-elryan-search-hit/);
@@ -217,6 +228,38 @@ describe("Elryan unified category mapping page", () => {
       }).length,
       1
     );
+
+    const emptyQuery = elryanCategorySelectorQuery({ q: "  ", offset: 25 });
+    assert.equal(emptyQuery.roots, "1");
+    assert.equal(emptyQuery.offset, 25);
+    assert.equal(emptyQuery.q, undefined);
+    assert.equal(emptyQuery.leafOnly, undefined);
+    const branch = elryanCategorySelectorQuery({ parentId: 10, q: "" });
+    assert.equal(branch.parentId, "10");
+    assert.equal(branch.roots, undefined);
+    const found = elryanCategorySelectorQuery({ q: "yogurt", parentId: "10" });
+    assert.equal(found.q, "yogurt");
+    assert.equal(found.parentId, undefined);
+    assert.equal(found.roots, undefined);
+
+    const catalog = [
+      { categoryId: 100, categoryName: "Acne Patches", hierarchy: "Beauty : Skin Care : Acne Patches", parentId: 10, isParent: false },
+      { categoryId: 10, categoryName: "Skin Care", hierarchy: "Beauty : Skin Care", parentId: 1, isParent: true },
+      { categoryId: 200, categoryName: "Door Locks", hierarchy: "Home : Hardware : Door Locks", isParent: false },
+    ];
+    const roots = filterElryanCatalogRows(catalog, { roots: true }).map((row) => String(row.categoryId));
+    assert.deepEqual(roots.sort(), ["10", "200"]);
+    assert.deepEqual(
+      filterElryanCatalogRows(catalog, { parentId: "10" }).map((row) => String(row.categoryId)),
+      ["100"]
+    );
+    assert.equal(filterElryanCatalogRows(catalog, { q: "Hardware : Door" }).length, 1);
+    assert.equal(filterElryanCatalogRows(catalog, { q: "200" })[0].categoryId, 200);
+    assert.equal(filterElryanCatalogRows(catalog, { q: "not-a-real-category" }).length, 0);
+    assert.match(ui, /data-elryan-expand=/);
+    assert.match(ui, /elryanCategoryNoMatches/);
+    assert.match(ui, /data-elryan-return-browse/);
+    assert.match(ui, /elryanSuggestionsTitle/);
   });
 
   it("keeps explicit review, leaf blocking, overwrite protection, and the saved page", () => {
@@ -235,7 +278,8 @@ describe("Elryan unified category mapping page", () => {
     assert.match(ui, /data-elryan-confirm-save=\{id\}/);
     assert.match(ui, /!draft\.review\.canSave/);
     assert.match(ui, /elryanOverwriteConfirm/);
-    assert.match(ui, /limit: ELRYAN_COLLECTION_PAGE_SIZE/);
+    assert.match(ui, /limit: pageSizeRef\.current/);
+    assert.match(ui, /ElryanMappingPager/);
     assert.equal(ELRYAN_COLLECTION_PAGE_SIZE, 40);
 
     const blocked = buildElryanMappingSaveBody({
@@ -318,6 +362,14 @@ describe("Elryan unified category mapping page", () => {
 
     assert.equal(unmappedCollectionCount({ collections: 120, mapped: 45 }), 75);
     assert.equal(unmappedCollectionCount({}), null);
+
+    assert.equal(elryanCategoryRowStatus({ savedId: "398", selectedId: "398" }), "confirmed");
+    assert.equal(elryanCategoryRowStatus({ savedId: "398", selectedId: "401" }), "unsaved");
+    assert.equal(elryanCategoryRowStatus({ savedId: "", selectedId: "" }), "empty");
+    assert.equal(
+      elryanCategoryRowStatus({ savedId: "398", selectedId: "401", error: "Save failed." }),
+      "error"
+    );
   });
 
   it("uses themed surfaces and does not change GINI, Miswag, dimensions, or sync", () => {

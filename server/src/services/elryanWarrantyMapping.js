@@ -15,6 +15,8 @@ import {
 } from "../utils/elryanWarrantyResolve.js";
 import { resolveElryanScopedValue } from "../utils/elryanValueResolve.js";
 import { assertElryanSaveEnvironment } from "../utils/elryanTaxonomyMapping.js";
+import { filterWarrantyBrands } from "../../../client/src/utils/elryanWarrantyMappingPage.js";
+import { compareMappingLabel, paginateElryanMappingRows } from "../utils/elryanMappingTablePage.js";
 
 function fail(message, code, status = 400) {
   const error = new Error(message);
@@ -158,7 +160,7 @@ async function loadWarrantyCatalog() {
  * Staging brand → warranty page. Reads BrownStore brands and the official
  * warranty list. Does not save a mapping and does not write products.
  */
-export async function listElryanWarrantyMappingPage() {
+export async function listElryanWarrantyMappingPage(query = {}) {
   const { connection, environment } = await activeWarrantyEnvironment();
   const [brands, brandRows, warrantyRows, warranties] = await Promise.all([
     loadBrownBrands(),
@@ -187,9 +189,17 @@ export async function listElryanWarrantyMappingPage() {
       brandMapping: presentBrandMapping(brandRows, brand.brownKey, environment),
       warranty: presentWarranty(brandWarranty(warrantyRows, brand.brownKey, environment), warranties.items, environment),
     }))
-    .sort((a, b) => a.brownLabel.localeCompare(b.brownLabel, undefined, { sensitivity: "base" }));
+    .sort((a, b) => compareMappingLabel(a.brownLabel, a.brownKey, b.brownLabel, b.brownKey));
 
+  const matched = filterWarrantyBrands(rows, { q: query?.q, status: query?.status });
+  const page = paginateElryanMappingRows(matched, query);
   const mapped = rows.filter((row) => row.warranty?.code).length;
+  const sharedWarrantyCounts = {};
+  for (const row of rows) {
+    const code = String(row.warranty?.code || "").trim();
+    if (!code) continue;
+    sharedWarrantyCounts[code] = (sharedWarrantyCounts[code] || 0) + 1;
+  }
   return {
     environment,
     fresh: true,
@@ -198,13 +208,19 @@ export async function listElryanWarrantyMappingPage() {
     activeEnvironment: connection.environment,
     autoAssigned: false,
     nameMatchApplied: false,
-    brands: rows,
+    brands: page.rows,
+    page: page.page,
+    limit: page.limit,
+    total: page.total,
+    pages: page.pages,
+    hasMore: page.hasMore,
     counts: {
       brands: rows.length,
       mapped,
       unmapped: rows.length - mapped,
       warranties: warranties.items.length,
     },
+    sharedWarrantyCounts,
     warranties,
     writes: {
       ...getElryanWritesGatePublic(),

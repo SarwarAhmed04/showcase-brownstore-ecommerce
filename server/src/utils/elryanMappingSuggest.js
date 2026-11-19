@@ -76,9 +76,7 @@ export function scoreElryanCategoryCandidate(collection, category, productEviden
   const missing = [];
   let score = 0;
 
-  const collectionNames = localizedStrings(collection?.brownCollectionName || collection?.name);
-  const categoryNames = localizedStrings(collection?.brownCategoryName || collection?.categoryName);
-  const subNames = localizedStrings(collection?.brownSubCategoryName || collection?.subCategoryName);
+  const context = collectionScoreContext(collection);
   const elryanName = String(category?.name || "");
   const hierarchy = String(category?.hierarchy || "");
   const hierarchyNorm = normalizeElryanText(hierarchy);
@@ -88,44 +86,37 @@ export function scoreElryanCategoryCandidate(collection, category, productEviden
   const leafFlag = isLeafCategory(category);
 
   let exactCollection = false;
-  for (const name of collectionNames) {
-    const n = normalizeElryanText(name);
-    if (!n) continue;
-    if (n === elryanNorm || n === leafNorm) {
+  for (const entry of context.collectionNorms) {
+    if (!entry.norm) continue;
+    if (entry.norm === elryanNorm || entry.norm === leafNorm) {
       exactCollection = true;
       score += 48;
-      reasons.push(`Exact normalized collection name match: "${name}" ↔ "${leaf || elryanName}"`);
+      reasons.push(`Exact normalized collection name match: "${entry.name}" ↔ "${leaf || elryanName}"`);
       break;
     }
   }
 
   let subInHierarchy = false;
-  for (const name of subNames) {
-    const n = normalizeElryanText(name);
-    if (n && hierarchyNorm.includes(n)) {
+  for (const entry of context.subNorms) {
+    if (entry.norm && hierarchyNorm.includes(entry.norm)) {
       subInHierarchy = true;
       score += 18;
-      reasons.push(`Subcategory appears in Elryan hierarchy: "${name}"`);
+      reasons.push(`Subcategory appears in Elryan hierarchy: "${entry.name}"`);
       break;
     }
   }
 
   let catInHierarchy = false;
-  for (const name of categoryNames) {
-    const n = normalizeElryanText(name);
-    if (n && hierarchyNorm.includes(n)) {
+  for (const entry of context.categoryNorms) {
+    if (entry.norm && hierarchyNorm.includes(entry.norm)) {
       catInHierarchy = true;
       score += 12;
-      reasons.push(`Category appears in Elryan hierarchy: "${name}"`);
+      reasons.push(`Category appears in Elryan hierarchy: "${entry.name}"`);
       break;
     }
   }
 
-  const pathTokens = [
-    ...tokenizeElryanText(collectionNames.join(" ")),
-    ...tokenizeElryanText(subNames.join(" ")),
-    ...tokenizeElryanText(categoryNames.join(" ")),
-  ];
+  const pathTokens = context.pathTokens;
   const hierTokens = tokenizeElryanText(hierarchy);
   const nameTokens = tokenizeElryanText(elryanName);
   const jacHier = jaccard(pathTokens, hierTokens);
@@ -141,10 +132,8 @@ export function scoreElryanCategoryCandidate(collection, category, productEviden
 
   // Product evidence (supporting only)
   const evidenceHits = [];
-  for (const product of productEvidence.slice(0, 8)) {
-    const blob = normalizeElryanText(
-      `${product?.name?.en || ""} ${product?.name?.ar || ""} ${product?.name?.ku || ""} ${product?.description?.en || ""}`
-    );
+  for (const entry of evidenceBlobs(productEvidence)) {
+    const { product, blob } = entry;
     if (!blob) continue;
     const leafTokens = tokenizeElryanText(leaf);
     const hits = leafTokens.filter((t) => t.length > 3 && blob.includes(t));
@@ -174,7 +163,7 @@ export function scoreElryanCategoryCandidate(collection, category, productEviden
 
   // Divergent leaf under a shared mid-level (e.g. Acne Patches vs Blackhead & Acne Removers)
   const leafTokens = tokenizeElryanText(leaf);
-  const collectionTokens = tokenizeElryanText(collectionNames.join(" "));
+  const collectionTokens = context.collectionTokens;
   const leafJac = jaccard(collectionTokens, leafTokens);
   const divergentLeaf =
     !exactCollection &&
@@ -239,6 +228,101 @@ export function scoreElryanCategoryCandidate(collection, category, productEviden
 }
 
 const MAX_FULL_SCORES_PER_COLLECTION = 250;
+const scoreContextCache = new WeakMap();
+const evidenceBlobCache = new WeakMap();
+
+function collectionScoreContext(collection) {
+  const cached = scoreContextCache.get(collection);
+  if (cached) return cached;
+  const collectionNames = localizedStrings(collection?.brownCollectionName || collection?.name);
+  const categoryNames = localizedStrings(collection?.brownCategoryName || collection?.categoryName);
+  const subNames = localizedStrings(collection?.brownSubCategoryName || collection?.subCategoryName);
+  const context = {
+    collectionNames,
+    categoryNames,
+    subNames,
+    collectionNorms: collectionNames.map((name) => ({ name, norm: normalizeElryanText(name) })),
+    subNorms: subNames.map((name) => ({ name, norm: normalizeElryanText(name) })),
+    categoryNorms: categoryNames.map((name) => ({ name, norm: normalizeElryanText(name) })),
+    pathTokens: [
+      ...tokenizeElryanText(collectionNames.join(" ")),
+      ...tokenizeElryanText(subNames.join(" ")),
+      ...tokenizeElryanText(categoryNames.join(" ")),
+    ],
+    collectionTokens: tokenizeElryanText(collectionNames.join(" ")),
+  };
+  if (collection && typeof collection === "object") scoreContextCache.set(collection, context);
+  return context;
+}
+
+function evidenceBlobs(productEvidence) {
+  const list = Array.isArray(productEvidence) ? productEvidence : [];
+  if (!list.length) return [];
+  const cached = evidenceBlobCache.get(list);
+  if (cached) return cached;
+  const blobs = list.slice(0, 8).map((product) => ({
+    product,
+    blob: normalizeElryanText(
+      `${product?.name?.en || ""} ${product?.name?.ar || ""} ${product?.name?.ku || ""} ${product?.description?.en || ""}`
+    ),
+  }));
+  evidenceBlobCache.set(list, blobs);
+  return blobs;
+}
+
+/** Exact trigram index for hay.includes(token) when token length is at least 3. */
+export function attachElryanTrigramIndex(prepared) {
+  const rows = Array.isArray(prepared) ? prepared : [];
+  const hays = rows.map((row) => `${row.nameNorm} ${row.hierarchyNorm}`);
+  const lists = new Map();
+  hays.forEach((hay, index) => {
+    const seen = new Set();
+    for (let i = 0; i <= hay.length - 3; i += 1) {
+      const gram = hay.slice(i, i + 3);
+      if (seen.has(gram)) continue;
+      seen.add(gram);
+      const list = lists.get(gram);
+      if (list) list.push(index);
+      else lists.set(gram, [index]);
+    }
+  });
+  rows.hays = hays;
+  rows.trigramLists = lists;
+  return rows;
+}
+
+function trigramOverlaps(pathTokens, prepared) {
+  const counts = new Int32Array(prepared.length);
+  for (const token of pathTokens) {
+    if (token.length < 3) continue;
+    for (const id of rowIdsContainingToken(token, prepared)) counts[id] += 1;
+  }
+  const relevant = [];
+  for (let index = 0; index < counts.length; index += 1) {
+    if (counts[index] > 0) relevant.push({ row: prepared[index], overlap: counts[index] });
+  }
+  return relevant;
+}
+
+function rowIdsContainingToken(token, prepared) {
+  const lists = prepared.trigramLists;
+  const grams = [];
+  for (let i = 0; i <= token.length - 3; i += 1) grams.push(token.slice(i, i + 3));
+  grams.sort((left, right) => (lists.get(left)?.length || 0) - (lists.get(right)?.length || 0));
+  let ids = lists.get(grams[0]);
+  if (!ids?.length) return [];
+  for (let i = 1; i < grams.length; i += 1) {
+    const next = lists.get(grams[i]);
+    if (!next?.length) return [];
+    const set = new Set(next);
+    ids = ids.filter((id) => set.has(id));
+    if (!ids.length) return [];
+  }
+  const hays = prepared.hays;
+  const matched = [];
+  for (const id of ids) if (hays[id].includes(token)) matched.push(id);
+  return matched;
+}
 
 /** Precompute norms/tokens once per request (avoids re-normalizing 1k+ rows per collection). */
 export function prepareElryanCatalogForMatching(catalog) {
@@ -289,9 +373,11 @@ export function suggestElryanCategoriesForCollection(collection, catalog, produc
 
   let pool = prepared;
   if (pathTokens.length) {
-    const relevant = prepared
-      .map((row) => ({ row, overlap: cheapOverlapCount(pathTokens, row) }))
-      .filter((item) => item.overlap > 0);
+    const relevant = prepared.trigramLists
+      ? trigramOverlaps(pathTokens, prepared)
+      : prepared
+          .map((row) => ({ row, overlap: cheapOverlapCount(pathTokens, row) }))
+          .filter((item) => item.overlap > 0);
     if (relevant.length) {
       relevant.sort((a, b) => b.overlap - a.overlap);
       pool = relevant.slice(0, MAX_FULL_SCORES_PER_COLLECTION).map((item) => item.row);

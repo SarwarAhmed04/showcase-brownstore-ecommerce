@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../../api";
+import ElryanMappingPager from "./ElryanMappingPager";
 
 const CONTROL =
   "w-full rounded-full border border-brown/10 bg-cream px-4 py-2.5 text-sm font-semibold text-brown outline-none ring-tan/40 focus:ring-2";
@@ -39,11 +40,18 @@ function Stat({ label: statLabel, value }) {
 
 export default function ElryanDimensionsMapping({ t, lang = "en" }) {
   const [catalog, setCatalog] = useState([]);
+  const [facets, setFacets] = useState({ categories: [], subcategories: [] });
   const [activeEnvironment, setActiveEnvironment] = useState("staging");
   const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [subCategoryId, setSubCategoryId] = useState("");
   const [collectionId, setCollectionId] = useState("");
+  const [selectedRow, setSelectedRow] = useState(null);
+  const [tablePage, setTablePage] = useState(1);
+  const [tableLimit, setTableLimit] = useState(25);
+  const [tableTotal, setTableTotal] = useState(0);
+  const [tablePages, setTablePages] = useState(1);
   const [detail, setDetail] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [exceptions, setExceptions] = useState([]);
@@ -54,12 +62,54 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
   const [busy, setBusy] = useState(false);
   const [drafts, setDrafts] = useState({});
   const [collectionDrafts, setCollectionDrafts] = useState({});
+  const [rowFeedback, setRowFeedback] = useState({});
+  const draftsRef = useRef(collectionDrafts);
+  draftsRef.current = collectionDrafts;
+  const tableRef = useRef({ page: 1, limit: 25, q: "", categoryId: "", subCategoryId: "" });
+  const queryKey = useRef(null);
+  const environmentRef = useRef("");
+  const catalogTicket = useRef(0);
+  const collectionIdRef = useRef("");
+  tableRef.current = {
+    page: tablePage,
+    limit: tableLimit,
+    q: appliedSearch,
+    categoryId,
+    subCategoryId,
+  };
+  collectionIdRef.current = collectionId;
 
   async function loadCatalog() {
-    const data = await api.elryanCollectionDimensions();
+    const query = tableRef.current;
+    const ticket = ++catalogTicket.current;
+    const data = await api.elryanCollectionDimensions({
+      q: query.q,
+      categoryId: query.categoryId,
+      subCategoryId: query.subCategoryId,
+      page: query.page,
+      limit: query.limit,
+    });
+    if (ticket !== catalogTicket.current) return data;
+    const nextEnvironment = data.environment || data.activeEnvironment || "staging";
+    if (environmentRef.current && environmentRef.current !== nextEnvironment && query.page !== 1) {
+      environmentRef.current = nextEnvironment;
+      setActiveEnvironment(nextEnvironment);
+      setTablePage(1);
+      return data;
+    }
+    environmentRef.current = nextEnvironment;
     const rows = data.collections || [];
     setCatalog(rows);
-    setActiveEnvironment(data.environment || data.activeEnvironment || "staging");
+    setFacets(data.facets || { categories: [], subcategories: [] });
+    setTableTotal(Number(data.total) || 0);
+    setTablePages(Number(data.pages) || 1);
+    if (Number(data.page) && Number(data.page) !== query.page) setTablePage(Number(data.page));
+    setActiveEnvironment(nextEnvironment);
+    setSelectedRow((current) => {
+      const id = collectionIdRef.current;
+      if (!id) return current;
+      return rows.find((row) => row.brownCollectionId === id) || current;
+    });
     setCollectionDrafts((current) => {
       const next = { ...current };
       for (const row of rows) {
@@ -75,10 +125,30 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
     return data;
   }
 
+  function dimensionKey(draft) {
+    return [draft?.width ?? "", draft?.height ?? "", draft?.depth ?? ""].join("|");
+  }
+
+  function changeCollectionDraft(id, draft, patch) {
+    setCollectionDrafts((current) => ({
+      ...current,
+      [id]: { ...draft, ...patch },
+    }));
+    setRowFeedback((current) => {
+      const row = current[id];
+      if (!row || row.status === "saving") return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }
+
   async function saveCollection(id, draft) {
+    const savedKey = dimensionKey(draft);
     setBusy(true);
     setError("");
     setMessage("");
+    setRowFeedback((current) => ({ ...current, [id]: { status: "saving" } }));
     try {
       await api.saveElryanCollectionDimension({
         environment: activeEnvironment,
@@ -93,11 +163,18 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
         confirm: true,
         confirmAutoApply: true,
       });
+      const unchanged = dimensionKey(draftsRef.current[id]) === savedKey;
+      setRowFeedback((current) => {
+        const next = { ...current };
+        if (unchanged) next[id] = { status: "confirmed" };
+        else if (next[id]?.status === "saving") delete next[id];
+        return next;
+      });
       setMessage(t.elryanDimSaved);
       await loadCatalog();
       if (collectionId === id) await loadDetail(id, 1, reason);
     } catch (err) {
-      setError(err.message);
+      setRowFeedback((current) => ({ ...current, [id]: { status: "error", message: err.message } }));
     } finally {
       setBusy(false);
     }
@@ -133,40 +210,38 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
   }
 
   useEffect(() => {
+    const handle = setTimeout(() => setAppliedSearch(search.trim()), 250);
+    return () => clearTimeout(handle);
+  }, [search]);
+
+  useEffect(() => {
+    const key = `${appliedSearch}\0${categoryId}\0${subCategoryId}\0${tableLimit}`;
+    const reset = queryKey.current !== key;
+    queryKey.current = key;
+    const nextPage = reset ? 1 : tablePage;
+    if (reset && tablePage !== 1) {
+      setTablePage(1);
+      return;
+    }
+    tableRef.current = {
+      page: nextPage,
+      limit: tableLimit,
+      q: appliedSearch,
+      categoryId,
+      subCategoryId,
+    };
     loadCatalog().catch((err) => setError(err.message));
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appliedSearch, categoryId, subCategoryId, tablePage, tableLimit]);
 
-  const categories = useMemo(() => {
-    const map = new Map();
-    for (const row of catalog) {
-      if (!row.brownCategoryId || map.has(row.brownCategoryId)) continue;
-      map.set(row.brownCategoryId, row.brownCategoryName);
-    }
-    return [...map.entries()];
-  }, [catalog]);
+  const categories = facets.categories || [];
+  const subcategories = (facets.subcategories || []).filter((row) => !categoryId || row.categoryId === categoryId);
+  const collections = catalog;
 
-  const subcategories = useMemo(() => {
-    const map = new Map();
-    for (const row of catalog) {
-      if (categoryId && row.brownCategoryId !== categoryId) continue;
-      if (!row.brownSubCategoryId || map.has(row.brownSubCategoryId)) continue;
-      map.set(row.brownSubCategoryId, row.brownSubCategoryName);
-    }
-    return [...map.entries()];
-  }, [catalog, categoryId]);
-
-  const collections = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return catalog.filter((row) => {
-      if (categoryId && row.brownCategoryId !== categoryId) return false;
-      if (subCategoryId && row.brownSubCategoryId !== subCategoryId) return false;
-      if (!query) return true;
-      const haystack = `${taxonomyPath(row, lang)} ${row.brownCollectionId}`.toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [catalog, categoryId, subCategoryId, search, lang]);
-
-  const selected = collections.find((row) => row.brownCollectionId === collectionId) || catalog.find((row) => row.brownCollectionId === collectionId) || null;
+  const selected = collections.find((row) => row.brownCollectionId === collectionId) || (selectedRow?.brownCollectionId === collectionId ? selectedRow : null);
+  const collectionOptions = selected && !collections.some((row) => row.brownCollectionId === selected.brownCollectionId)
+    ? [selected, ...collections]
+    : collections;
   const counts = detail?.counts || {};
   const auto = form.applyMode === "AUTO_APPLY";
   const canSave =
@@ -180,6 +255,7 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
 
   async function chooseCollection(id) {
     setCollectionId(id);
+    setSelectedRow(collections.find((row) => row.brownCollectionId === id) || null);
     setPage(1);
     setError("");
     setMessage("");
@@ -326,8 +402,8 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
             }}
           >
             <option value="">{t.elryanDimAll}</option>
-            {categories.map(([id, name]) => (
-              <option key={id} value={id}>{label(name, lang)}</option>
+            {categories.map((row) => (
+              <option key={row.id} value={row.id}>{label(row.name, lang)}</option>
             ))}
           </select>
         </label>
@@ -335,8 +411,8 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
           {t.elryanDimSubcategory}
           <select className={`${CONTROL} mt-2`} value={subCategoryId} onChange={(event) => setSubCategoryId(event.target.value)}>
             <option value="">{t.elryanDimAll}</option>
-            {subcategories.map(([id, name]) => (
-              <option key={id} value={id}>{label(name, lang)}</option>
+            {subcategories.map((row) => (
+              <option key={row.id} value={row.id}>{label(row.name, lang)}</option>
             ))}
           </select>
         </label>
@@ -344,7 +420,7 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
           {t.elryanDimCollection}
           <select className={`${CONTROL} mt-2`} value={collectionId} onChange={(event) => chooseCollection(event.target.value)}>
             <option value="">{t.elryanDimNoCollection}</option>
-            {collections.map((row) => (
+            {collectionOptions.map((row) => (
               <option key={row.brownCollectionId} value={row.brownCollectionId}>
                 {taxonomyPath(row, lang)} · {row.brownCollectionId}
               </option>
@@ -360,8 +436,14 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
             height: row.rule?.height ?? "",
             depth: row.rule?.depth ?? "",
           };
+          const feedback = rowFeedback[row.brownCollectionId] || { status: "" };
           return (
-            <article key={row.brownCollectionId} className="rounded-3xl bg-white p-4 ring-1 ring-brown/10">
+            <article
+              key={row.brownCollectionId}
+              className="rounded-3xl bg-white p-4 ring-1 ring-brown/10"
+              data-brown-collection-id={row.brownCollectionId}
+              data-dimension-status={feedback.status || "idle"}
+            >
               <p className="text-sm font-semibold text-brown">{taxonomyPath(row, lang)}</p>
               <p className="mt-1 text-xs text-brown/50">
                 {row.brownCollectionId} · {t.elryanDimProductCount}: {row.productCount}
@@ -373,12 +455,7 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
                     className={`${CONTROL} mt-2`}
                     inputMode="decimal"
                     value={draft.width}
-                    onChange={(event) =>
-                      setCollectionDrafts((current) => ({
-                        ...current,
-                        [row.brownCollectionId]: { ...draft, width: event.target.value },
-                      }))
-                    }
+                    onChange={(event) => changeCollectionDraft(row.brownCollectionId, draft, { width: event.target.value })}
                   />
                 </label>
                 <label className="text-sm font-semibold text-brown">
@@ -387,12 +464,7 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
                     className={`${CONTROL} mt-2`}
                     inputMode="decimal"
                     value={draft.height}
-                    onChange={(event) =>
-                      setCollectionDrafts((current) => ({
-                        ...current,
-                        [row.brownCollectionId]: { ...draft, height: event.target.value },
-                      }))
-                    }
+                    onChange={(event) => changeCollectionDraft(row.brownCollectionId, draft, { height: event.target.value })}
                   />
                 </label>
                 <label className="text-sm font-semibold text-brown">
@@ -401,27 +473,45 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
                     className={`${CONTROL} mt-2`}
                     inputMode="decimal"
                     value={draft.depth}
-                    onChange={(event) =>
-                      setCollectionDrafts((current) => ({
-                        ...current,
-                        [row.brownCollectionId]: { ...draft, depth: event.target.value },
-                      }))
-                    }
+                    onChange={(event) => changeCollectionDraft(row.brownCollectionId, draft, { depth: event.target.value })}
                   />
                 </label>
-                <button
-                  type="button"
-                  className={BUTTON}
-                  disabled={busy}
-                  onClick={() => saveCollection(row.brownCollectionId, draft)}
-                >
-                  {t.elryanDimSave || "Save"}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className={BUTTON}
+                    disabled={busy}
+                    onClick={() => saveCollection(row.brownCollectionId, draft)}
+                  >
+                    {t.elryanDimSave || "Save"}
+                  </button>
+                  {feedback.status === "saving" ? (
+                    <span className="text-sm font-semibold text-brown/70">{t.elryanDimSaving}</span>
+                  ) : null}
+                  {feedback.status === "confirmed" ? (
+                    <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
+                      {t.elryanValueConfirmed}
+                    </span>
+                  ) : null}
+                </div>
               </div>
+              {feedback.status === "error" ? (
+                <p className="mt-3 text-sm font-semibold text-red-700" role="alert">{feedback.message}</p>
+              ) : null}
             </article>
           );
         })}
       </div>
+
+      <ElryanMappingPager
+        t={t}
+        page={tablePage}
+        pages={tablePages}
+        total={tableTotal}
+        limit={tableLimit}
+        onPage={setTablePage}
+        onLimit={setTableLimit}
+      />
 
       {selected ? (
         <div className="rounded-3xl bg-cream/70 px-4 py-4 text-sm text-brown">

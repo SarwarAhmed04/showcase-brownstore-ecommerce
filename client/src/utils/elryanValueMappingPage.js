@@ -55,7 +55,7 @@ export function filterElryanValueRows(rows, query = "") {
  * A row whose selection matches the server copy is replaced by that copy.
  */
 export function mergeElryanValueDrafts(current, rows) {
-  const next = {};
+  const next = { ...(current || {}) };
   for (const row of Array.isArray(rows) ? rows : []) {
     const key = String(row?.brownKey || "");
     if (!key) continue;

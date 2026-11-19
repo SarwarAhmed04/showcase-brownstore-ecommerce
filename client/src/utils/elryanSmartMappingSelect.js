@@ -92,6 +92,35 @@ export function elryanManualSearchQuery({
   return params;
 }
 
+/**
+ * Selector query against the verified catalog for the active environment.
+ * An empty field browses roots, or one parent's children. A typed query
+ * searches the full catalog and does not stay inside the open branch.
+ */
+export function elryanCategorySelectorQuery({
+  q = "",
+  offset = 0,
+  parentId = "",
+  limit = ELRYAN_MANUAL_PAGE_SIZE,
+} = {}) {
+  const params = {
+    limit: Math.max(1, Number(limit) || ELRYAN_MANUAL_PAGE_SIZE),
+    offset: Math.max(0, Number(offset) || 0),
+  };
+  const needle = String(q || "").trim();
+  if (needle) {
+    params.q = needle;
+    return params;
+  }
+  const parent = String(parentId ?? "").trim();
+  if (parent && parent !== "0") {
+    params.parentId = parent;
+    return params;
+  }
+  params.roots = "1";
+  return params;
+}
+
 export function nextManualSearchOffset({ offset = 0, limit = ELRYAN_MANUAL_PAGE_SIZE, totalMatching = 0, direction = "next" } = {}) {
   const start = Math.max(0, Number(offset) || 0);
   const size = Math.max(1, Number(limit) || ELRYAN_MANUAL_PAGE_SIZE);

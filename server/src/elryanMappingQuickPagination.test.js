@@ -416,15 +416,41 @@ describe("Elryan mapping preview pagination", { concurrency: 1 }, () => {
     );
     assert.equal(first.status, 200);
     assert.equal(first.json.rows.length, 3);
-    assert.equal(first.json.scanned, 3);
-    assert.equal(first.json.scanBudget, elryanMappingScanBudget(3, true));
+    assert.equal(first.json.totalMatching, 6);
+    assert.equal(first.json.totalMatchingExact, true);
+    assert.equal(first.json.confidenceFiltered, true);
+    assert.equal(first.json.confidenceMatchCountExact, true);
+    assert.equal(first.json.counts.filtered, 6);
+    assert.equal(first.json.progress.exact, true);
+    assert.equal(first.json.progress.total, 6);
+    assert.equal(first.json.offset, 0);
     assert.equal(first.json.nextOffset, 3);
-    assert.notEqual(first.json.nextOffset, first.json.scanBudget);
-    assert.equal(first.json.totalMatching, null);
-    assert.equal(first.json.totalMatchingExact, false);
-    assert.equal(first.json.confidenceMatchCountExact, false);
-    assert.equal(first.json.progress.exact, false);
-    assert.notEqual(first.json.pageMatchCount, first.json.counts.filtered);
+    assert.equal(first.json.hasMore, true);
+    assert.equal(first.json.rows.every((row) => row.overallConfidence === "HIGH"), true);
+
+    const second = await call(
+      "/api/admin/platforms/elryan/mapping-preview?confidence=HIGH&limit=3&offset=3"
+    );
+    assert.equal(second.status, 200);
+    assert.equal(second.json.rows.length, 3);
+    assert.equal(second.json.totalMatching, 6);
+    assert.equal(second.json.offset, 3);
+    assert.equal(second.json.hasMore, false);
+    const firstIds = first.json.rows.map((row) => row.brownCollectionId);
+    const secondIds = second.json.rows.map((row) => row.brownCollectionId);
+    assert.equal(secondIds.some((id) => firstIds.includes(id)), false);
+
+    const pageSize = await call(
+      "/api/admin/platforms/elryan/mapping-preview?confidence=HIGH&limit=25&offset=0"
+    );
+    assert.equal(pageSize.json.totalMatching, 6);
+    assert.equal(pageSize.json.rows.length, 6);
+    assert.equal(pageSize.json.hasMore, false);
+    const wider = await call(
+      "/api/admin/platforms/elryan/mapping-preview?confidence=HIGH&limit=50&offset=0"
+    );
+    assert.equal(wider.json.totalMatching, 6);
+    assert.equal(wider.json.rows.length, 6);
 
     const walked = await walkPreview({ confidence: "HIGH", limit: "3" });
     assert.deepEqual(
@@ -433,10 +459,12 @@ describe("Elryan mapping preview pagination", { concurrency: 1 }, () => {
     );
     assert.equal(walked.ids.filter((id) => id.startsWith("col-noise")).length, 0);
     assert.equal(walked.pages[0].nextOffset, 3);
+    assert.equal(walked.pages[0].totalMatchingExact, true);
     const cursors = walked.pages.map((page) => page.offset);
     assert.deepEqual(cursors, [...new Set(cursors)]);
     for (let i = 1; i < walked.pages.length; i += 1) {
       assert.equal(walked.pages[i].offset, walked.pages[i - 1].nextOffset);
+      assert.equal(walked.pages[i].totalMatching, 6);
     }
 
     const after = await PlatformTaxonomyConfig.countDocuments({ partner: "elryan" });

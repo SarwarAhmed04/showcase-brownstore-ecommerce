@@ -3,6 +3,7 @@ import { Product } from "../models/Product.js";
 import { PlatformTaxonomyConfig } from "../models/PlatformTaxonomyConfig.js";
 import { ElryanCategoryCatalogSnapshot } from "../models/ElryanCategoryCatalogSnapshot.js";
 import { discoverBrownCollections } from "../utils/brownTaxonomy.js";
+import { compareBrownCollection } from "../utils/elryanMappingTablePage.js";
 import {
   ELRYAN_MAPPING_CONFIDENCE,
   ELRYAN_MAPPING_PREVIEW,
@@ -13,6 +14,7 @@ import {
   normalizeElryanMappingEnvironment,
 } from "../utils/elryanTaxonomyMapping.js";
 import {
+  attachElryanTrigramIndex,
   prepareElryanCatalogForMatching,
   suggestElryanCategoriesForCollection,
 } from "../utils/elryanMappingSuggest.js";
@@ -250,6 +252,42 @@ export function finalizeElryanMappingPage({
   };
 }
 
+const confidenceMatchCache = new Map();
+const CONFIDENCE_MATCH_CACHE_MS = 5 * 60 * 1000;
+const CONFIDENCE_MATCH_TIMEOUT_MS = 90000;
+
+function confidenceMatchCacheKey({ environment, snapshot, q, status, confidence, filtered }) {
+  const first = filtered[0]?.brownCollectionId || "";
+  const last = filtered[filtered.length - 1]?.brownCollectionId || "";
+  return [
+    environment,
+    String(snapshot?._id || snapshot?.finishedAt || snapshot?.updatedAt || ""),
+    String(q || "").trim().toLowerCase(),
+    String(status || ""),
+    String(confidence || "").toUpperCase(),
+    filtered.length,
+    first,
+    last,
+  ].join("|");
+}
+
+function readConfidenceMatchCache(key) {
+  const hit = confidenceMatchCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > CONFIDENCE_MATCH_CACHE_MS) {
+    confidenceMatchCache.delete(key);
+    return null;
+  }
+  return hit.matched;
+}
+
+function storeConfidenceMatchCache(key, matched) {
+  confidenceMatchCache.set(key, { at: Date.now(), matched });
+  if (confidenceMatchCache.size <= 12) return;
+  const oldest = [...confidenceMatchCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+  if (oldest) confidenceMatchCache.delete(oldest[0]);
+}
+
 function assertWithinDeadline(startedAt, timeoutMs) {
   if (Date.now() - startedAt <= timeoutMs) return;
   throw new ElryanClientError(
@@ -263,8 +301,10 @@ function assertWithinDeadline(startedAt, timeoutMs) {
  *
  * Performance contract:
  * - Cheap filters (q / mapped status) first
- * - Paginate before product sampling + scoring (limit applies to work, not only the response)
- * - One batched product sample query for the page
+ * - Without a confidence band, paginate before product sampling + scoring
+ * - With a confidence band, score the full cheap-filtered set in stable order,
+ *   then page that exact match list so the total and page numbers are exact
+ * - One batched product sample query
  * - Soft timeout with a clear error
  */
 export async function buildElryanMappingPreview({
@@ -303,7 +343,7 @@ export async function buildElryanMappingPreview({
       }
     );
   }
-  const preparedCatalog = prepareElryanCatalogForMatching(catalog);
+  const preparedCatalog = attachElryanTrigramIndex(prepareElryanCatalogForMatching(catalog));
 
   assertWithinDeadline(startedAt, timeoutMs);
 
@@ -332,72 +372,104 @@ export async function buildElryanMappingPreview({
       return !existing.configured;
     });
   }
+  filtered = [...filtered].sort(compareBrownCollection);
 
   const mappedCount = collections.filter((c) =>
     elryanMappingIsComplete(byCollection.get(String(c.brownCollectionId)), mappingEnvironment)
   ).length;
 
   /**
-   * Paginate before heavy work. A confidence band may score a bounded window
-   * larger than the page, but the cursor advances only through collections
-   * actually scored. Unscored tail rows stay available on the next request.
+   * Without confidence, score only the requested page.
+   * With confidence, score every cheap-filtered collection first. The page is then
+   * a stable slice of that exact match list, so numbered pages do not skip or repeat.
    */
   const confidenceFiltered = Boolean(String(confidence || "").trim());
+  const confidenceBudget = confidenceFiltered ? CONFIDENCE_MATCH_TIMEOUT_MS : timeoutMs;
   const maxScore = elryanMappingScanBudget(take, confidenceFiltered);
   const scanStart = Math.min(start, filtered.length);
-  const planned = filtered.slice(scanStart, Math.min(filtered.length, scanStart + maxScore));
+  const planned = confidenceFiltered
+    ? filtered
+    : filtered.slice(scanStart, Math.min(filtered.length, scanStart + maxScore));
+  const cacheKey = confidenceFiltered
+    ? confidenceMatchCacheKey({
+        environment: mappingEnvironment,
+        snapshot,
+        q,
+        status,
+        confidence,
+        filtered,
+      })
+    : "";
+  const cachedMatches = cacheKey ? readConfidenceMatchCache(cacheKey) : null;
 
-  assertWithinDeadline(startedAt, timeoutMs);
+  assertWithinDeadline(startedAt, confidenceBudget);
 
-  const productSamples = await sampleProductsForCollections(
-    planned.map((row) => row.brownCollectionId),
-    ELRYAN_MAPPING_PREVIEW.PRODUCT_SAMPLES_PER_COLLECTION
-  );
-
-  assertWithinDeadline(startedAt, timeoutMs);
-
-  const collected = collectElryanMappingPage(planned, {
-    take,
-    visit(collection) {
-      assertWithinDeadline(startedAt, timeoutMs);
-      const existing = mappingStatus(
-        byCollection.get(String(collection.brownCollectionId)),
-        mappingEnvironment
+  const productSamples = cachedMatches
+    ? new Map()
+    : await sampleProductsForCollections(
+        planned.map((row) => row.brownCollectionId),
+        ELRYAN_MAPPING_PREVIEW.PRODUCT_SAMPLES_PER_COLLECTION
       );
-      const products = productSamples.get(String(collection.brownCollectionId)) || [];
-      const suggestion = suggestElryanCategoriesForCollection(
-        collection,
-        preparedCatalog,
-        products,
-        5
-      );
-      if (!confidenceMatches(suggestion, confidence)) return null;
-      return {
-        brownCollectionId: collection.brownCollectionId,
-        brownCollectionName: collection.brownCollectionName,
-        brownCategoryName: collection.brownCategoryName,
-        brownSubCategoryName: collection.brownSubCategoryName,
-        taxonomyPath: localizedPath(collection),
-        productCount: collection.productCount,
-        ambiguousHierarchy: Boolean(collection.ambiguousHierarchy),
-        existingMapping: existing,
-        overallConfidence: suggestion.overallConfidence,
-        candidates: suggestion.candidates,
-        previewOnly: true,
-        autoSave: false,
-        note: "Suggestions never auto-save. Confirm and Save Mapping explicitly to persist locally.",
-      };
-    },
-  });
+
+  assertWithinDeadline(startedAt, confidenceBudget);
+
+  const visit = (collection) => {
+    assertWithinDeadline(startedAt, confidenceBudget);
+    const existing = mappingStatus(
+      byCollection.get(String(collection.brownCollectionId)),
+      mappingEnvironment
+    );
+    const products = productSamples.get(String(collection.brownCollectionId)) || [];
+    const suggestion = suggestElryanCategoriesForCollection(
+      collection,
+      preparedCatalog,
+      products,
+      5
+    );
+    if (!confidenceMatches(suggestion, confidence)) return null;
+    return {
+      brownCollectionId: collection.brownCollectionId,
+      brownCollectionName: collection.brownCollectionName,
+      brownCategoryName: collection.brownCategoryName,
+      brownSubCategoryName: collection.brownSubCategoryName,
+      taxonomyPath: localizedPath(collection),
+      productCount: collection.productCount,
+      ambiguousHierarchy: Boolean(collection.ambiguousHierarchy),
+      existingMapping: existing,
+      overallConfidence: suggestion.overallConfidence,
+      candidates: suggestion.candidates,
+      previewOnly: true,
+      autoSave: false,
+      note: "Suggestions never auto-save. Confirm and Save Mapping explicitly to persist locally.",
+    };
+  };
+
+  const matched = !confidenceFiltered
+    ? null
+    : cachedMatches || planned.map(visit).filter(Boolean);
+  if (confidenceFiltered && !cachedMatches) storeConfidenceMatchCache(cacheKey, matched);
+  const collected = confidenceFiltered
+    ? {
+        rows: matched.slice(start, start + take),
+        consumed: Math.min(take, Math.max(0, matched.length - start)),
+      }
+    : collectElryanMappingPage(planned, { take, visit });
 
   const page = finalizeElryanMappingPage({
-    filteredLength: filtered.length,
+    filteredLength: confidenceFiltered ? matched.length : filtered.length,
     offset: start,
-    plannedCount: planned.length,
+    plannedCount: confidenceFiltered ? collected.rows.length : planned.length,
     consumed: collected.consumed,
     pageMatchCount: collected.rows.length,
-    confidenceFiltered,
+    confidenceFiltered: false,
   });
+  if (confidenceFiltered) {
+    page.confidenceFiltered = true;
+    page.confidenceMatchCountExact = true;
+    page.totalMatching = matched.length;
+    page.totalMatchingExact = true;
+    page.scanBudget = Math.max(page.scanBudget, filtered.length);
+  }
 
   return {
     environment: mappingEnvironment,
@@ -410,8 +482,8 @@ export async function buildElryanMappingPreview({
     },
     counts: {
       collections: collections.length,
-      filtered: filtered.length,
-      scored: page.scanned,
+      filtered: confidenceFiltered ? matched.length : filtered.length,
+      scored: confidenceFiltered ? filtered.length : page.scanned,
       previewed: collected.rows.length,
       mapped: mappedCount,
     },

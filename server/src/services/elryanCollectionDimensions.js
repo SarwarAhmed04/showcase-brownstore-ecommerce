@@ -6,6 +6,7 @@ import { ElryanStagingDimensionCheck } from "../models/ElryanStagingDimensionChe
 import { ElryanSyncJob } from "../models/ElryanSyncJob.js";
 import { ElryanSyncOnePreview } from "../models/ElryanSyncOnePreview.js";
 import { discoverBrownCollections } from "../utils/brownTaxonomy.js";
+import { compareBrownCollection, paginateElryanMappingRows } from "../utils/elryanMappingTablePage.js";
 import {
   brownCollectionIdentity,
   elryanCollectionRuleBucket,
@@ -282,7 +283,39 @@ async function collectionSample(collectionId) {
   };
 }
 
-export async function listElryanCollectionDimensionCatalog() {
+function dimensionSearchText(row) {
+  const names = [row.brownCategoryName, row.brownSubCategoryName, row.brownCollectionName];
+  const labels = names
+    .map((name) => {
+      if (!name) return "";
+      if (typeof name === "string") return name;
+      return [name.en, name.ku, name.ar].filter(Boolean).join(" ");
+    })
+    .join(" ");
+  return `${labels} ${row.brownCollectionId || ""}`.toLowerCase();
+}
+
+function dimensionFacets(collections) {
+  const categories = new Map();
+  const subcategories = new Map();
+  for (const row of collections) {
+    if (row.brownCategoryId && !categories.has(row.brownCategoryId)) {
+      categories.set(row.brownCategoryId, row.brownCategoryName || {});
+    }
+    if (row.brownSubCategoryId && !subcategories.has(row.brownSubCategoryId)) {
+      subcategories.set(row.brownSubCategoryId, {
+        name: row.brownSubCategoryName || {},
+        categoryId: row.brownCategoryId || "",
+      });
+    }
+  }
+  return {
+    categories: [...categories.entries()].map(([id, name]) => ({ id, name })),
+    subcategories: [...subcategories.entries()].map(([id, value]) => ({ id, ...value })),
+  };
+}
+
+export async function listElryanCollectionDimensionCatalog(query = {}) {
   const active = await activeDimensionEnvironment();
   const [discovered, rules, connection] = await Promise.all([
     discoverBrownCollections(),
@@ -290,16 +323,35 @@ export async function listElryanCollectionDimensionCatalog() {
     getElryanConnectionPublic(),
   ]);
   const byId = new Map(rules.map((rule) => [String(rule.brownCollectionId), publicCollectionDimensionRule(rule)]));
+  const all = discovered.collections
+    .map((row) => ({
+      ...row,
+      rule: byId.get(row.brownCollectionId) || null,
+    }))
+    .sort(compareBrownCollection);
+  const categoryId = String(query?.categoryId || "").trim();
+  const subCategoryId = String(query?.subCategoryId || "").trim();
+  const needle = String(query?.q || "").trim().toLowerCase();
+  const matched = all.filter((row) => {
+    if (categoryId && row.brownCategoryId !== categoryId) return false;
+    if (subCategoryId && row.brownSubCategoryId !== subCategoryId) return false;
+    if (!needle) return true;
+    return dimensionSearchText(row).includes(needle);
+  });
+  const page = paginateElryanMappingRows(matched, query);
   return {
     environment: active,
     activeEnvironment: connection.environment === "production" ? "production" : "staging",
     stagingOnly: active === "staging",
     sentToElryan: 0,
     diagnostics: discovered.diagnostics,
-    collections: discovered.collections.map((row) => ({
-      ...row,
-      rule: byId.get(row.brownCollectionId) || null,
-    })),
+    facets: dimensionFacets(all),
+    collections: page.rows,
+    page: page.page,
+    limit: page.limit,
+    total: page.total,
+    pages: page.pages,
+    hasMore: page.hasMore,
   };
 }
 

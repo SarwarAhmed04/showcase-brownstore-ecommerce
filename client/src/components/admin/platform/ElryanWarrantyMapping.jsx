@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../api";
+import ElryanMappingPager from "./ElryanMappingPager";
 import {
-  filterWarrantyBrands,
   officialWarrantiesForSearch,
   sharedWarrantyCounts,
   warrantyReview,
@@ -25,8 +25,12 @@ function supplied(value, emptyLabel) {
 export default function ElryanWarrantyMapping({ t }) {
   const [page, setPage] = useState(null);
   const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
   const [status, setStatus] = useState("all");
+  const [tablePage, setTablePage] = useState(1);
+  const [tableLimit, setTableLimit] = useState(25);
   const [brandId, setBrandId] = useState("");
+  const [selectedBrand, setSelectedBrand] = useState(null);
   const [warrantyCode, setWarrantyCode] = useState("");
   const [confirmCoverage, setConfirmCoverage] = useState(false);
   const [confirmOverwrite, setConfirmOverwrite] = useState(false);
@@ -34,30 +38,70 @@ export default function ElryanWarrantyMapping({ t }) {
   const [message, setMessage] = useState("");
   const [readBack, setReadBack] = useState(null);
   const [busy, setBusy] = useState(false);
+  const queryKey = useRef(null);
+  const environmentRef = useRef("");
+  const requestRef = useRef(0);
 
-  async function load() {
-    const data = await api.elryanWarrantyMapping();
+  async function load({ q = appliedSearch, status: nextStatus = status, page: nextPage = tablePage, limit = tableLimit, ticket = requestRef.current } = {}) {
+    const data = await api.elryanWarrantyMapping({
+      q,
+      status: nextStatus === "all" ? "" : nextStatus,
+      page: nextPage,
+      limit,
+    });
+    if (ticket !== requestRef.current) return data;
+    const nextEnvironment = data.environment === "production" ? "production" : "staging";
+    if (environmentRef.current && environmentRef.current !== nextEnvironment && nextPage !== 1) {
+      environmentRef.current = nextEnvironment;
+      setTablePage(1);
+      return data;
+    }
+    environmentRef.current = nextEnvironment;
     setPage(data);
+    setSelectedBrand((current) => {
+      if (!current?.brownKey) return current;
+      return (data.brands || []).find((row) => row.brownKey === current.brownKey) || current;
+    });
+    if (Number(data.page) && Number(data.page) !== nextPage) setTablePage(Number(data.page));
     return data;
   }
 
   useEffect(() => {
-    load().catch((err) => setError(err.message));
-  }, []);
+    const handle = setTimeout(() => setAppliedSearch(search.trim()), 250);
+    return () => clearTimeout(handle);
+  }, [search]);
+
+  useEffect(() => {
+    const key = `${appliedSearch}\0${status}\0${tableLimit}`;
+    const reset = queryKey.current !== key;
+    queryKey.current = key;
+    const nextPage = reset ? 1 : tablePage;
+    if (reset && tablePage !== 1) {
+      setTablePage(1);
+      return;
+    }
+    const ticket = ++requestRef.current;
+    load({ q: appliedSearch, status, page: nextPage, limit: tableLimit, ticket }).catch((err) => {
+      if (ticket !== requestRef.current) return;
+      setError(err.message);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appliedSearch, status, tablePage, tableLimit]);
 
   const brands = page?.brands || [];
   const warrantyState = page?.warranties || null;
   const catalogOk = warrantyState?.ok === true && warrantyState.failed !== true && warrantyState.empty !== true;
-  const visibleBrands = useMemo(
-    () => filterWarrantyBrands(brands, { q: search, status }),
-    [brands, search, status]
-  );
+  const visibleBrands = brands;
   const official = useMemo(
     () => officialWarrantiesForSearch(warrantyState?.items || [], search),
     [warrantyState, search]
   );
-  const shared = useMemo(() => sharedWarrantyCounts(brands), [brands]);
-  const selected = brands.find((row) => row.brownKey === brandId) || null;
+  const shared = useMemo(() => {
+    if (page?.sharedWarrantyCounts) return new Map(Object.entries(page.sharedWarrantyCounts));
+    return sharedWarrantyCounts(brands);
+  }, [page, brands]);
+  const selected = brands.find((row) => row.brownKey === brandId) || (selectedBrand?.brownKey === brandId ? selectedBrand : null);
+  const brandOptions = selected && !brands.some((row) => row.brownKey === selected.brownKey) ? [selected, ...brands] : brands;
   const selectedWarranty = (warrantyState?.items || []).find((item) => item.code === warrantyCode) || null;
   const review = warrantyReview({ brand: selected, warranty: selectedWarranty });
   const needsOverwrite = Boolean(review?.replaces);
@@ -72,8 +116,9 @@ export default function ElryanWarrantyMapping({ t }) {
   const notSupplied = text(t, "elryanWarrantyNotSupplied", "Not supplied");
 
   function chooseBrand(nextId) {
-    const row = brands.find((item) => item.brownKey === nextId) || null;
+    const row = brands.find((item) => item.brownKey === nextId) || (selectedBrand?.brownKey === nextId ? selectedBrand : null);
     setBrandId(nextId);
+    setSelectedBrand(row);
     setWarrantyCode(row?.warranty?.verified ? row.warranty.code : "");
     setConfirmCoverage(false);
     setConfirmOverwrite(false);
@@ -254,6 +299,16 @@ export default function ElryanWarrantyMapping({ t }) {
               {text(t, "elryanWarrantyNoBrands", "No BrownStore brands match this search.")}
             </p>
           )}
+          <ElryanMappingPager
+            t={t}
+            page={page?.page || tablePage}
+            pages={page?.pages || 1}
+            total={page?.total || 0}
+            limit={tableLimit}
+            busy={busy}
+            onPage={setTablePage}
+            onLimit={setTableLimit}
+          />
         </div>
 
         <form onSubmit={save} className="h-fit space-y-4 rounded-[1.75rem] bg-white p-5 ring-1 ring-brown/10">
@@ -267,7 +322,7 @@ export default function ElryanWarrantyMapping({ t }) {
               onChange={(event) => chooseBrand(event.target.value)}
             >
               <option value="">{text(t, "elryanWarrantySelectBrandPlaceholder", "Select a brand")}</option>
-              {brands.map((row) => (
+              {brandOptions.map((row) => (
                 <option key={row.brownKey} value={row.brownKey}>
                   {row.brownLabel}
                 </option>

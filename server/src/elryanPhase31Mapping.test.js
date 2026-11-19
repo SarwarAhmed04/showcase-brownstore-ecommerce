@@ -293,6 +293,44 @@ describe("Elryan Phase 3.1 smart + manual mapping save", () => {
     assert.equal(page.json.categories.length, 1);
     assert.equal(page.json.offset, 1);
     assert.ok(page.json.totalMatching >= 2);
+
+    const roots = await call(
+      "GET",
+      "/api/admin/platforms/elryan/mapping/snapshot-search?roots=1&limit=50"
+    );
+    assert.equal(roots.status, 200);
+    assert.equal(roots.json.scope, "roots");
+    assert.equal(roots.json.environment, "staging");
+    const rootIds = roots.json.categories.map((row) => String(row.categoryId));
+    assert.equal(rootIds.includes("100"), false);
+    assert.equal(rootIds.includes("10"), true);
+    assert.equal(rootIds.includes("200"), true);
+    assert.ok(roots.json.categories.every((row) => row.hierarchy));
+
+    const children = await call(
+      "GET",
+      "/api/admin/platforms/elryan/mapping/snapshot-search?parentId=10&limit=25"
+    );
+    assert.equal(children.status, 200);
+    assert.equal(children.json.scope, "children");
+    assert.deepEqual(
+      children.json.categories.map((row) => String(row.categoryId)),
+      ["100"]
+    );
+    assert.match(children.json.categories[0].hierarchy, /Acne Patches/);
+
+    const byPath = await call(
+      "GET",
+      "/api/admin/platforms/elryan/mapping/snapshot-search?q=Hardware%20%3A%20Door%20Locks&limit=10"
+    );
+    assert.equal(byPath.status, 200);
+    assert.equal(byPath.json.scope, "search");
+    assert.ok(byPath.json.categories.some((row) => String(row.categoryId) === "200"));
+    assert.equal(
+      (await call("GET", "/api/admin/platforms/elryan/mapping/snapshot-search?q=zzzz-not-a-category&limit=10")).json
+        .totalMatching,
+      0
+    );
   });
 
   it("preview-save blocks parent categories and rejects invented IDs", async () => {

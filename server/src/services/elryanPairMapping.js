@@ -4,6 +4,7 @@ import { brownColourKey, brownColourLabel } from "../utils/elryanColour.js";
 import { resolveElryanScopedValue } from "../utils/elryanValueResolve.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import { getElryanConnectionPublic } from "./elryanConnection.js";
+import { compareMappingLabel, paginateElryanMappingRows } from "../utils/elryanMappingTablePage.js";
 
 function textName(name) {
   if (!name) return "";
@@ -71,7 +72,11 @@ function present(rows, environment, subject) {
  * BrownStore brands or colours for the active Elryan environment, with the saved pair.
  * Does not call Elryan and does not write a mapping.
  */
-export async function listElryanPairMapping(kind) {
+function pairSearchText(row) {
+  return `${row.brownLabel || ""} ${row.brownKey || ""} ${row.mapping?.elryanLabel || ""} ${row.mapping?.elryanId || ""}`.toLowerCase();
+}
+
+export async function listElryanPairMapping(kind, query = {}) {
   const normalized = kind === "color" ? "color" : kind === "brand" ? "brand" : "";
   if (!normalized) {
     const error = new Error("kind must be brand or color");
@@ -84,16 +89,24 @@ export async function listElryanPairMapping(kind) {
     normalized === "brand" ? loadBrownBrands() : loadBrownColours(),
     ElryanValueMapping.find({ kind: normalized }).lean(),
   ]);
-  const options = subjects
+  const sorted = subjects
     .map((subject) => ({
       ...subject,
       mapping: present(rows, environment, subject.brownKey),
     }))
-    .sort((left, right) => left.brownLabel.localeCompare(right.brownLabel, undefined, { sensitivity: "base" }));
+    .sort((left, right) => compareMappingLabel(left.brownLabel, left.brownKey, right.brownLabel, right.brownKey));
+  const needle = String(query?.q || "").trim().toLowerCase();
+  const matched = needle ? sorted.filter((row) => pairSearchText(row).includes(needle)) : sorted;
+  const page = paginateElryanMappingRows(matched, query);
   return {
     environment,
     kind: normalized,
-    options,
-    mapped: options.filter((row) => row.mapping).length,
+    options: page.rows,
+    mapped: sorted.filter((row) => row.mapping).length,
+    page: page.page,
+    limit: page.limit,
+    total: page.total,
+    pages: page.pages,
+    hasMore: page.hasMore,
   };
 }

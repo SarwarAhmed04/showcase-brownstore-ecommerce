@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../../api";
+import ElryanMappingPager from "./ElryanMappingPager";
 import {
   elryanCatalogPageWindow,
   elryanValueAttribute,
   elryanValueRowStatus,
-  filterElryanValueRows,
   mergeElryanValueDrafts,
 } from "../../../utils/elryanValueMappingPage";
 
@@ -153,18 +153,37 @@ export default function ElryanValueMapping({ t, kind }) {
   const [drafts, setDrafts] = useState({});
   const [environment, setEnvironment] = useState("staging");
   const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(25);
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(1);
   const [loadError, setLoadError] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [savingKey, setSavingKey] = useState("");
   const loadTicket = useRef(0);
+  const queryKey = useRef(null);
+  const environmentRef = useRef("");
+  const kindRef = useRef(kind);
   const brand = kind === "brand";
 
-  async function load({ replace = false, ticket = loadTicket.current } = {}) {
-    const data = await api.elryanPairMapping(kind);
+  async function load({ replace = false, ticket = loadTicket.current, page: nextPage = page, limit: nextLimit = limit, q = appliedQuery } = {}) {
+    const data = await api.elryanPairMapping(kind, { q, page: nextPage, limit: nextLimit });
     if (ticket !== loadTicket.current) return data;
+    const nextEnvironment = data.environment === "production" ? "production" : "staging";
+    if (environmentRef.current && environmentRef.current !== nextEnvironment && nextPage !== 1) {
+      environmentRef.current = nextEnvironment;
+      setEnvironment(nextEnvironment);
+      setPage(1);
+      return data;
+    }
+    environmentRef.current = nextEnvironment;
     const options = data.options || [];
     setRows(options);
-    setEnvironment(data.environment === "production" ? "production" : "staging");
+    setEnvironment(nextEnvironment);
+    setTotal(Number(data.total) || 0);
+    setPages(Number(data.pages) || 1);
+    if (Number(data.page) && Number(data.page) !== nextPage) setPage(Number(data.page));
     setDrafts((current) => mergeElryanValueDrafts(replace ? {} : current, options));
     setLoadError("");
     setLoaded(true);
@@ -172,17 +191,45 @@ export default function ElryanValueMapping({ t, kind }) {
   }
 
   useEffect(() => {
+    const handle = setTimeout(() => setAppliedQuery(query.trim()), 250);
+    return () => clearTimeout(handle);
+  }, [query]);
+
+  useEffect(() => {
+    const kindChanged = kindRef.current !== kind;
+    kindRef.current = kind;
+    if (kindChanged) {
+      setDrafts({});
+      setQuery("");
+      environmentRef.current = "";
+      if (appliedQuery !== "") setAppliedQuery("");
+      if (page !== 1) setPage(1);
+      if (limit !== 25) setLimit(25);
+      if (appliedQuery !== "" || page !== 1 || limit !== 25) return;
+    }
+    const key = `${kind}\0${appliedQuery}\0${limit}`;
+    const reset = queryKey.current !== key;
+    queryKey.current = key;
+    const nextPage = reset ? 1 : page;
+    if (reset && page !== 1) {
+      setPage(1);
+      return;
+    }
     const ticket = ++loadTicket.current;
-    setQuery("");
-    setLoaded(false);
-    load({ replace: true, ticket }).catch((err) => {
+    load({
+      replace: kindChanged,
+      ticket,
+      page: nextPage,
+      limit,
+      q: kindChanged ? "" : appliedQuery,
+    }).catch((err) => {
       if (ticket !== loadTicket.current) return;
       setLoadError(err.message);
       setLoaded(true);
     });
-  }, [kind]);
-
-  const visible = useMemo(() => filterElryanValueRows(rows, query), [rows, query]);
+    // load reads the latest page through its arguments.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, appliedQuery, page, limit]);
   const title = brand ? t.elryanBrandMappingTitle : t.elryanColourMappingTitle;
   const hint = brand ? t.elryanBrandMappingHint : t.elryanColourMappingHint;
   const brownHeading = brand ? t.elryanValueBrownBrand : t.elryanValueBrownColour;
@@ -261,8 +308,18 @@ export default function ElryanValueMapping({ t, kind }) {
         <span>{t.elryanValueStatus}</span>
       </div>
 
+      <ElryanMappingPager
+        t={t}
+        page={page}
+        pages={pages}
+        total={total}
+        limit={limit}
+        onPage={setPage}
+        onLimit={setLimit}
+      />
+
       <div className="space-y-3">
-        {visible.map((row) => {
+        {rows.map((row) => {
           const draft = drafts[row.brownKey] || {
             elryanId: row.mapping?.elryanId || "",
             elryanLabel: row.mapping?.elryanLabel || "",
@@ -323,7 +380,7 @@ export default function ElryanValueMapping({ t, kind }) {
             </article>
           );
         })}
-        {loaded && !loadError && !visible.length ? <p className="text-sm text-brown/55">{empty}</p> : null}
+        {loaded && !loadError && !rows.length ? <p className="text-sm text-brown/55">{empty}</p> : null}
       </div>
     </section>
   );
