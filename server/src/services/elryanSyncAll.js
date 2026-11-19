@@ -408,11 +408,10 @@ export async function evaluateElryanProductForSync(doc, context, { origin = "", 
     environment: context.environment,
     product: doc,
     dimensionRow,
-    collectionRule:
-      context.environment === "staging" && !collectionIdentity.ambiguous
-        ? context.collectionDimensions?.get(collectionIdentity.collectionId) || null
-        : null,
-    excluded: context.environment === "staging" && excluded === true,
+    collectionRule: collectionIdentity.ambiguous
+      ? null
+      : context.collectionDimensions?.get(collectionIdentity.collectionId) || null,
+    excluded: excluded === true,
   });
   const extraBlockers = [...elryanDimensionBlockers(dimensions)];
   const category = mapping.categoryId ? context.categoryIndex.get(String(mapping.categoryId)) : null;
@@ -608,7 +607,7 @@ function summaries(context) {
     },
     packageDimensions: {
       status: "RESOLVED_PER_PRODUCT",
-      note: `${ELRYAN_PACKAGE_DIMENSIONS_NOTE} Sync All uses the same Staging dimension resolver as Sync One. A collection AUTO_APPLY rule is used only after an operator confirms that collection. Unverified products are not READY. Nothing is sent.`,
+      note: `${ELRYAN_PACKAGE_DIMENSIONS_NOTE} Sync All uses the same dimension resolver as Preview 1 for the active environment. A confirmed collection AUTO_APPLY rule is inherited only in that environment. Unverified products are not READY. Nothing is sent.`,
     },
   };
 }

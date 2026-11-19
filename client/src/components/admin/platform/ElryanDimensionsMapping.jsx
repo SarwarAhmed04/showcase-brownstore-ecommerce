@@ -277,7 +277,7 @@ export default function ElryanDimensionsMapping({ t, lang = "en" }) {
     setMessage("");
     try {
       await api.saveElryanCollectionDimension({
-        environment: "staging",
+        environment: activeEnvironment,
         brownCollectionId: collectionId,
         height: Number(form.height),
         width: Number(form.width),

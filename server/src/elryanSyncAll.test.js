@@ -668,6 +668,131 @@ describe("Elryan Sync All preview", { concurrency: 1 }, () => {
     assert.equal(await ElryanConfirmedSend.countDocuments({}), 0);
   });
 
+  it("inherits a confirmed Production rule in both previews and leaves saved mappings unchanged", async () => {
+    const ready = await Product.findOne({ itemCode: "EL-READY-1" }).lean();
+    const other = await Product.findOne({ itemCode: "EL-BRAND-1" }).lean();
+    await ElryanCollectionDimension.create({
+      environment: "staging",
+      brownCollectionId: "col-1",
+      width: 5,
+      height: 10,
+      depth: 10,
+      unit: "cm",
+      applyMode: "AUTO_APPLY",
+      enabled: true,
+      verifiedForCollection: true,
+      verificationSource: "operator",
+      confirmedAt: new Date(),
+      confirmedBy: "elryan-sync@brownstore.test",
+    });
+    await ElryanStagingDimensionCheck.create({
+      environment: "staging",
+      productId: String(ready._id),
+      sku: "EL-READY-1",
+      unit: "cm",
+      width: 30,
+      height: 40,
+      depth: 20,
+      axesConfirmed: true,
+      confirmedAt: new Date(),
+    });
+    await runElryanSyncPreview({ strategy: "full" });
+    const stagingJob = await waitFor((status) => status.environment === "staging" && status.job?.status === "preview" && status.job?.finishedAt);
+    const stagingRuleBefore = await ElryanCollectionDimension.findOne({ environment: "staging", brownCollectionId: "col-1" }).lean();
+
+    await ElryanConnection.updateOne({ singletonKey: "default" }, { $set: { environment: "production" } });
+    const productionStatus = await getElryanSyncAllStatus();
+    assert.equal(productionStatus.environment, "production");
+    assert.equal(productionStatus.job, null);
+
+    const isolatedPreview = await previewElryanSyncOne({ productId: String(ready._id) });
+    assert.equal(isolatedPreview.packageDimensions.source, "MISSING");
+    assert.equal(isolatedPreview.packageDimensions.reason, "production_isolated");
+    assert.equal(isolatedPreview.proposedPayload.width, undefined);
+    await runElryanSyncPreview({ strategy: "full" });
+    const isolatedJob = await waitFor((status) => status.environment === "production" && status.job?.status === "preview" && status.job?.finishedAt);
+    const isolatedRow = await ElryanSyncProductResult.findOne({ jobId: isolatedJob.job.id, sku: "EL-READY-1" }).lean();
+    assert.equal(isolatedJob.job.dimensionSummary.collectionAuto, 0);
+    assert.equal(isolatedRow.dimensionSource, "MISSING");
+    assert.equal(isolatedJob.job.sentToElryan, 0);
+    const stagingRuleAfterIsolation = await ElryanCollectionDimension.findOne({ environment: "staging", brownCollectionId: "col-1" }).lean();
+    assert.equal(String(stagingRuleAfterIsolation.updatedAt), String(stagingRuleBefore.updatedAt));
+    assert.equal(stagingRuleAfterIsolation.width, 5);
+    assert.equal(await ElryanCollectionDimension.countDocuments({ environment: "production" }), 0);
+    assert.equal(String(stagingJob.job.id) === String(isolatedJob.job.id), false);
+
+    await ElryanCollectionDimension.create({
+      environment: "production",
+      brownCollectionId: "col-1",
+      width: 11,
+      height: 22,
+      depth: 33,
+      unit: "cm",
+      applyMode: "AUTO_APPLY",
+      enabled: true,
+      verifiedForCollection: true,
+      verificationSource: "operator",
+      confirmedAt: new Date(),
+      confirmedBy: "elryan-sync@brownstore.test",
+    });
+    await ElryanStagingDimensionCheck.create({
+      environment: "production",
+      productId: String(other._id),
+      sku: "EL-BRAND-1",
+      unit: "cm",
+      width: 4,
+      height: 5,
+      depth: 6,
+      axesConfirmed: true,
+      confirmedAt: new Date(),
+    });
+    const savedMappings = JSON.stringify([
+      await ElryanCollectionDimension.find({}).sort({ environment: 1, brownCollectionId: 1 }).lean(),
+      await ElryanValueMapping.find({}).sort({ kind: 1, brownKey: 1 }).lean(),
+      await ElryanStagingDimensionCheck.find({}).sort({ environment: 1, productId: 1 }).lean(),
+      await PlatformTaxonomyConfig.find({ partner: "elryan" }).sort({ brownCollectionId: 1 }).lean(),
+    ]);
+
+    const inheritedPreview = await previewElryanSyncOne({ productId: String(ready._id) });
+    assert.equal(inheritedPreview.packageDimensions.source, "COLLECTION_AUTO");
+    assert.equal(inheritedPreview.packageDimensions.width, 11);
+    assert.equal(inheritedPreview.packageDimensions.height, 22);
+    assert.equal(inheritedPreview.packageDimensions.depth, 33);
+    assert.equal(inheritedPreview.proposedPayload.width, 11);
+    assert.equal(inheritedPreview.proposedPayload.height, 22);
+    assert.equal(inheritedPreview.proposedPayload.depth, 33);
+    const overridePreview = await previewElryanSyncOne({ productId: String(other._id) });
+    assert.equal(overridePreview.packageDimensions.source, "PRODUCT_OVERRIDE");
+    assert.equal(overridePreview.proposedPayload.width, 4);
+    assert.equal(overridePreview.proposedPayload.height, 5);
+    assert.equal(overridePreview.proposedPayload.depth, 6);
+
+    await runElryanSyncPreview({ strategy: "full" });
+    const inheritedJob = await waitFor(
+      (status) => status.environment === "production" && status.job?.status === "preview" && status.job?.finishedAt && status.job?.id !== isolatedJob.job.id
+    );
+    assert.equal(inheritedJob.job.dimensionSummary.collectionAuto, 1);
+    assert.equal(inheritedJob.job.dimensionSummary.productOverride, 1);
+    assert.equal(inheritedJob.job.sentToElryan, 0);
+    const inheritedRow = await ElryanSyncProductResult.findOne({ jobId: inheritedJob.job.id, sku: "EL-READY-1" }).lean();
+    const overrideRow = await ElryanSyncProductResult.findOne({ jobId: inheritedJob.job.id, sku: "EL-BRAND-1" }).lean();
+    assert.equal(inheritedRow.dimensionSource, "COLLECTION_AUTO");
+    assert.equal(overrideRow.dimensionSource, "PRODUCT_OVERRIDE");
+    assert.equal(
+      JSON.stringify([
+        await ElryanCollectionDimension.find({}).sort({ environment: 1, brownCollectionId: 1 }).lean(),
+        await ElryanValueMapping.find({}).sort({ kind: 1, brownKey: 1 }).lean(),
+        await ElryanStagingDimensionCheck.find({}).sort({ environment: 1, productId: 1 }).lean(),
+        await PlatformTaxonomyConfig.find({ partner: "elryan" }).sort({ brownCollectionId: 1 }).lean(),
+      ]),
+      savedMappings
+    );
+    const afterReady = await Product.findById(ready._id).lean();
+    assert.equal(String(afterReady.updatedAt), String(ready.updatedAt));
+    assert.equal(calls.some((line) => line.startsWith("POST") || line.startsWith("PATCH") || line.startsWith("PUT")), false);
+    assert.equal(await ElryanConfirmedSend.countDocuments({}), 0);
+  });
+
   it("resolves collection dimensions across preview batches without per-product writes", async () => {
     setElryanSyncBatchSizeForTests(10);
     await ElryanCollectionDimension.create({

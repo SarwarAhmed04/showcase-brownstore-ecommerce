@@ -30,9 +30,16 @@ import { elryanPlatformSectionEntries } from "../../client/src/utils/elryanCateg
 import {
   ELRYAN_WARRANTY_MAPPING_TAB,
   filterWarrantyBrands,
+  mergeVisibleBrandSnapshots,
+  mergeWarrantySaveOutcomes,
   officialWarrantiesForSearch,
+  removeWarrantyBrand,
+  saveSelectedWarrantyBrands,
   sharedWarrantyCounts,
-  warrantyReview,
+  toggleWarrantyBrand,
+  warrantyBatchReview,
+  warrantyMappingDescription,
+  warrantyReadBackVerified,
   warrantySaveReady,
 } from "../../client/src/utils/elryanWarrantyMappingPage.js";
 
@@ -230,25 +237,165 @@ describe("Elryan warranty mapping page helpers", () => {
   });
 
   it("requires coverage confirmation and a separate overwrite confirmation", () => {
-    assert.equal(warrantySaveReady({ brandId: INGCO, code: INGCO_CODE, confirmCoverage: true, catalogOk: true }), true);
-    assert.equal(warrantySaveReady({ brandId: INGCO, code: INGCO_CODE, confirmCoverage: false, catalogOk: true }), false);
+    assert.equal(
+      warrantySaveReady({ brandIds: [INGCO], code: INGCO_CODE, confirmCoverage: true, catalogOk: true, replacements: [] }),
+      true
+    );
+    assert.equal(
+      warrantySaveReady({ brandIds: [INGCO], code: INGCO_CODE, confirmCoverage: false, catalogOk: true, replacements: [] }),
+      false
+    );
     assert.equal(
       warrantySaveReady({
-        brandId: INGCO,
+        brandIds: [INGCO, TOTAL],
         code: "other",
         confirmCoverage: true,
-        needsOverwrite: true,
+        replacements: [INGCO_CODE],
         confirmOverwrite: false,
         catalogOk: true,
       }),
       false
     );
-    const review = warrantyReview({
-      brand: brands[0],
-      warranty: { code: "other-code", name: "Other" },
+    const review = warrantyBatchReview({
+      brands,
+      warranty: { code: "other-code", name: "Other", duration: "12 months", terms: "Official terms" },
     });
-    assert.equal(review.replaces, INGCO_CODE);
+    assert.equal(review.brands.find((row) => row.brownKey === INGCO).replaces, INGCO_CODE);
+    assert.equal(review.brands.find((row) => row.brownKey === TOTAL).replaces, "");
+    assert.equal(review.duration, "12 months");
     assert.equal(sharedWarrantyCounts(brands).get(INGCO_CODE), 1);
+  });
+
+  it("keeps a multi-brand selection across searches and does not describe Production as Staging", () => {
+    const extra = ["6ace1b33669f3bf0af2b55f4", "6ace1b33669f3bf0af2b55f5", "6ace1b33669f3bf0af2b55f6", "6ace1b33669f3bf0af2b55f7"];
+    const catalog = [
+      ...brands,
+      ...extra.map((id, index) => ({
+        brownKey: id,
+        brownLabel: `Brand ${index + 1}`,
+        warranty: index === 0 ? { code: "old-code", label: "Old" } : null,
+      })),
+    ];
+    let selected = new Map();
+    for (const row of filterWarrantyBrands(catalog, { q: "ingco" })) selected = toggleWarrantyBrand(selected, row);
+    for (const row of filterWarrantyBrands(catalog, { q: "brand 2" })) selected = toggleWarrantyBrand(selected, row);
+    for (const row of catalog.filter((row) => row.brownLabel === "Brand 3" || row.brownLabel === "Brand 4")) {
+      selected = toggleWarrantyBrand(selected, row);
+    }
+    selected = toggleWarrantyBrand(selected, catalog.find((row) => row.brownKey === extra[0]));
+    assert.equal(selected.size, 5);
+    selected = mergeVisibleBrandSnapshots(selected, filterWarrantyBrands(catalog, { q: "brand 2" }));
+    assert.equal(selected.size, 5);
+    assert.equal(selected.has(INGCO), true);
+    const removed = removeWarrantyBrand(selected, extra[1]);
+    assert.equal(removed.has(extra[1]), false);
+    assert.equal(removed.size, 4);
+    assert.equal(selected.has(extra[1]), true);
+    const review = warrantyBatchReview({
+      brands: [...selected.values()],
+      warranty: { code: INGCO_CODE, name: "INGCO Warranty" },
+    });
+    assert.equal(review.brands.find((row) => row.brownKey === extra[0]).replaces, "old-code");
+    assert.equal(
+      warrantySaveReady({
+        brandIds: [...selected.keys()],
+        code: INGCO_CODE,
+        confirmCoverage: true,
+        replacements: review.brands.map((row) => row.replaces),
+        confirmOverwrite: false,
+        catalogOk: true,
+      }),
+      false
+    );
+
+    const staleProduction = warrantyMappingDescription(
+      "production",
+      "Map each BrownStore brand to one official Elryan Staging warranty. Several brands may share one warranty. Nothing is saved until you review and confirm."
+    );
+    assert.equal(staleProduction.includes("Staging"), false);
+    assert.match(staleProduction, /Elryan Production warranty/);
+    const active = warrantyMappingDescription("production");
+    assert.match(active, /Elryan Production warranty/);
+    assert.equal(warrantyMappingDescription("staging").includes("{environment}"), false);
+    assert.match(warrantyMappingDescription("staging"), /Elryan Staging warranty/);
+    const ui = fs.readFileSync(path.join(root, "client/src/components/admin/platform/ElryanWarrantyMapping.jsx"), "utf8");
+    const i18n = fs.readFileSync(path.join(root, "client/src/i18n.js"), "utf8");
+    assert.equal(ui.includes("Elryan Staging warranty"), false);
+    assert.equal(i18n.includes("Elryan Staging warranty"), false);
+    assert.match(ui, /warrantyMappingDescription\(/);
+    assert.match(ui, /removeWarrantyBrand\(/);
+    assert.equal(ui.includes("deleteElryanValueMapping"), false);
+  });
+
+  it("confirms only read-back matches and retries the failed brands", async () => {
+    const ids = ["b1", "b2", "b3", "b4", "b5", "b6"];
+    const rows = ids.map((id) => ({
+      brownKey: id,
+      brownLabel: id.toUpperCase(),
+      warranty: id === "b2" ? { code: "other-code" } : null,
+    }));
+    const calls = [];
+    const first = await saveSelectedWarrantyBrands({
+      brands: rows,
+      warrantyCode: INGCO_CODE,
+      environment: "staging",
+      confirmOverwrite: true,
+      save: async (body) => {
+        calls.push(body.brownKey);
+        assert.equal(body.confirmCoverage, true);
+        assert.equal(body.elryanCode, INGCO_CODE);
+        if (body.brownKey === "b2") assert.equal(body.confirmOverwrite, true);
+        if (body.brownKey === "b1") assert.equal(body.confirmOverwrite, false);
+        if (body.brownKey === "b3") {
+          const error = new Error("warranty down");
+          error.code = "warranty_list_failed";
+          throw error;
+        }
+        if (body.brownKey === "b4") {
+          return { readBack: { ok: true, elryanCode: "other", brownKey: `staging:brand:${body.brownKey}`, environment: "staging", warrantyScope: "brand" } };
+        }
+        return {
+          readBack: {
+            ok: true,
+            elryanCode: INGCO_CODE,
+            brownKey: `staging:brand:${body.brownKey}`,
+            environment: "staging",
+            warrantyScope: "brand",
+          },
+        };
+      },
+    });
+    assert.deepEqual(calls, ids);
+    assert.deepEqual(first.confirmed.map((row) => row.brownKey), ["b1", "b2", "b5", "b6"]);
+    assert.equal(first.confirmed.every((row) => warrantyReadBackVerified(row.readBack, { brownKey: row.brownKey, code: INGCO_CODE, environment: "staging" })), true);
+    assert.deepEqual(first.retryBrandIds, ["b3", "b4"]);
+    assert.equal(first.failed.find((row) => row.brownKey === "b3").message, "warranty down");
+    assert.equal(first.failed.find((row) => row.brownKey === "b4").code, "warranty_read_back_failed");
+    assert.equal(warrantyReadBackVerified(first.failed.find((row) => row.brownKey === "b4"), { brownKey: "b4", code: INGCO_CODE }), false);
+
+    const retryCalls = [];
+    const retry = await saveSelectedWarrantyBrands({
+      brands: rows.filter((row) => first.retryBrandIds.includes(row.brownKey)),
+      warrantyCode: INGCO_CODE,
+      environment: "staging",
+      confirmOverwrite: false,
+      save: async (body) => {
+        retryCalls.push(body.brownKey);
+        return {
+          readBack: {
+            ok: true,
+            elryanCode: INGCO_CODE,
+            brownKey: `staging:brand:${body.brownKey}`,
+            environment: "staging",
+            warrantyScope: "brand",
+          },
+        };
+      },
+    });
+    assert.deepEqual(retryCalls, ["b3", "b4"]);
+    const merged = mergeWarrantySaveOutcomes(first, retry);
+    assert.equal(merged.confirmed.length, 6);
+    assert.equal(merged.failed.length, 0);
   });
 
   it("adds a Warranty Mapping sidebar item without removing the other Elryan sections", () => {
@@ -601,5 +748,135 @@ describe("Elryan brand warranty mapping", () => {
     assert.equal(staging.environment, "staging");
     assert.equal(staging.brands.find((row) => row.brownKey === INGCO)?.warranty, null);
     assert.equal(staging.brands.find((row) => row.brownKey === KENWOOD)?.warranty?.code, KENWOOD_CODE);
+  });
+
+  it("saves one official warranty for five brands, reports a conflict, and reloads the saved counts", async () => {
+    const bosch = "6ace1b33669f3bf0af2b55f4";
+    const makita = "6ace1b33669f3bf0af2b55f5";
+    await Product.create([
+      {
+        ibsherId: "ibs-bosch",
+        itemCode: "BOSCH-1",
+        name: { en: "Bosch Drill" },
+        price: 30000,
+        brand: { _id: bosch, name: { en: "Bosch" } },
+        warranty: { duration: 2, unit: "years", description: "Bosch product terms" },
+      },
+      {
+        ibsherId: "ibs-makita",
+        itemCode: "MAKITA-1",
+        name: { en: "Makita Drill" },
+        price: 32000,
+        brand: { _id: makita, name: { en: "Makita" } },
+        warranty: { duration: 1, unit: "years", description: "" },
+      },
+    ]);
+    await ElryanValueMapping.create({
+      kind: "warranty",
+      brownKey: "staging:product:2-year",
+      environment: "staging",
+      warrantyScope: "product",
+      elryanCode: "PRODUCT-CODE",
+      elryanLabel: "Product warranty",
+    });
+
+    let selected = new Map();
+    for (const query of [{ status: "mapped" }, { status: "unmapped" }, { q: "bosch" }, { q: "makita" }, { q: "total" }]) {
+      const listed = await listElryanWarrantyMappingPage(query);
+      assert.equal(listed.brands.length > 0, true);
+      for (const row of listed.brands) {
+        if (!selected.has(row.brownKey)) selected = toggleWarrantyBrand(selected, row);
+      }
+    }
+    assert.equal(selected.size, 5);
+    const boschOnly = await listElryanWarrantyMappingPage({ q: "bosch", page: 1 });
+    const makitaOnly = await listElryanWarrantyMappingPage({ q: "makita", page: 1 });
+    assert.equal(boschOnly.brands.length, 1);
+    assert.equal(makitaOnly.brands.length, 1);
+    assert.equal(boschOnly.brands.some((row) => row.brownKey === INGCO), false);
+    selected = mergeVisibleBrandSnapshots(selected, boschOnly.brands);
+    selected = mergeVisibleBrandSnapshots(selected, makitaOnly.brands);
+    assert.equal(selected.size, 5);
+    assert.equal(selected.get(bosch).brownLabel, "Bosch");
+    assert.equal(selected.get(KENWOOD).warranty.code, KENWOOD_CODE);
+
+    const removed = removeWarrantyBrand(selected, TOTAL);
+    assert.equal(removed.has(TOTAL), false);
+    const kenwoodBefore = await ElryanValueMapping.findOne({ brownKey: `staging:brand:${KENWOOD}` }).lean();
+    assert.equal(kenwoodBefore.elryanCode, KENWOOD_CODE);
+    selected = toggleWarrantyBrand(removed, selected.get(TOTAL));
+
+    const beforeProducts = await Product.find().sort({ ibsherId: 1 }).lean();
+    const first = await saveSelectedWarrantyBrands({
+      brands: [...selected.values()],
+      warrantyCode: INGCO_CODE,
+      environment: "staging",
+      confirmOverwrite: false,
+      save: (body) => saveElryanBrandWarrantyMapping(body),
+    });
+    assert.deepEqual(
+      first.confirmed.map((row) => row.brownKey).sort(),
+      [INGCO, TOTAL, bosch, makita].sort()
+    );
+    assert.deepEqual(first.retryBrandIds, [KENWOOD]);
+    assert.equal(first.failed[0].code, "overwrite_confirmation_required");
+    assert.equal(first.failed[0].message.includes(KENWOOD) || first.failed[0].brownKey === KENWOOD, true);
+    assert.equal(
+      first.confirmed.every((row) =>
+        warrantyReadBackVerified(row.readBack, { brownKey: row.brownKey, code: INGCO_CODE, environment: "staging" })
+      ),
+      true
+    );
+
+    const reloaded = await listElryanWarrantyMappingPage();
+    assert.equal(reloaded.counts.brands, 5);
+    assert.equal(reloaded.counts.mapped, 5);
+    assert.equal(reloaded.sharedWarrantyCounts[INGCO_CODE], 4);
+    assert.equal(reloaded.sharedWarrantyCounts[KENWOOD_CODE], 1);
+    assert.equal(reloaded.brands.find((row) => row.brownKey === KENWOOD).warranty.code, KENWOOD_CODE);
+    assert.equal(reloaded.environment, "staging");
+
+    const retry = await saveSelectedWarrantyBrands({
+      brands: [...selected.values()].filter((brand) => first.retryBrandIds.includes(brand.brownKey)),
+      warrantyCode: INGCO_CODE,
+      environment: "staging",
+      confirmOverwrite: true,
+      save: (body) => saveElryanBrandWarrantyMapping(body),
+    });
+    assert.deepEqual(retry.retryBrandIds, []);
+    assert.equal(retry.confirmed.length, 1);
+    assert.equal(warrantyReadBackVerified(retry.confirmed[0].readBack, { brownKey: KENWOOD, code: INGCO_CODE, environment: "staging" }), true);
+    const merged = mergeWarrantySaveOutcomes(first, retry);
+    assert.equal(merged.confirmed.length, 5);
+    assert.equal(merged.failed.length, 0);
+
+    const again = await listElryanWarrantyMappingPage();
+    assert.equal(again.counts.mapped, 5);
+    assert.equal(again.counts.unmapped, 0);
+    assert.equal(again.sharedWarrantyCounts[INGCO_CODE], 5);
+    assert.equal(again.sharedWarrantyCounts[KENWOOD_CODE], undefined);
+    assert.equal(again.brands.every((row) => row.warranty?.code === INGCO_CODE), true);
+
+    const afterProducts = await Product.find().sort({ ibsherId: 1 }).lean();
+    assert.deepEqual(
+      afterProducts.map((row) => row.warranty),
+      beforeProducts.map((row) => row.warranty)
+    );
+    const productOverride = await ElryanValueMapping.findOne({ brownKey: "staging:product:2-year" }).lean();
+    assert.equal(productOverride.elryanCode, "PRODUCT-CODE");
+    const warrantyRows = await ElryanValueMapping.find({ kind: "warranty" }).lean();
+    const resolved = resolveElryanWarrantyFromRows(warrantyRows, {
+      environment: "staging",
+      explicitKey: "2-year",
+      brandId: INGCO,
+    });
+    assert.equal(resolved.source, "product");
+    assert.equal(resolved.mapping.elryanCode, "PRODUCT-CODE");
+
+    const dropped = removeWarrantyBrand(selected, INGCO);
+    assert.equal(dropped.has(INGCO), false);
+    const kept = await ElryanValueMapping.findOne({ brownKey: `staging:brand:${INGCO}` }).lean();
+    assert.equal(kept.elryanCode, INGCO_CODE);
+    assert.equal(calls.some((line) => line.startsWith("POST") || line.startsWith("PATCH") || line.startsWith("PUT")), false);
   });
 });

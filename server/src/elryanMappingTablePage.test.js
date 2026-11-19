@@ -104,5 +104,14 @@ describe("Elryan mapping table pagination", () => {
     assert.match(dimensionUi, /t\.elryanDimSaving/);
     assert.match(dimensionUi, /t\.elryanValueConfirmed/);
     assert.match(dimensionUi, /data-dimension-status=\{feedback\.status \|\| "idle"\}/);
+    const dimensionSaves = [...dimensionUi.matchAll(/api\.saveElryanCollectionDimension\(\{[\s\S]*?\}\)/g)];
+    assert.equal(dimensionSaves.length, 2);
+    for (const save of dimensionSaves) {
+      assert.match(save[0], /environment: activeEnvironment/);
+      assert.equal(save[0].includes('environment: "staging"'), false);
+    }
+    const i18n = read("client/src/i18n.js");
+    assert.equal(i18n.includes("Rules saved here stay Staging-only"), false);
+    assert.match(i18n, /Rules saved here are stored for Production and are inherited by eligible products in Production previews/);
   });
 });
