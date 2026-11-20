@@ -70,9 +70,11 @@ import {
 } from "../services/elryanCollectionDimensions.js";
 import {
   getElryanSyncAllStatus,
+  listElryanProductionSelection,
   pauseElryanSyncAll,
   resumeElryanSyncAll,
   runElryanSyncPreview,
+  sendElryanProductionSelection,
   startElryanSyncAll,
   stopElryanSyncAll,
 } from "../services/elryanSyncAll.js";
@@ -817,6 +819,35 @@ elryanConnectionRouter.post("/platforms/elryan/sync-all/stop", async (_req, res)
     res.json(assertNoElryanSecretLeak(await stopElryanSyncAll(), ""));
   } catch (err) {
     fail(res, err, "Failed to stop Elryan preview");
+  }
+});
+
+elryanConnectionRouter.get("/platforms/elryan/sync-all/production-selection", async (_req, res) => {
+  try {
+    res.json(assertNoElryanSecretLeak(await listElryanProductionSelection(), ""));
+  } catch (err) {
+    fail(res, err, "Failed to load the Elryan Production selection");
+  }
+});
+
+elryanConnectionRouter.post("/platforms/elryan/sync-all/production-selection/send", async (req, res) => {
+  try {
+    const result = assertNoElryanSecretLeak(
+      await sendElryanProductionSelection({
+        previewId: req.body?.previewId,
+        products: req.body?.products,
+        confirm: req.body?.confirm === true,
+      }),
+      ""
+    );
+    const status = Array.isArray(result.results)
+      ? 200
+      : result.code === "writes_disabled" || result.code === "writes_gated"
+        ? 403
+        : 409;
+    res.status(status).json(result);
+  } catch (err) {
+    fail(res, err, "Failed to send the selected Elryan Production products");
   }
 });
 

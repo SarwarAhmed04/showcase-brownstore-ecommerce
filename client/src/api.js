@@ -672,6 +672,12 @@ export const api = {
     request("/api/admin/platforms/elryan/sync-all/resume", { method: "POST", body: "{}" }),
   elryanSyncAllStop: () =>
     request("/api/admin/platforms/elryan/sync-all/stop", { method: "POST", body: "{}" }),
+  elryanProductionSelection: () => request("/api/admin/platforms/elryan/sync-all/production-selection"),
+  elryanSendProductionSelection: (body) =>
+    request("/api/admin/platforms/elryan/sync-all/production-selection/send", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   elryanCollectionDimensions: (params = {}) => {
     const qs = new URLSearchParams(
       Object.fromEntries(Object.entries(params).filter(([, value]) => value !== "" && value != null))

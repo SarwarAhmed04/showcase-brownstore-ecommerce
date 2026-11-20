@@ -1085,7 +1085,7 @@ function productionListingResult(skuState) {
   );
 }
 
-function productionAccountKey(config) {
+export function productionAccountKey(config) {
   return `production:${String(config?.baseUrl || "").trim()}`;
 }
 
@@ -1216,7 +1216,7 @@ async function settleProductionSkuReservation(accountKey, sku, fields) {
   );
 }
 
-async function reconcileProductionTimeout(productId, sku, apiKey, message, accountKey) {
+async function reconcileProductionTimeout(productId, sku, apiKey, message, accountKey, { holdAmbiguous = false } = {}) {
   let followUp = null;
   try {
     followUp = await elryanSkuExists(sku);
@@ -1266,22 +1266,29 @@ async function reconcileProductionTimeout(productId, sku, apiKey, message, accou
     }
     return productionListingResult(followUp);
   }
-  const text = `${message} The SKU was checked again and is still available. No second create was sent in this request.`;
+  const text = holdAmbiguous
+    ? `${message} The create was not confirmed. No second create was sent.`
+    : `${message} The SKU was checked again and is still available. No second create was sent in this request.`;
   await settleProductionAttempt(productId, {
-    status: "failed",
-    errorCode: "create_timeout",
+    status: holdAmbiguous ? "uncertain" : "failed",
+    errorCode: holdAmbiguous ? "create_uncertain" : "create_timeout",
     errorMessage: sanitizeElryanText(text, [apiKey]),
     httpStatus: 0,
     published: false,
   });
   await settleProductionSkuReservation(accountKey, sku, {
-    status: "failed",
+    status: holdAmbiguous ? "uncertain" : "failed",
     productId: String(productId || ""),
     elryanProductId: "",
-    errorCode: "create_timeout",
+    errorCode: holdAmbiguous ? "create_uncertain" : "create_timeout",
     errorMessage: sanitizeElryanText(text, [apiKey]),
   });
-  return blockedSend("create_timeout", text, { httpStatus: 504 });
+  return blockedSend(holdAmbiguous ? "create_uncertain" : "create_timeout", text, {
+    httpStatus: holdAmbiguous ? 409 : 504,
+    ...(holdAmbiguous
+      ? { reservation: { status: "uncertain", productId: String(productId || ""), sku, elryanProductId: "", listingStatus: "" } }
+      : {}),
+  });
 }
 
 /**
@@ -1312,10 +1319,6 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
     return blockedSend("send_in_progress", "A Production create for this product is already running. No second create was sent.");
   }
   inflightSends.add(localKey);
-  let reservationHeld = false;
-  let createStarted = false;
-  let accountKey = "";
-  let normalizedSku = "";
   try {
     const config = await resolveElryanConfig();
     if (config.environment !== "production" || config.baseUrl !== ELRYAN_ENVIRONMENTS.production.baseUrl) {
@@ -1379,34 +1382,88 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
       });
     }
 
-    accountKey = productionAccountKey(config);
-    normalizedSku = normalizeElryanSkuCandidate(sku);
+    return await executeElryanProductionCreate({
+      productId: assembled.productKey,
+      sku,
+      payload: assembled.payload,
+      hash: assembled.hash,
+      apiKey: config.apiKey,
+      accountKey: productionAccountKey(config),
+      allowUncertainRetry: true,
+      lockAlreadyHeld: true,
+      beforeCreate: async () => {
+        const consumed = await ElryanSyncOnePreview.findOneAndUpdate(
+          {
+            _id: preview._id,
+            consumedAt: null,
+            expiresAt: { $gt: new Date() },
+            payloadHash: assembled.hash,
+            readiness: ELRYAN_READINESS.READY,
+          },
+          { $set: { consumedAt: new Date() } }
+        );
+        if (!consumed) {
+          return blockedSend("preview_used", "This preview token was already used. No product was sent.");
+        }
+        return null;
+      },
+    });
+  } finally {
+    inflightSends.delete(localKey);
+  }
+}
+
+/**
+ * Shared Production POST /v1/products.
+ * Reserves the account SKU, rechecks the listing, and does not retry an uncertain create.
+ */
+export async function executeElryanProductionCreate({
+  productId,
+  sku,
+  payload,
+  hash,
+  apiKey,
+  accountKey,
+  beforeCreate = null,
+  allowUncertainRetry = true,
+  holdAmbiguous = false,
+  lockAlreadyHeld = false,
+} = {}) {
+  const localKey = `production:${String(productId || "")}`;
+  if (!lockAlreadyHeld) {
+    if (inflightSends.has(localKey)) {
+      return blockedSend("send_in_progress", "A Production create for this product is already running. No second create was sent.");
+    }
+    inflightSends.add(localKey);
+  }
+  let reservationHeld = false;
+  let createStarted = false;
+  const normalizedSku = normalizeElryanSkuCandidate(sku);
+  try {
     const acquired = await acquireProductionSkuReservation({
       accountKey,
       sku: normalizedSku,
-      productId: assembled.productKey,
+      productId,
     });
     if (!acquired.ok) {
-      if (!acquired.needsReconciliation) return reservationBlocked(acquired.reservation);
+      if (!(allowUncertainRetry && acquired.needsReconciliation)) {
+        return reservationBlocked(acquired.reservation);
+      }
       const reconciled = await reconcileUncertainProductionSku({
         accountKey,
         sku: normalizedSku,
-        productId: assembled.productKey,
-        apiKey: config.apiKey,
+        productId,
+        apiKey,
       });
       if (!reconciled.ok) return reconciled.response;
     }
     reservationHeld = true;
 
-    const listingCheck = await inspectProductionListing({
-      productId: assembled.productKey,
-      sku,
-      apiKey: config.apiKey,
-    });
+    const listingCheck = await inspectProductionListing({ productId, sku, apiKey });
     if (listingCheck.state !== "absent") {
       await settleProductionSkuReservation(accountKey, normalizedSku, {
         status: "failed",
-        productId: assembled.productKey,
+        productId: String(productId || ""),
         elryanProductId: "",
         errorCode: listingCheck.code,
         errorMessage: listingCheck.message,
@@ -1421,14 +1478,14 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
     }
 
     const claim = await claimProductionAttempt({
-      productId: assembled.productKey,
+      productId: String(productId || ""),
       sku,
-      hash: assembled.hash,
+      hash,
     });
     if (!claim.ok) {
       await settleProductionSkuReservation(accountKey, normalizedSku, {
         status: "failed",
-        productId: assembled.productKey,
+        productId: String(productId || ""),
         errorCode: claim.code,
         errorMessage: "No product was sent.",
       });
@@ -1439,64 +1496,58 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
       });
     }
 
-    const consumed = await ElryanSyncOnePreview.findOneAndUpdate(
-      {
-        _id: preview._id,
-        consumedAt: null,
-        expiresAt: { $gt: new Date() },
-        payloadHash: assembled.hash,
-        readiness: ELRYAN_READINESS.READY,
-      },
-      { $set: { consumedAt: new Date() } }
-    );
-    if (!consumed) {
-      await settleProductionAttempt(assembled.productKey, {
-        status: "failed",
-        errorCode: "preview_used",
-        errorMessage: "The preview token was no longer usable.",
-      });
-      await settleProductionSkuReservation(accountKey, normalizedSku, {
-        status: "failed",
-        productId: assembled.productKey,
-        errorCode: "preview_used",
-        errorMessage: "The preview token was no longer usable.",
-      });
-      reservationHeld = false;
-      return blockedSend("preview_used", "This preview token was already used. No product was sent.");
+    if (beforeCreate) {
+      const gate = await beforeCreate();
+      if (gate) {
+        await settleProductionAttempt(String(productId || ""), {
+          status: "failed",
+          errorCode: gate.code || "preview_used",
+          errorMessage: gate.code === "preview_used" ? "The preview token was no longer usable." : gate.message,
+        });
+        await settleProductionSkuReservation(accountKey, normalizedSku, {
+          status: "failed",
+          productId: String(productId || ""),
+          errorCode: gate.code || "preview_used",
+          errorMessage: gate.code === "preview_used" ? "The preview token was no longer usable." : gate.message,
+        });
+        reservationHeld = false;
+        return gate;
+      }
     }
 
     let result;
     createStarted = true;
     try {
-      result = await elryanCreateProductionProduct(assembled.payload);
+      result = await elryanCreateProductionProduct(payload);
     } catch (err) {
       const timedOut = err?.code === "timeout" || err?.code === "network_error";
       if (timedOut) {
         reservationHeld = false;
         return reconcileProductionTimeout(
-          assembled.productKey,
+          String(productId || ""),
           sku,
-          config.apiKey,
-          sanitizeElryanText(err?.message || "Elryan create timed out.", [config.apiKey]),
-          accountKey
+          apiKey,
+          sanitizeElryanText(err?.message || "Elryan create timed out.", [apiKey]),
+          accountKey,
+          { holdAmbiguous }
         );
       }
-      await settleProductionAttempt(assembled.productKey, {
+      await settleProductionAttempt(String(productId || ""), {
         status: "uncertain",
         errorCode: "create_uncertain",
-        errorMessage: sanitizeElryanText(err?.message || "Elryan did not return a create response.", [config.apiKey]),
+        errorMessage: sanitizeElryanText(err?.message || "Elryan did not return a create response.", [apiKey]),
         published: false,
       });
       await settleProductionSkuReservation(accountKey, normalizedSku, {
         status: "uncertain",
-        productId: assembled.productKey,
+        productId: String(productId || ""),
         errorCode: "create_uncertain",
         errorMessage: "Elryan did not return a create response. No second create was sent.",
       });
       reservationHeld = false;
       return blockedSend("create_uncertain", "Elryan did not return a create response. No second create was sent.", {
         httpStatus: 409,
-        reservation: reservationView({ status: "uncertain", productId: assembled.productKey, sku: normalizedSku }),
+        reservation: reservationView({ status: "uncertain", productId: String(productId || ""), sku: normalizedSku }),
       });
     }
 
@@ -1505,13 +1556,13 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
     if (result.ok && publication.elryanProductId) {
       const listingStatus = publication.reviewStatus || (publication.published ? "published" : "in_review");
       await ElryanConfirmedSend.findOneAndUpdate(
-        { environment: "production", productId: assembled.productKey },
+        { environment: "production", productId: String(productId || "") },
         {
           $setOnInsert: {
             environment: "production",
-            productId: assembled.productKey,
+            productId: String(productId || ""),
             sku,
-            payloadHash: assembled.hash,
+            payloadHash: hash,
             elryanProductId: publication.elryanProductId,
             httpStatus: result.httpStatus,
             published: publication.published === true,
@@ -1520,7 +1571,7 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
         },
         { upsert: true }
       );
-      await settleProductionAttempt(assembled.productKey, {
+      await settleProductionAttempt(String(productId || ""), {
         status: "succeeded",
         elryanProductId: publication.elryanProductId,
         httpStatus: result.httpStatus,
@@ -1530,7 +1581,7 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
       });
       await settleProductionSkuReservation(accountKey, normalizedSku, {
         status: "succeeded",
-        productId: assembled.productKey,
+        productId: String(productId || ""),
         elryanProductId: publication.elryanProductId,
         listingStatus,
         errorCode: "",
@@ -1549,23 +1600,24 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
         listingStatus,
         sku,
         environment: "production",
-        payloadHash: assembled.hash,
+        payloadHash: hash,
       };
     }
 
     if (!definiteClientError) {
       reservationHeld = false;
       return reconcileProductionTimeout(
-        assembled.productKey,
+        String(productId || ""),
         sku,
-        config.apiKey,
+        apiKey,
         "Elryan did not return a confirmed product id.",
-        accountKey
+        accountKey,
+        { holdAmbiguous }
       );
     }
 
-    const message = apiErrorMessage(result.json, config.apiKey);
-    await settleProductionAttempt(assembled.productKey, {
+    const message = apiErrorMessage(result.json, apiKey);
+    await settleProductionAttempt(String(productId || ""), {
       status: "failed",
       httpStatus: result.httpStatus,
       published: false,
@@ -1574,7 +1626,7 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
     });
     await settleProductionSkuReservation(accountKey, normalizedSku, {
       status: "failed",
-      productId: assembled.productKey,
+      productId: String(productId || ""),
       elryanProductId: "",
       errorCode: "elryan_rejected",
       errorMessage: message,
@@ -1591,7 +1643,7 @@ export async function sendElryanProductionOne({ productId, confirm, previewToken
           : "The Production create reservation was released because no listing was created.",
       });
     }
-    inflightSends.delete(localKey);
+    if (!lockAlreadyHeld) inflightSends.delete(localKey);
   }
 }
 

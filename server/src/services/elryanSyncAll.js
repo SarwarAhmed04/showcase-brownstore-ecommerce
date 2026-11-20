@@ -15,6 +15,7 @@ import {
   reconcileElryanBatchResult,
 } from "../utils/elryanBatch.js";
 import {
+  ELRYAN_ENVIRONMENTS,
   ELRYAN_READINESS,
   ELRYAN_PATHS,
   elryanLiveProductWritesEnabled,
@@ -53,6 +54,7 @@ import { brownCollectionIdentity, resolveElryanDimensions } from "../utils/elrya
 import { ELRYAN_FIRST_STAGING_CREATE_SKU, elryanDimensionBlockers } from "../utils/elryanStagingGate.js";
 import { ElryanClientError, elryanRequest } from "./elryanClient.js";
 import { resolveElryanConfig } from "./elryanConnection.js";
+import { executeElryanProductionCreate, productionAccountKey } from "./elryanSyncOne.js";
 import {
   loadAllElryanCollectionDimensionRules,
   loadElryanDimensionInputs,
@@ -476,6 +478,8 @@ export async function evaluateElryanProductForSync(doc, context, { origin = "", 
     readiness: validation.readiness,
     dimensionSource: dimensions.source,
     dimensionReason: dimensions.reason,
+    payload,
+    quantity: qty,
     batchItem: {
       sku: payload.sku,
       brand: brand?.elryanLabel || brand?.brownLabel || "",
@@ -1079,4 +1083,319 @@ export async function startElryanSyncAll({ confirm, strategy } = {}) {
         ? "Elryan saved part of the batch. Failed SKUs were recorded and were not retried."
         : "The Staging batch finished.",
   };
+}
+
+const PRODUCTION_SELECTION_LIMIT = 3;
+const AMBIGUOUS_CREATE = new Set(["create_uncertain", "send_uncertain", "create_timeout"]);
+const selectionLocks = new Set();
+
+function productLabel(doc) {
+  const resolved = toResolvedProduct(doc);
+  const name = resolved?.name;
+  if (typeof name === "string") return name.trim();
+  return String(name?.en || name?.ku || name?.ar || "").trim();
+}
+
+function productionAccountReady(config) {
+  return (
+    config?.environment === "production" &&
+    config?.baseUrl === ELRYAN_ENVIRONMENTS.production.baseUrl &&
+    Boolean(config?.apiKey)
+  );
+}
+
+async function quoteProductionRows(job, productIds) {
+  const ids = [...new Set(productIds.map((id) => String(id || "")).filter((id) => mongoose.isValidObjectId(id)))];
+  const docs = ids.length ? await Product.find({ _id: { $in: ids } }).lean() : [];
+  const context = await prepareContext("production");
+  context.origin = job?.origin || "";
+  const dimensionInputs = await loadElryanDimensionInputs("production", docs, context.collectionDimensions);
+  const evaluated = [];
+  for (const doc of docs) {
+    const id = String(doc._id);
+    evaluated.push(
+      await evaluateElryanProductForSync(doc, context, {
+        origin: job?.origin || "",
+        dimensionRow: dimensionInputs.checks.get(id) || null,
+        excluded: dimensionInputs.exclusions.has(id),
+        productOverride: null,
+      })
+    );
+  }
+  const classified = await classifyChanged("production", evaluated);
+  const docsById = new Map(docs.map((doc) => [String(doc._id), doc]));
+  const quotes = new Map();
+  for (const row of classified) {
+    const price = Number(row.payload?.price);
+    quotes.set(row.productId, {
+      productId: row.productId,
+      name: productLabel(docsById.get(row.productId)),
+      sku: String(row.sku || ""),
+      price: Number.isFinite(price) ? price : null,
+      stock: Number.isInteger(row.quantity) ? row.quantity : null,
+      status: row.status,
+      changeType: row.changeType || "",
+      payloadHash: row.payloadHash || "",
+      payload: row.payload || null,
+    });
+  }
+  return quotes;
+}
+
+function publicQuote(quote) {
+  return {
+    productId: quote.productId,
+    name: quote.name,
+    sku: quote.sku,
+    price: quote.price,
+    stock: quote.stock,
+  };
+}
+
+/**
+ * READ — new READY rows from the latest completed Production preview.
+ * Nothing is sent.
+ */
+export async function listElryanProductionSelection() {
+  const config = await resolveElryanConfig();
+  if (!productionAccountReady(config)) {
+    return {
+      ok: false,
+      classification: "READ",
+      code: "production_required",
+      previewId: "",
+      limit: PRODUCTION_SELECTION_LIMIT,
+      candidates: [],
+      message: "Choose products from a completed Production preview. The active connection is not Production.",
+    };
+  }
+  const latest = await ElryanSyncJob.findOne({ environment: "production" }).sort({ createdAt: -1 });
+  if (!latest || latest.status !== "preview") {
+    return {
+      ok: false,
+      classification: "READ",
+      code: "preview_required",
+      previewId: latest ? String(latest._id) : "",
+      limit: PRODUCTION_SELECTION_LIMIT,
+      candidates: [],
+      message: "Finish a Production preview before choosing products. Nothing is sent.",
+    };
+  }
+  const stored = await ElryanSyncProductResult.find({
+    jobId: latest._id,
+    status: "READY",
+    changeType: "new",
+  })
+    .sort({ sku: 1 })
+    .lean();
+  const quotes = await quoteProductionRows(latest, stored.map((row) => row.productId));
+  const candidates = [];
+  for (const row of stored) {
+    const quote = quotes.get(row.productId);
+    if (!quote || quote.status !== "READY" || quote.changeType !== "new") continue;
+    if (quote.payloadHash !== row.payloadHash || quote.sku !== row.sku) continue;
+    if (!(quote.price > 0) || quote.stock == null) continue;
+    candidates.push(publicQuote(quote));
+  }
+  return {
+    ok: true,
+    classification: "READ",
+    code: "ready",
+    previewId: String(latest._id),
+    environment: "production",
+    limit: PRODUCTION_SELECTION_LIMIT,
+    candidates,
+    message: candidates.length
+      ? "These new READY products can be reviewed before a Production create. Existing listings are not updated."
+      : "This Production preview has no new READY products to send.",
+  };
+}
+
+function parseProductionSelection(products) {
+  if (!Array.isArray(products) || products.length < 1) {
+    return { error: blockedBatch("nothing_selected", "Choose at least one new READY product. No product was sent.") };
+  }
+  if (products.length > PRODUCTION_SELECTION_LIMIT) {
+    return {
+      error: blockedBatch("too_many", "This pilot sends at most 3 products. No product was sent."),
+    };
+  }
+  const seen = new Set();
+  const rows = [];
+  for (const item of products) {
+    const productId = String(item?.productId || "").trim();
+    const sku = String(item?.sku || "").trim();
+    const price = Number(item?.price);
+    const stock = Number(item?.stock);
+    if (!mongoose.isValidObjectId(productId) || !sku || !Number.isFinite(price) || !Number.isInteger(stock) || stock < 0) {
+      return { error: blockedBatch("selection_invalid", "The selected rows are incomplete. No product was sent.") };
+    }
+    if (seen.has(productId)) {
+      return { error: blockedBatch("selection_invalid", "A product was selected more than once. No product was sent.") };
+    }
+    seen.add(productId);
+    rows.push({ productId, sku, price, stock });
+  }
+  return { rows };
+}
+
+/**
+ * WRITE — create up to 3 new READY products from one completed Production preview.
+ * Full sync, changed sync, and updates to existing listings stay closed.
+ */
+export async function sendElryanProductionSelection({ previewId, products, confirm } = {}) {
+  if (!elryanProductWritesEnabled()) {
+    return blockedBatch(
+      "writes_disabled",
+      "Elryan product publishing is disabled. Both write flags must be true before a Production create. No product was sent."
+    );
+  }
+  if (!elryanLiveProductWritesEnabled()) {
+    return blockedBatch(
+      "writes_gated",
+      "Live Elryan product writes require both write flags. No product was sent."
+    );
+  }
+  if (confirm !== true) {
+    return blockedBatch("confirm_required", "Production selection requires explicit confirm=true. No product was sent.");
+  }
+  const config = await resolveElryanConfig();
+  if (!productionAccountReady(config)) {
+    return blockedBatch(
+      "production_required",
+      "Production sending requires the active Production connection. No product was sent."
+    );
+  }
+  const requestedId = String(previewId || "").trim();
+  if (!mongoose.isValidObjectId(requestedId)) {
+    return blockedBatch("stale_preview", "This Production preview is stale. No product was sent.");
+  }
+  const latest = await ElryanSyncJob.findOne({ environment: "production" }).sort({ createdAt: -1 });
+  if (!latest || latest.status !== "preview" || String(latest._id) !== requestedId) {
+    return blockedBatch(
+      "stale_preview",
+      "This Production preview is stale. Finish the current Production preview and choose the products again. No product was sent."
+    );
+  }
+  const parsed = parseProductionSelection(products);
+  if (parsed.error) return parsed.error;
+  const stored = await ElryanSyncProductResult.find({
+    jobId: latest._id,
+    productId: { $in: parsed.rows.map((row) => row.productId) },
+  }).lean();
+  const storedById = new Map(stored.map((row) => [row.productId, row]));
+  for (const row of parsed.rows) {
+    const saved = storedById.get(row.productId);
+    if (!saved) {
+      return blockedBatch("selection_not_in_preview", "A selected product is not on this Production preview. No product was sent.");
+    }
+    if (saved.changeType === "changed" || saved.changeType === "unchanged") {
+      return blockedBatch(
+        "updates_not_in_pilot",
+        "Updates to existing listings are outside this pilot. No product was sent."
+      );
+    }
+    if (saved.status !== "READY" || saved.changeType !== "new") {
+      return blockedBatch("selection_not_ready", "A selected product is not a new READY row. No product was sent.");
+    }
+  }
+
+  const lockKey = `production:${requestedId}`;
+  if (selectionLocks.has(lockKey)) {
+    return blockedBatch("send_in_progress", "A Production selection is already sending. No second create was sent.");
+  }
+  selectionLocks.add(lockKey);
+  try {
+    const quotes = await quoteProductionRows(latest, parsed.rows.map((row) => row.productId));
+    const ready = [];
+    for (const row of parsed.rows) {
+      const saved = storedById.get(row.productId);
+      const quote = quotes.get(row.productId);
+      if (!quote) {
+        return blockedBatch("stale_preview", "This Production preview is stale. No product was sent.");
+      }
+      if (quote.changeType === "changed" || quote.changeType === "unchanged") {
+        return blockedBatch(
+          "updates_not_in_pilot",
+          "Updates to existing listings are outside this pilot. No product was sent."
+        );
+      }
+      const sameConfirmation =
+        quote.status === "READY" &&
+        quote.changeType === "new" &&
+        quote.payloadHash === saved.payloadHash &&
+        quote.sku === saved.sku &&
+        quote.sku === row.sku &&
+        quote.price === row.price &&
+        quote.stock === row.stock &&
+        quote.payload;
+      if (!sameConfirmation) {
+        return blockedBatch(
+          "stale_preview",
+          "A selected product changed since this Production preview. No product was sent."
+        );
+      }
+      ready.push({ ...row, name: quote.name, payload: quote.payload, payloadHash: quote.payloadHash });
+    }
+
+    const results = [];
+    let stop = false;
+    for (const row of ready) {
+      if (stop) {
+        results.push({
+          ...publicQuote(row),
+          ok: false,
+          sent: false,
+          code: "not_sent",
+          message: "No product was sent because an earlier create in this selection was not confirmed.",
+          elryanProductId: "",
+          listingStatus: "",
+        });
+        continue;
+      }
+      const outcome = await executeElryanProductionCreate({
+        productId: row.productId,
+        sku: row.sku,
+        payload: row.payload,
+        hash: row.payloadHash,
+        apiKey: config.apiKey,
+        accountKey: productionAccountKey(config),
+        allowUncertainRetry: false,
+        holdAmbiguous: true,
+      });
+      const sent = outcome.ok === true && Boolean(outcome.elryanProductId);
+      results.push({
+        ...publicQuote(row),
+        ok: sent,
+        sent,
+        code: outcome.code || "",
+        message: outcome.message || "",
+        elryanProductId: outcome.elryanProductId || outcome.listing?.id || "",
+        listingStatus: outcome.listingStatus || outcome.listing?.status || "",
+      });
+      if (AMBIGUOUS_CREATE.has(outcome.code) || outcome.code === "send_in_progress") stop = true;
+    }
+    const sentToElryan = results.filter((row) => row.sent).length;
+    if (sentToElryan) {
+      latest.sentToElryan = (Number(latest.sentToElryan) || 0) + sentToElryan;
+      await latest.save();
+    }
+    const ambiguous = results.some((row) => AMBIGUOUS_CREATE.has(row.code));
+    return {
+      ok: sentToElryan === ready.length,
+      blocked: sentToElryan !== ready.length,
+      classification: "WRITE",
+      code: ambiguous ? "reconcile_required" : sentToElryan === ready.length ? "sent" : "partial",
+      previewId: requestedId,
+      sentToElryan,
+      results,
+      message: ambiguous
+        ? "A create was not confirmed. No further create was sent."
+        : sentToElryan
+          ? "The selected Production creates finished. Existing listings were not updated."
+          : "No selected product was created.",
+    };
+  } finally {
+    selectionLocks.delete(lockKey);
+  }
 }
