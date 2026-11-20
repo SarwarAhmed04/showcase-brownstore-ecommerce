@@ -141,6 +141,10 @@ async function start() {
   await connectDatabase();
   await seedAdmin();
   await seedPartners();
+  const { resumeElryanProductionSendAll } = await import("./services/elryanSyncAll.js");
+  resumeElryanProductionSendAll().catch((err) => {
+    console.error("Failed to resume Elryan Production send-all", err?.message || err);
+  });
 
   app.listen(port, "0.0.0.0", () => {
     console.log(`BrownStore listening on port ${port}`);

@@ -11,6 +11,7 @@ import { adminRouter } from "./routes/admin.js";
 import { ElryanCategoryCatalogSnapshot } from "./models/ElryanCategoryCatalogSnapshot.js";
 import { ElryanCollectionDimension } from "./models/ElryanCollectionDimension.js";
 import { ElryanConfirmedSend } from "./models/ElryanConfirmedSend.js";
+import { ElryanProductionSendAllJob } from "./models/ElryanProductionSendAllJob.js";
 import { ElryanConnection } from "./models/ElryanConnection.js";
 import { ElryanProductionSkuReservation } from "./models/ElryanProductionSkuReservation.js";
 import { ElryanSyncJob } from "./models/ElryanSyncJob.js";
@@ -22,11 +23,18 @@ import { Product } from "./models/Product.js";
 import { User } from "./models/User.js";
 import { setElryanFetch } from "./services/elryanClient.js";
 import {
+  elryanProductionSendAllActiveForTests,
+  getElryanProductionSendAll,
   getElryanSyncAllStatus,
   listElryanProductionSelection,
   resetElryanSyncRuntimeForTests,
+  resumeElryanProductionSendAll,
   runElryanSyncPreview,
   sendElryanProductionSelection,
+  setElryanSendAllBatchObserverForTests,
+  setElryanSendAllRowLimitForTests,
+  setElryanSendAllSleepForTests,
+  startElryanProductionSendAll,
 } from "./services/elryanSyncAll.js";
 import { encryptApiKey } from "./utils/partnerAuth.js";
 
@@ -170,6 +178,7 @@ describe("Elryan Production selected send", { concurrency: 1 }, () => {
 
   beforeEach(async () => {
     createMode = "";
+    setElryanSendAllRowLimitForTests(0);
     resetElryanSyncRuntimeForTests();
     installFetch();
     delete process.env.ELRYAN_PRODUCT_WRITES_ENABLED;
@@ -183,6 +192,7 @@ describe("Elryan Production selected send", { concurrency: 1 }, () => {
       ElryanSyncJob.deleteMany({}),
       ElryanSyncProductResult.deleteMany({}),
       ElryanConfirmedSend.deleteMany({}),
+      ElryanProductionSendAllJob.deleteMany({}),
       ElryanProductionSkuReservation.deleteMany({}),
       PlatformTaxonomyConfig.deleteMany({}),
     ]);
@@ -554,4 +564,244 @@ describe("Elryan Production selected send", { concurrency: 1 }, () => {
       installFetch();
     }
   });
+
+  it("sends every READY / NEW row across pages, resumes after a restart, and ignores a repeated confirmation", async () => {
+    await Product.deleteMany({});
+    const total = 55;
+    await Product.create(
+      Array.from({ length: total }, (_, index) =>
+        productShape({
+          ibsherId: `all-${index}`,
+          itemCode: `ALL-${String(index).padStart(3, "0")}`,
+          name: `All ${index}`,
+        })
+      )
+    );
+    await runElryanSyncPreview({ strategy: "full" });
+    const started = Date.now();
+    let done = null;
+    while (Date.now() - started < 30000) {
+      done = await getElryanSyncAllStatus();
+      if (done.job?.status === "preview" && done.job?.finishedAt) break;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    assert.equal(done.job?.status, "preview");
+    const listed = await listElryanProductionSelection({ page: 1, pageSize: 50 });
+    assert.equal(listed.eligibleCount, total);
+    assert.equal(listed.total, total);
+    assert.equal(listed.pages, 2);
+    assert.equal(listed.candidates.length, 50);
+    const page2 = await listElryanProductionSelection({ page: 2, pageSize: 50 });
+    assert.equal(page2.candidates.length, 5);
+    assert.notEqual(page2.candidates[0].sku, listed.candidates[0].sku);
+
+    const heldBack = await ElryanSyncProductResult.findOne({ jobId: done.job.id, sku: "ALL-054" }).lean();
+    await ElryanConfirmedSend.create({
+      environment: "production",
+      productId: heldBack.productId,
+      sku: heldBack.sku,
+      payloadHash: "different-hash",
+      httpStatus: 201,
+      confirmedAt: new Date(),
+    });
+
+    enableWrites();
+    const mismatch = await startElryanProductionSendAll({
+      previewId: listed.previewId,
+      confirm: true,
+      expectedCount: 50,
+    });
+    assert.equal(mismatch.code, "count_mismatch");
+    assert.equal(mismatch.eligibleCount, total);
+    assert.equal(posts.length, 0);
+
+    setElryanSendAllRowLimitForTests(8);
+    const startedJob = await startElryanProductionSendAll({
+      previewId: listed.previewId,
+      confirm: true,
+      expectedCount: listed.eligibleCount,
+    });
+    assert.equal(startedJob.code, "started");
+    assert.equal(startedJob.sendAll.total, total);
+
+    const interrupted = await waitForSendAll(
+      listed.previewId,
+      (status) => status.sendAll?.processed >= 8 && elryanProductionSendAllActiveForTests() === 0
+    );
+    assert.equal(interrupted.sendAll.status, "running");
+    const interruptedPosts = posts.length;
+    assert.equal(interruptedPosts, 8);
+    assert.equal(posts.some((body) => body.sku === "ALL-054"), false);
+
+    resetElryanSyncRuntimeForTests();
+    await resumeElryanProductionSendAll();
+    await waitForSendAll(
+      listed.previewId,
+      () => elryanProductionSendAllActiveForTests() === 0
+    );
+    assert.equal(posts.length, interruptedPosts);
+
+    setElryanSendAllRowLimitForTests(0);
+    await resumeElryanProductionSendAll();
+    const finished = await waitForSendAll(
+      listed.previewId,
+      (status) => status.sendAll?.status === "completed",
+      30000
+    );
+    assert.equal(finished.sendAll.processed, total);
+    assert.equal(finished.sendAll.sent, total - 1);
+    assert.equal(finished.sendAll.skipped, 1);
+    const skus = posts.map((body) => body.sku);
+    assert.equal(new Set(skus).size, skus.length);
+    assert.equal(skus.length, total - 1);
+    assert.equal(skus.includes("ALL-054"), false);
+    assert.equal(posts.some((body) => Array.isArray(body.products)), false);
+
+    const again = await startElryanProductionSendAll({
+      previewId: listed.previewId,
+      confirm: true,
+      expectedCount: listed.eligibleCount,
+    });
+    assert.equal(again.code, "already_finished");
+    assert.equal(posts.length, total - 1);
+    const held = await ElryanSyncProductResult.findOne({ sku: "ALL-054" }).lean();
+    assert.equal(held.sendOutcome, "skipped");
+    assert.equal(held.sendErrors[0].code, "updates_not_in_pilot");
+  });
+
+  it("confirms 28469 READY / NEW rows, starts promptly, and backs off a 429 without a duplicate create", async () => {
+    await Product.deleteMany({});
+    const readyCount = 10;
+    await Product.create(
+      Array.from({ length: readyCount }, (_, index) =>
+        productShape({
+          ibsherId: `rate-${index}`,
+          itemCode: `ALL-${String(index).padStart(6, "0")}`,
+          name: `Rate ${index}`,
+        })
+      )
+    );
+    await runElryanSyncPreview({ strategy: "full" });
+    const startedPreview = Date.now();
+    let done = null;
+    while (Date.now() - startedPreview < 20000) {
+      done = await getElryanSyncAllStatus();
+      if (done.job?.status === "preview" && done.job?.finishedAt) break;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    assert.equal(done.job?.newCount, readyCount);
+    const extra = 28469 - readyCount;
+    const extras = [];
+    for (let index = readyCount; index < 28469; index += 1) {
+      extras.push({
+        jobId: done.job.id,
+        environment: "production",
+        productId: new mongoose.Types.ObjectId().toString(),
+        sku: `ALL-${String(index).padStart(6, "0")}`,
+        status: "READY",
+        changeType: "new",
+        payloadHash: "saved-preview-hash",
+      });
+    }
+    for (let offset = 0; offset < extras.length; offset += 2000) {
+      await ElryanSyncProductResult.insertMany(extras.slice(offset, offset + 2000), { ordered: false });
+    }
+
+    const listed = await listElryanProductionSelection({ page: 1, pageSize: 50 });
+    const lastPage = await listElryanProductionSelection({ page: listed.pages, pageSize: 50 });
+    assert.equal(listed.eligibleCount, 28469);
+    assert.equal(listed.total, 28469);
+    assert.equal(listed.pages, Math.ceil(28469 / 50));
+    assert.equal(listed.candidates.length, 50);
+    assert.notEqual(lastPage.candidates[0].sku, listed.candidates[0].sku);
+    assert.equal(lastPage.page, listed.pages);
+
+    const creates = [];
+    const waits = [];
+    const batches = [];
+    let limitedSku = "";
+    setElryanFetch(async (url, options = {}) => {
+      const method = String(options.method || "GET").toUpperCase();
+      const target = String(url);
+      assert.equal(target.includes("staging-marketplace-api.elryan.com"), false);
+      if (method === "POST") {
+        assert.match(target, /\/v1\/products$/);
+        const body = JSON.parse(options.body || "{}");
+        const rateLimit = !limitedSku;
+        if (rateLimit) limitedSku = body.sku;
+        creates.push({ sku: body.sku, status: rateLimit ? 429 : 201 });
+        if (rateLimit) {
+          return {
+            status: 429,
+            headers: {
+              get(name) {
+                const key = String(name || "").toLowerCase();
+                if (key === "retry-after") return "2";
+                if (key === "content-type") return "application/json";
+                return "";
+              },
+            },
+            async text() {
+              return JSON.stringify({ message: "slow down" });
+            },
+          };
+        }
+        return mockResponse(201, { data: { id: `elr-${body.sku}`, sku: body.sku, status: "in_review" } });
+      }
+      if (target.includes("/sku-exists")) return mockResponse(200, { success: true, data: { available: true } });
+      if (target.includes("/v1/warranty")) {
+        return mockResponse(200, { success: true, data: [{ warranty_code: "W-STD", warranty_name: "Standard" }] });
+      }
+      if (target.includes("/v1/attribute-sets/category/")) {
+        return mockResponse(200, {
+          success: true,
+          data: { id: "as-1", attributes: [{ code: "plug_type", mandatory: true, values: [{ id: "5", name: "Two pin" }] }] },
+        });
+      }
+      return mockResponse(200, { success: true, data: [] });
+    });
+    setElryanSendAllSleepForTests(async (ms) => {
+      waits.push(ms);
+    });
+    setElryanSendAllBatchObserverForTests((size) => batches.push(size));
+    setElryanSendAllRowLimitForTests(1);
+    enableWrites();
+    const started = Date.now();
+    const job = await startElryanProductionSendAll({
+      previewId: listed.previewId,
+      confirm: true,
+      expectedCount: listed.eligibleCount,
+    });
+    const startMs = Date.now() - started;
+    assert.equal(job.code, "started");
+    assert.equal(job.sendAll.total, 28469);
+    assert.ok(startMs < 2000, `send-all start took ${startMs}ms`);
+
+    await waitForSendAll(
+      listed.previewId,
+      (status) => status.sendAll?.processed >= 1 && elryanProductionSendAllActiveForTests() === 0
+    );
+    assert.ok(batches.length >= 1);
+    assert.ok(batches.every((size) => size > 0 && size <= 10));
+    assert.equal(batches[0], 10);
+    assert.deepEqual(waits, [2000]);
+    const limitedCreates = creates.filter((row) => row.sku === limitedSku);
+    assert.deepEqual(limitedCreates.map((row) => row.status), [429, 201]);
+    assert.equal(creates.filter((row) => row.status === 201).length, 1);
+    const finished = await getElryanProductionSendAll(listed.previewId);
+    assert.equal(finished.sendAll.sent, 1);
+    assert.equal(finished.sendAll.processed, 1);
+    assert.equal(extra > 28000, true);
+  });
 });
+
+async function waitForSendAll(previewId, predicate, timeout = 15000) {
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < timeout) {
+    last = await getElryanProductionSendAll(previewId);
+    if (predicate(last)) return last;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  throw new Error(`send-all did not reach the expected state ${JSON.stringify(last?.sendAll)} posts=${posts.length}`);
+}

@@ -1551,6 +1551,32 @@ export async function executeElryanProductionCreate({
       });
     }
 
+    if (result.httpStatus === 429) {
+      await settleProductionAttempt(String(productId || ""), {
+        status: "failed",
+        httpStatus: 429,
+        published: false,
+        errorCode: "rate_limited",
+        errorMessage: "Elryan rate limited the create. No duplicate create was sent.",
+      });
+      await settleProductionSkuReservation(accountKey, normalizedSku, {
+        status: "failed",
+        productId: String(productId || ""),
+        elryanProductId: "",
+        errorCode: "rate_limited",
+        errorMessage: "Elryan rate limited the create.",
+      });
+      reservationHeld = false;
+      return {
+        ...blockedSend(
+          "rate_limited",
+          "Elryan rate limited the create. The send waits and tries this product again. No duplicate create was sent.",
+          { httpStatus: 429 }
+        ),
+        retryAfter: result.retryAfter || "",
+      };
+    }
+
     const publication = elryanPublicationFromCreate(result.json);
     const definiteClientError = result.httpStatus >= 400 && result.httpStatus < 500 && result.httpStatus !== 409;
     if (result.ok && publication.elryanProductId) {

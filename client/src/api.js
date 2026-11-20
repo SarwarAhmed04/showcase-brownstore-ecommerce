@@ -681,6 +681,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  elryanProductionSendAll: (previewId) =>
+    request(
+      `/api/admin/platforms/elryan/sync-all/production-selection/send-all?previewId=${encodeURIComponent(previewId || "")}`
+    ),
+  elryanStartProductionSendAll: (body) =>
+    request("/api/admin/platforms/elryan/sync-all/production-selection/send-all", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   elryanCollectionDimensions: (params = {}) => {
     const qs = new URLSearchParams(
       Object.fromEntries(Object.entries(params).filter(([, value]) => value !== "" && value != null))

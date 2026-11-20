@@ -3,6 +3,7 @@ import { Commission } from "../models/Commission.js";
 import { ElryanCategoryCatalogSnapshot } from "../models/ElryanCategoryCatalogSnapshot.js";
 import { ElryanConfirmedSend } from "../models/ElryanConfirmedSend.js";
 import { ElryanStagingProductOverride } from "../models/ElryanStagingProductOverride.js";
+import { ElryanProductionSendAllJob } from "../models/ElryanProductionSendAllJob.js";
 import { ElryanSyncJob } from "../models/ElryanSyncJob.js";
 import { ElryanSyncProductResult } from "../models/ElryanSyncProductResult.js";
 import { Product } from "../models/Product.js";
@@ -64,8 +65,12 @@ export const ELRYAN_SYNC_PREVIEW_BATCH = 25;
 
 const loopToken = new Map();
 const control = new Map();
+const sendAllLoops = new Map();
 let beforeBatch = null;
 let batchSizeOverride = 0;
+let sendAllRowLimit = 0;
+let sendAllSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let sendAllBatchObserver = null;
 
 export function setElryanSyncTestHook(fn) {
   beforeBatch = typeof fn === "function" ? fn : null;
@@ -75,11 +80,31 @@ export function setElryanSyncBatchSizeForTests(size) {
   batchSizeOverride = Number.isInteger(size) && size > 0 ? size : 0;
 }
 
+export function setElryanSendAllRowLimitForTests(limit) {
+  sendAllRowLimit = Number.isInteger(limit) && limit > 0 ? limit : 0;
+}
+
+export function setElryanSendAllSleepForTests(fn) {
+  sendAllSleep = typeof fn === "function" ? fn : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function setElryanSendAllBatchObserverForTests(fn) {
+  sendAllBatchObserver = typeof fn === "function" ? fn : null;
+}
+
+export function elryanProductionSendAllActiveForTests() {
+  return sendAllLoops.size;
+}
+
 export function resetElryanSyncRuntimeForTests() {
   loopToken.clear();
   control.clear();
+  sendAllLoops.clear();
+  selectionLocks.clear();
   beforeBatch = null;
   batchSizeOverride = 0;
+  sendAllSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  sendAllBatchObserver = null;
 }
 
 function batchSize() {
@@ -1262,10 +1287,336 @@ export async function listElryanProductionSelection(input = {}) {
     pageSize: requested.pageSize,
     total,
     pages,
+    eligibleCount: total,
     candidates,
+    sendAll: await publicProductionSendAll(latest._id),
     message: total
       ? "These new READY products can be reviewed before a Production create. Existing listings are not updated."
       : "This Production preview has no new READY products to send.",
+  };
+}
+
+const SEND_ALL_BATCH = 10;
+
+function publicProductionSendAllDoc(job) {
+  if (!job) return null;
+  return {
+    id: String(job._id),
+    previewId: String(job.previewId),
+    status: job.status,
+    total: job.total,
+    processed: job.processed,
+    sent: job.sent,
+    skipped: job.skipped,
+    failed: job.failed,
+    uncertain: job.uncertain,
+    finishedAt: job.finishedAt || null,
+  };
+}
+
+async function publicProductionSendAll(previewId) {
+  const job = await ElryanProductionSendAllJob.findOne({ previewId }).sort({ createdAt: -1 });
+  return publicProductionSendAllDoc(job);
+}
+
+function kickProductionSendAll(jobId) {
+  const id = String(jobId);
+  const token = (Number(sendAllLoops.get(id)) || 0) + 1;
+  sendAllLoops.set(id, token);
+  setImmediate(() => {
+    runProductionSendAllLoop(id, token).catch(async (err) => {
+      await ElryanProductionSendAllJob.findByIdAndUpdate(id, {
+        lastError: String(err?.message || "send_all_failed").slice(0, 300),
+      }).catch(() => {});
+    });
+  });
+}
+
+export async function resumeElryanProductionSendAll() {
+  const running = await ElryanProductionSendAllJob.find({ status: "running" }).sort({ createdAt: 1 });
+  for (const job of running) {
+    if (!sendAllLoops.has(String(job._id))) kickProductionSendAll(job._id);
+  }
+  return running.length;
+}
+
+async function refreshSendAllCounts(job, previewId) {
+  const filter = { jobId: previewId, status: "READY", changeType: "new" };
+  const [sent, skipped, failed, uncertain] = await Promise.all([
+    ElryanSyncProductResult.countDocuments({ ...filter, sendOutcome: "sent" }),
+    ElryanSyncProductResult.countDocuments({ ...filter, sendOutcome: "skipped" }),
+    ElryanSyncProductResult.countDocuments({ ...filter, sendOutcome: "failed" }),
+    ElryanSyncProductResult.countDocuments({ ...filter, sendOutcome: "uncertain" }),
+  ]);
+  job.sent = sent;
+  job.skipped = skipped;
+  job.failed = failed;
+  job.uncertain = uncertain;
+  job.processed = sent + skipped + failed + uncertain;
+  await job.save();
+}
+
+async function recordSendAllRow(row, outcome) {
+  const sent = outcome.ok === true && Boolean(outcome.elryanProductId);
+  const code = outcome.code || "";
+  const sendOutcome = sent
+    ? "sent"
+    : AMBIGUOUS_CREATE.has(code) || code === "send_in_progress"
+      ? "uncertain"
+      : code === "updates_not_in_pilot" || code === "stale_preview" || code === "selection_not_ready"
+        ? "skipped"
+        : "failed";
+  const updated = await ElryanSyncProductResult.updateOne(
+    { _id: row._id, sendOutcome: { $in: ["", null] } },
+    {
+      $set: {
+        sendOutcome,
+        sendErrors: [
+          {
+            code,
+            message: outcome.message || "",
+            elryanProductId: outcome.elryanProductId || outcome.listing?.id || "",
+            listingStatus: outcome.listingStatus || outcome.listing?.status || "",
+          },
+        ],
+      },
+    }
+  );
+  return { recorded: updated.modifiedCount === 1, sent, sendOutcome };
+}
+
+async function runProductionSendAllLoop(jobId, token) {
+  const job = await ElryanProductionSendAllJob.findById(jobId);
+  if (!job || job.status !== "running") return;
+  const previewId = String(job.previewId);
+  const lockKey = `production:${previewId}`;
+  selectionLocks.add(lockKey);
+  try {
+    const config = await resolveElryanConfig();
+    if (!productionAccountReady(config)) {
+      job.status = "blocked";
+      job.lastError = "production_required";
+      job.finishedAt = new Date();
+      await job.save();
+      return;
+    }
+    while (sendAllLoops.get(String(jobId)) === token) {
+      if (job.processed >= job.total) {
+        job.status = "completed";
+        job.finishedAt = new Date();
+        await job.save();
+        return;
+      }
+      const batch = await ElryanSyncProductResult.find({
+        jobId: job.previewId,
+        status: "READY",
+        changeType: "new",
+        sendOutcome: { $in: ["", null] },
+      })
+        .sort({ sku: 1, productId: 1 })
+        .limit(SEND_ALL_BATCH)
+        .lean();
+      if (!batch.length) {
+        job.status = "completed";
+        job.finishedAt = new Date();
+        await job.save();
+        return;
+      }
+      if (sendAllBatchObserver) sendAllBatchObserver(batch.length);
+      const preview = await ElryanSyncJob.findById(job.previewId);
+      const quotes = await quoteProductionRows(preview, batch.map((row) => row.productId));
+      let batchSent = 0;
+      for (const row of batch) {
+        if (sendAllLoops.get(String(jobId)) !== token) return;
+        if (job.processed >= job.total) break;
+        if (sendAllRowLimit && job.processed >= sendAllRowLimit) return;
+        const quote = quotes.get(row.productId);
+        let outcome;
+        if (!quote) {
+          outcome = { ok: false, code: "stale_preview", message: "This Production preview row could not be rechecked. No product was sent." };
+        } else if (quote.changeType === "changed" || quote.changeType === "unchanged") {
+          outcome = {
+            ok: false,
+            code: "updates_not_in_pilot",
+            message: "Updates to existing listings are outside this send. No product was updated.",
+          };
+        } else if (
+          quote.status !== "READY" ||
+          quote.changeType !== "new" ||
+          quote.payloadHash !== row.payloadHash ||
+          quote.sku !== row.sku ||
+          !(quote.price > 0) ||
+          quote.stock == null ||
+          !quote.payload
+        ) {
+          outcome = {
+            ok: false,
+            code: "stale_preview",
+            message: "A product changed since this Production preview. No product was sent.",
+          };
+        } else {
+          outcome = await executeElryanProductionCreate({
+            productId: row.productId,
+            sku: row.sku,
+            payload: quote.payload,
+            hash: quote.payloadHash,
+            apiKey: config.apiKey,
+            accountKey: productionAccountKey(config),
+            allowUncertainRetry: false,
+            holdAmbiguous: true,
+          });
+        }
+        if (outcome.code === "rate_limited") {
+          const seconds = Number(outcome.retryAfter);
+          const waitMs = Number.isFinite(seconds) && seconds >= 0
+            ? Math.min(60000, Math.round(seconds * 1000))
+            : 2000;
+          job.lastError = "rate_limited";
+          await job.save();
+          await sendAllSleep(waitMs);
+          break;
+        }
+        const recorded = await recordSendAllRow(row, outcome);
+        if (recorded.recorded && recorded.sent) batchSent += 1;
+        await refreshSendAllCounts(job, job.previewId);
+        if (sendAllRowLimit && job.processed >= sendAllRowLimit) return;
+      }
+      if (batchSent && preview) {
+        preview.sentToElryan = (Number(preview.sentToElryan) || 0) + batchSent;
+        await preview.save();
+      }
+    }
+  } finally {
+    if (sendAllLoops.get(String(jobId)) === token) {
+      selectionLocks.delete(lockKey);
+      sendAllLoops.delete(String(jobId));
+    }
+  }
+}
+
+/**
+ * WRITE — create every saved new READY row from one completed Production preview.
+ * The confirmed count is the preview total across pages. Existing listings are not updated.
+ */
+export async function startElryanProductionSendAll({ previewId, confirm, expectedCount } = {}) {
+  if (!elryanProductWritesEnabled()) {
+    return blockedBatch(
+      "writes_disabled",
+      "Elryan product publishing is disabled. Both write flags must be true before a Production create. No product was sent."
+    );
+  }
+  if (!elryanLiveProductWritesEnabled()) {
+    return blockedBatch(
+      "writes_gated",
+      "Live Elryan product writes require both write flags. No product was sent."
+    );
+  }
+  if (confirm !== true) {
+    return blockedBatch("confirm_required", "Sending all READY / NEW products requires explicit confirm=true. No product was sent.");
+  }
+  const config = await resolveElryanConfig();
+  if (!productionAccountReady(config)) {
+    return blockedBatch("production_required", "Production sending requires the active Production connection. No product was sent.");
+  }
+  const requestedId = String(previewId || "").trim();
+  if (!mongoose.isValidObjectId(requestedId)) {
+    return blockedBatch("stale_preview", "This Production preview is stale. No product was sent.");
+  }
+  const latest = await ElryanSyncJob.findOne({ environment: "production" }).sort({ createdAt: -1 });
+  if (!latest || latest.status !== "preview" || String(latest._id) !== requestedId) {
+    return blockedBatch(
+      "stale_preview",
+      "This Production preview is stale. Finish the current Production preview and confirm the count again. No product was sent."
+    );
+  }
+  const existing = await ElryanProductionSendAllJob.findOne({ previewId: latest._id }).sort({ createdAt: -1 });
+  if (existing) {
+    if (existing.status === "running" && !sendAllLoops.has(String(existing._id))) kickProductionSendAll(existing._id);
+    return {
+      ok: true,
+      blocked: false,
+      classification: "WRITE",
+      code: existing.status === "completed" ? "already_finished" : "already_running",
+      sendAll: publicProductionSendAllDoc(existing),
+      message: "This Production preview already has a send-all job. No second create was started.",
+    };
+  }
+  const total = await ElryanSyncProductResult.countDocuments({
+    jobId: latest._id,
+    status: "READY",
+    changeType: "new",
+  });
+  if (!total) {
+    return blockedBatch("nothing_selected", "This Production preview has no new READY products. No product was sent.");
+  }
+  if (Number(expectedCount) !== total) {
+    return blockedBatch(
+      "count_mismatch",
+      "The confirmed count does not match the READY / NEW rows in this Production preview. No product was sent.",
+      { eligibleCount: total }
+    );
+  }
+  const lockKey = `production:${requestedId}`;
+  if (selectionLocks.has(lockKey)) {
+    return blockedBatch("send_in_progress", "A Production selection is already sending. No second create was sent.");
+  }
+  const job = await ElryanProductionSendAllJob.create({
+    previewId: latest._id,
+    environment: "production",
+    status: "running",
+    expectedCount: total,
+    total,
+    startedAt: new Date(),
+  });
+  kickProductionSendAll(job._id);
+  return {
+    ok: true,
+    blocked: false,
+    classification: "WRITE",
+    code: "started",
+    eligibleCount: total,
+    sendAll: publicProductionSendAllDoc(job),
+    message: "The READY / NEW products are being created from this Production preview. Existing listings are not updated.",
+  };
+}
+
+export async function getElryanProductionSendAll(previewId) {
+  const requestedId = String(previewId || "").trim();
+  const latest = mongoose.isValidObjectId(requestedId)
+    ? await ElryanSyncJob.findById(requestedId)
+    : await ElryanSyncJob.findOne({ environment: "production" }).sort({ createdAt: -1 });
+  if (!latest) return { ok: true, classification: "READ", sendAll: null, eligibleCount: 0 };
+  const eligibleCount = await ElryanSyncProductResult.countDocuments({
+    jobId: latest._id,
+    status: "READY",
+    changeType: "new",
+  });
+  const sendAll = await publicProductionSendAll(latest._id);
+  const recent = sendAll
+    ? await ElryanSyncProductResult.find({
+        jobId: latest._id,
+        status: "READY",
+        changeType: "new",
+        sendOutcome: { $nin: ["", null] },
+      })
+        .sort({ updatedAt: -1 })
+        .limit(5)
+        .select("sku sendOutcome sendErrors")
+        .lean()
+    : [];
+  return {
+    ok: true,
+    classification: "READ",
+    previewId: String(latest._id),
+    eligibleCount,
+    sendAll,
+    recent: recent.map((row) => ({
+      sku: row.sku,
+      sendOutcome: row.sendOutcome,
+      code: row.sendErrors?.[0]?.code || "",
+      message: row.sendErrors?.[0]?.message || "",
+      elryanProductId: row.sendErrors?.[0]?.elryanProductId || "",
+    })),
   };
 }
 

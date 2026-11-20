@@ -27,6 +27,8 @@ export default function ElryanSyncAll({ t }) {
   const [limitNote, setLimitNote] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [selectionPage, setSelectionPage] = useState(1);
+  const [sendAllOpen, setSendAllOpen] = useState(false);
+  const [sendAll, setSendAll] = useState(null);
   const selectionJobId = job?.environment === "production" && job?.status === "preview" ? job.id : "";
 
   async function refresh() {
@@ -52,6 +54,7 @@ export default function ElryanSyncAll({ t }) {
     setSelectionPage(1);
     setPicked([]);
     setConfirmOpen(false);
+    setSendAllOpen(false);
   }, [selectionJobId]);
 
   useEffect(() => {
@@ -62,7 +65,10 @@ export default function ElryanSyncAll({ t }) {
     let cancel = false;
     api.elryanProductionSelection({ page: selectionPage, pageSize: 50 })
       .then((data) => {
-        if (!cancel) setSelection(data);
+        if (!cancel) {
+          setSelection(data);
+          setSendAll(data.sendAll || null);
+        }
       })
       .catch((err) => {
         if (!cancel) setSelection({ ok: false, candidates: [], message: err.message });
@@ -71,6 +77,39 @@ export default function ElryanSyncAll({ t }) {
       cancel = true;
     };
   }, [selectionJobId, selectionPage]);
+
+  useEffect(() => {
+    if (!selection?.previewId || sendAll?.status !== "running") return undefined;
+    const id = setInterval(() => {
+      api.elryanProductionSendAll(selection.previewId)
+        .then((data) => {
+          if (data?.sendAll) setSendAll(data.sendAll);
+        })
+        .catch(() => {});
+    }, 1500);
+    return () => clearInterval(id);
+  }, [selection?.previewId, sendAll?.status]);
+
+  async function confirmSendAll() {
+    const expectedCount = selection?.eligibleCount ?? selection?.total;
+    if (!selection?.previewId || !expectedCount) return;
+    setBusy("send-all");
+    setError("");
+    try {
+      const data = await api.elryanStartProductionSendAll({
+        previewId: selection.previewId,
+        confirm: true,
+        expectedCount,
+      });
+      setSendAll(data.sendAll || null);
+      setSendAllOpen(false);
+      setMessage(data.message || "");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy("");
+    }
+  }
 
   function rowSelectable(row) {
     return row?.status === "READY" && row?.changeType === "new" && row?.selectable !== false;
@@ -291,6 +330,57 @@ export default function ElryanSyncAll({ t }) {
                 >
                   {t.pageNext}
                 </button>
+              </div>
+            </div>
+          ) : null}
+          {selection?.eligibleCount > 0 && sendAll?.status !== "running" && sendAll?.status !== "completed" ? (
+            <button
+              type="button"
+              className={`${BUTTON} mt-4`}
+              data-elryan-send-all
+              disabled={Boolean(busy)}
+              onClick={() => setSendAllOpen(true)}
+            >
+              {t.elryanSendAllReady}
+            </button>
+          ) : null}
+          {sendAll ? (
+            <p className="mt-3 text-sm text-brown/70" data-elryan-send-all-progress={sendAll.status}>
+              {(t.elryanSendAllProgress || "{processed} of {total} processed · {sent} sent · {skipped} not sent")
+                .replace("{processed}", String(sendAll.processed ?? 0))
+                .replace("{total}", String(sendAll.total ?? selection?.eligibleCount ?? 0))
+                .replace("{sent}", String(sendAll.sent ?? 0))
+                .replace("{skipped}", String((sendAll.skipped || 0) + (sendAll.failed || 0) + (sendAll.uncertain || 0)))}
+            </p>
+          ) : null}
+          {sendAllOpen ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-brown/40 p-4" role="presentation">
+              <div
+                role="dialog"
+                aria-modal="true"
+                data-elryan-send-all-dialog
+                className="w-full max-w-lg space-y-4 rounded-[1.5rem] bg-white p-5 text-sm text-brown shadow-xl"
+              >
+                <h2 className="text-lg font-semibold">{t.elryanSendAllConfirmTitle}</h2>
+                <p data-elryan-send-all-count={selection?.eligibleCount ?? selection?.total ?? 0}>
+                  {(t.elryanSendAllCount || "{count} READY / NEW products across all pages")
+                    .replace("{count}", String(selection?.eligibleCount ?? selection?.total ?? 0))}
+                </p>
+                <p className="text-brown/70">{t.elryanSendAllHint}</p>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" className={GHOST} data-elryan-send-all-cancel onClick={() => setSendAllOpen(false)}>
+                    {t.elryanSendCancel}
+                  </button>
+                  <button
+                    type="button"
+                    className={BUTTON}
+                    data-elryan-send-all-confirm
+                    disabled={Boolean(busy)}
+                    onClick={confirmSendAll}
+                  >
+                    {busy === "send-all" ? t.loading : t.elryanSendAllReady}
+                  </button>
+                </div>
               </div>
             </div>
           ) : null}
