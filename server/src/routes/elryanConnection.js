@@ -822,9 +822,17 @@ elryanConnectionRouter.post("/platforms/elryan/sync-all/stop", async (_req, res)
   }
 });
 
-elryanConnectionRouter.get("/platforms/elryan/sync-all/production-selection", async (_req, res) => {
+elryanConnectionRouter.get("/platforms/elryan/sync-all/production-selection", async (req, res) => {
   try {
-    res.json(assertNoElryanSecretLeak(await listElryanProductionSelection(), ""));
+    res.json(
+      assertNoElryanSecretLeak(
+        await listElryanProductionSelection({
+          page: req.query.page,
+          pageSize: req.query.pageSize,
+        }),
+        ""
+      )
+    );
   } catch (err) {
     fail(res, err, "Failed to load the Elryan Production selection");
   }

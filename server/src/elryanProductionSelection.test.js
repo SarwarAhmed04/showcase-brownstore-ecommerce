@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
+import express from "express";
+import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import { fileURLToPath } from "node:url";
+import { adminRouter } from "./routes/admin.js";
 import { ElryanCategoryCatalogSnapshot } from "./models/ElryanCategoryCatalogSnapshot.js";
 import { ElryanCollectionDimension } from "./models/ElryanCollectionDimension.js";
 import { ElryanConfirmedSend } from "./models/ElryanConfirmedSend.js";
@@ -16,6 +19,7 @@ import { ElryanValueMapping } from "./models/ElryanValueMapping.js";
 import { Partner } from "./models/Partner.js";
 import { PlatformTaxonomyConfig } from "./models/PlatformTaxonomyConfig.js";
 import { Product } from "./models/Product.js";
+import { User } from "./models/User.js";
 import { setElryanFetch } from "./services/elryanClient.js";
 import {
   getElryanSyncAllStatus,
@@ -410,5 +414,144 @@ describe("Elryan Production selected send", { concurrency: 1 }, () => {
     });
     assert.equal(tooMany.code, "too_many");
     assert.equal(posts.length, 2);
+  });
+
+  it("pages a large saved Production preview on GET without calling Elryan or send", async () => {
+    const reads = [];
+    setElryanFetch(async (url, options = {}) => {
+      const method = String(options.method || "GET").toUpperCase();
+      reads.push(`${method} ${url}`);
+      throw new Error(`selection list called Elryan: ${method} ${url}`);
+    });
+    const total = 4000;
+    const job = await ElryanSyncJob.create({
+      environment: "production",
+      status: "preview",
+      strategy: "full",
+      total: total + 2,
+      processed: total + 2,
+      ready: total + 1,
+      newCount: total,
+      changedCount: 1,
+      skipped: 1,
+      finishedAt: new Date(),
+    });
+    const products = [];
+    const results = [];
+    for (let i = 0; i < total; i += 1) {
+      const _id = new mongoose.Types.ObjectId();
+      const sku = `BULK-${String(i).padStart(6, "0")}`;
+      products.push({
+        _id,
+        ibsherId: `bulk-${i}`,
+        itemCode: sku,
+        name: { en: `Bulk ${i}` },
+        price: 10000,
+        isActive: true,
+        variants: [{ color: { en: "Black" }, sizes: [{ size: "One", stockQuantity: 4 }] }],
+      });
+      results.push({
+        jobId: job._id,
+        environment: "production",
+        productId: String(_id),
+        sku,
+        status: "READY",
+        changeType: "new",
+        payloadHash: "saved-hash",
+      });
+    }
+    const changedId = new mongoose.Types.ObjectId();
+    const skippedId = new mongoose.Types.ObjectId();
+    products.push(
+      {
+        _id: changedId,
+        ibsherId: "bulk-changed",
+        itemCode: "AAA-CHANGED",
+        name: { en: "Changed" },
+        price: 22000,
+        isActive: true,
+        variants: [{ sizes: [{ stockQuantity: 3 }] }],
+      },
+      {
+        _id: skippedId,
+        ibsherId: "bulk-skipped",
+        itemCode: "AAA-SKIPPED",
+        name: { en: "Skipped" },
+        price: 9000,
+        isActive: true,
+        variants: [{ sizes: [{ stockQuantity: 1 }] }],
+      }
+    );
+    results.push(
+      {
+        jobId: job._id,
+        environment: "production",
+        productId: String(changedId),
+        sku: "AAA-CHANGED",
+        status: "READY",
+        changeType: "changed",
+        payloadHash: "changed",
+      },
+      {
+        jobId: job._id,
+        environment: "production",
+        productId: String(skippedId),
+        sku: "AAA-SKIPPED",
+        status: "SKIPPED",
+        changeType: "",
+        payloadHash: "",
+      }
+    );
+    for (let offset = 0; offset < products.length; offset += 1000) {
+      await Product.insertMany(products.slice(offset, offset + 1000), { ordered: false });
+      await ElryanSyncProductResult.insertMany(results.slice(offset, offset + 1000), { ordered: false });
+    }
+    const user = await User.create({
+      email: "selection-page@brownstore.test",
+      passwordHash: "not-used",
+      role: "admin",
+    });
+    const auth = jwt.sign({ sub: user._id.toString(), role: "admin" }, process.env.JWT_SECRET);
+    const app = express();
+    app.use(express.json());
+    app.use("/api/admin", adminRouter);
+    const http = await new Promise((resolve) => {
+      const running = app.listen(0, "127.0.0.1", () => resolve(running));
+    });
+    try {
+      async function getPage(page) {
+        const started = Date.now();
+        const response = await fetch(
+          `http://127.0.0.1:${http.address().port}/api/admin/platforms/elryan/sync-all/production-selection?page=${page}&pageSize=50`,
+          { headers: { Authorization: `Bearer ${auth}` } }
+        );
+        const json = await response.json();
+        return { status: response.status, json, elapsed: Date.now() - started };
+      }
+      const first = await getPage(1);
+      assert.equal(first.status, 200);
+      assert.equal(first.json.ok, true);
+      assert.equal(first.json.limit, 3);
+      assert.equal(first.json.total, total);
+      assert.equal(first.json.page, 1);
+      assert.equal(first.json.pageSize, 50);
+      assert.equal(first.json.pages, 80);
+      assert.equal(first.json.candidates.length, 50);
+      assert.equal(first.json.candidates[0].name, "Bulk 0");
+      assert.equal(first.json.candidates[0].sku, "BULK-000000");
+      assert.ok(first.json.candidates[0].productId);
+      assert.equal(first.json.candidates[0].price, 10000);
+      assert.equal(first.json.candidates[0].stock, 4);
+      assert.equal(first.json.candidates.some((row) => row.sku === "AAA-CHANGED" || row.sku === "AAA-SKIPPED"), false);
+      assert.ok(first.elapsed < 3000, `page 1 took ${first.elapsed}ms`);
+      const second = await getPage(2);
+      assert.equal(second.json.candidates[0].sku, "BULK-000050");
+      assert.equal(second.json.candidates.length, 50);
+      assert.equal(reads.length, 0);
+      assert.equal(posts.length, 0);
+    } finally {
+      await new Promise((resolve) => http.close(resolve));
+      installFetch();
+    }
   });
 });

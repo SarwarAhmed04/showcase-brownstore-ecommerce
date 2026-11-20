@@ -20,6 +20,7 @@ const elryanSyncProductResultSchema = new mongoose.Schema(
 );
 
 elryanSyncProductResultSchema.index({ jobId: 1, productId: 1 }, { unique: true });
+elryanSyncProductResultSchema.index({ jobId: 1, status: 1, changeType: 1, sku: 1, productId: 1 });
 
 export const ElryanSyncProductResult = mongoose.model(
   "ElryanSyncProductResult",

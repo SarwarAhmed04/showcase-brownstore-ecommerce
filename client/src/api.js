@@ -672,7 +672,10 @@ export const api = {
     request("/api/admin/platforms/elryan/sync-all/resume", { method: "POST", body: "{}" }),
   elryanSyncAllStop: () =>
     request("/api/admin/platforms/elryan/sync-all/stop", { method: "POST", body: "{}" }),
-  elryanProductionSelection: () => request("/api/admin/platforms/elryan/sync-all/production-selection"),
+  elryanProductionSelection: ({ page = 1, pageSize = 50 } = {}) => {
+    const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    return request(`/api/admin/platforms/elryan/sync-all/production-selection?${qs}`);
+  },
   elryanSendProductionSelection: (body) =>
     request("/api/admin/platforms/elryan/sync-all/production-selection/send", {
       method: "POST",

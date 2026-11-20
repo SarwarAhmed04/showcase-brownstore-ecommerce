@@ -1086,6 +1086,8 @@ export async function startElryanSyncAll({ confirm, strategy } = {}) {
 }
 
 const PRODUCTION_SELECTION_LIMIT = 3;
+const SELECTION_PAGE_DEFAULT = 50;
+const SELECTION_PAGE_MAX = 100;
 const AMBIGUOUS_CREATE = new Set(["create_uncertain", "send_uncertain", "create_timeout"]);
 const selectionLocks = new Set();
 
@@ -1152,51 +1154,103 @@ function publicQuote(quote) {
   };
 }
 
+function selectionPageQuery(input = {}) {
+  const page = Math.max(1, Math.floor(Number(input.page)) || 1);
+  const requested = Math.floor(Number(input.pageSize));
+  const pageSize = Math.min(
+    SELECTION_PAGE_MAX,
+    Math.max(1, Number.isInteger(requested) && requested > 0 ? requested : SELECTION_PAGE_DEFAULT)
+  );
+  return { page, pageSize };
+}
+
+function emptySelection(code, previewId, message) {
+  return {
+    ok: false,
+    classification: "READ",
+    code,
+    previewId,
+    limit: PRODUCTION_SELECTION_LIMIT,
+    page: 1,
+    pageSize: SELECTION_PAGE_DEFAULT,
+    total: 0,
+    pages: 1,
+    candidates: [],
+    message,
+  };
+}
+
 /**
- * READ — new READY rows from the latest completed Production preview.
- * Nothing is sent.
+ * Name, SKU, price, and stock for one page. This does not recheck readiness
+ * or call Elryan. Send-time checks still revalidate the selected rows.
  */
-export async function listElryanProductionSelection() {
+async function pageProductDetails(docs) {
+  const rules = docs.length
+    ? await Commission.find({ partner: "elryan", isActive: { $ne: false } }).lean()
+    : [];
+  const details = new Map();
+  for (const doc of docs) {
+    const resolved = toResolvedProduct(doc);
+    const pricing = await buildElryanPricingView(doc, { commissionRules: rules });
+    const price = Number(pricing.proposedElryanPrice);
+    const stock = resolved?.outOfStock ? 0 : Math.max(0, Math.floor(Number(resolved?.stock) || 0));
+    details.set(String(doc._id), {
+      name: productLabel(doc),
+      sku: String(resolved?.sku || doc.itemCode || "").trim(),
+      price: Number.isFinite(price) ? price : null,
+      stock: Number.isInteger(stock) ? stock : null,
+    });
+  }
+  return details;
+}
+
+/**
+ * READ — one page of saved new READY rows from the latest completed Production preview.
+ * Nothing is sent, and the saved preview is not revalidated here.
+ */
+export async function listElryanProductionSelection(input = {}) {
   const config = await resolveElryanConfig();
   if (!productionAccountReady(config)) {
-    return {
-      ok: false,
-      classification: "READ",
-      code: "production_required",
-      previewId: "",
-      limit: PRODUCTION_SELECTION_LIMIT,
-      candidates: [],
-      message: "Choose products from a completed Production preview. The active connection is not Production.",
-    };
+    return emptySelection(
+      "production_required",
+      "",
+      "Choose products from a completed Production preview. The active connection is not Production."
+    );
   }
   const latest = await ElryanSyncJob.findOne({ environment: "production" }).sort({ createdAt: -1 });
   if (!latest || latest.status !== "preview") {
+    return emptySelection(
+      "preview_required",
+      latest ? String(latest._id) : "",
+      "Finish a Production preview before choosing products. Nothing is sent."
+    );
+  }
+  const requested = selectionPageQuery(input);
+  const filter = { jobId: latest._id, status: "READY", changeType: "new" };
+  const total = await ElryanSyncProductResult.countDocuments(filter);
+  const pages = Math.max(1, Math.ceil(total / requested.pageSize));
+  const page = Math.min(requested.page, pages);
+  const stored = total
+    ? await ElryanSyncProductResult.find(filter)
+        .sort({ sku: 1, productId: 1 })
+        .skip((page - 1) * requested.pageSize)
+        .limit(requested.pageSize)
+        .select("productId sku")
+        .lean()
+    : [];
+  const ids = stored.map((row) => row.productId).filter((id) => mongoose.isValidObjectId(id));
+  const docs = ids.length ? await Product.find({ _id: { $in: ids } }).lean() : [];
+  const details = await pageProductDetails(docs);
+  const candidates = stored.map((row) => {
+    const detail = details.get(row.productId) || {};
     return {
-      ok: false,
-      classification: "READ",
-      code: "preview_required",
-      previewId: latest ? String(latest._id) : "",
-      limit: PRODUCTION_SELECTION_LIMIT,
-      candidates: [],
-      message: "Finish a Production preview before choosing products. Nothing is sent.",
+      productId: row.productId,
+      name: detail.name || "",
+      sku: detail.sku || row.sku || "",
+      price: detail.price ?? null,
+      stock: detail.stock ?? null,
     };
-  }
-  const stored = await ElryanSyncProductResult.find({
-    jobId: latest._id,
-    status: "READY",
-    changeType: "new",
-  })
-    .sort({ sku: 1 })
-    .lean();
-  const quotes = await quoteProductionRows(latest, stored.map((row) => row.productId));
-  const candidates = [];
-  for (const row of stored) {
-    const quote = quotes.get(row.productId);
-    if (!quote || quote.status !== "READY" || quote.changeType !== "new") continue;
-    if (quote.payloadHash !== row.payloadHash || quote.sku !== row.sku) continue;
-    if (!(quote.price > 0) || quote.stock == null) continue;
-    candidates.push(publicQuote(quote));
-  }
+  });
   return {
     ok: true,
     classification: "READ",
@@ -1204,8 +1258,12 @@ export async function listElryanProductionSelection() {
     previewId: String(latest._id),
     environment: "production",
     limit: PRODUCTION_SELECTION_LIMIT,
+    page,
+    pageSize: requested.pageSize,
+    total,
+    pages,
     candidates,
-    message: candidates.length
+    message: total
       ? "These new READY products can be reviewed before a Production create. Existing listings are not updated."
       : "This Production preview has no new READY products to send.",
   };

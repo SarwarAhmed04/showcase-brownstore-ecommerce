@@ -26,6 +26,8 @@ export default function ElryanSyncAll({ t }) {
   const [sendResult, setSendResult] = useState(null);
   const [limitNote, setLimitNote] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [selectionPage, setSelectionPage] = useState(1);
+  const selectionJobId = job?.environment === "production" && job?.status === "preview" ? job.id : "";
 
   async function refresh() {
     const data = await api.elryanSyncAllStatus();
@@ -47,13 +49,18 @@ export default function ElryanSyncAll({ t }) {
   }, [job?.status]);
 
   useEffect(() => {
-    if (job?.environment !== "production" || job?.status !== "preview" || !job?.id) {
+    setSelectionPage(1);
+    setPicked([]);
+    setConfirmOpen(false);
+  }, [selectionJobId]);
+
+  useEffect(() => {
+    if (!selectionJobId) {
       setSelection(null);
-      setPicked([]);
       return undefined;
     }
     let cancel = false;
-    api.elryanProductionSelection()
+    api.elryanProductionSelection({ page: selectionPage, pageSize: 50 })
       .then((data) => {
         if (!cancel) setSelection(data);
       })
@@ -63,7 +70,7 @@ export default function ElryanSyncAll({ t }) {
     return () => {
       cancel = true;
     };
-  }, [job?.id, job?.status, job?.environment]);
+  }, [selectionJobId, selectionPage]);
 
   function rowSelectable(row) {
     return row?.status === "READY" && row?.changeType === "new" && row?.selectable !== false;
@@ -114,7 +121,7 @@ export default function ElryanSyncAll({ t }) {
       setSendResult(data);
       setMessage(data.message || "");
       setPicked([]);
-      const fresh = await api.elryanProductionSelection().catch(() => null);
+      const fresh = await api.elryanProductionSelection({ page: selectionPage, pageSize: 50 }).catch(() => null);
       if (fresh) setSelection(fresh);
       await refresh();
     } catch (err) {
@@ -259,6 +266,34 @@ export default function ElryanSyncAll({ t }) {
           ) : (
             <p className="mt-3 text-sm text-brown/60">{selection?.message || t.elryanSelectionEmpty}</p>
           )}
+          {selection?.pages > 1 ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm text-brown/70">
+              <p>
+                {(t.elryanSelectionPage || "Page {page} of {pages} · {total} new READY products")
+                  .replace("{page}", String(selection.page || selectionPage))
+                  .replace("{pages}", String(selection.pages))
+                  .replace("{total}", String(selection.total ?? 0))}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className={GHOST}
+                  disabled={selectionPage <= 1}
+                  onClick={() => setSelectionPage((current) => Math.max(1, current - 1))}
+                >
+                  {t.pagePrevious}
+                </button>
+                <button
+                  type="button"
+                  className={GHOST}
+                  disabled={selectionPage >= selection.pages}
+                  onClick={() => setSelectionPage((current) => current + 1)}
+                >
+                  {t.pageNext}
+                </button>
+              </div>
+            </div>
+          ) : null}
           {limitNote ? <p className="mt-3 text-sm text-amber-900">{limitNote}</p> : null}
           {picked.length ? (
             <button
