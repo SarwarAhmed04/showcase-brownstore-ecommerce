@@ -10,6 +10,7 @@ import { publicMediaUrl } from "../utils/commissionExcel.js";
 import { partnerPricePreview } from "../utils/partnerCatalog.js";
 import { evaluatePlatformEligibility, productScopeIds } from "../utils/platformEligibility.js";
 import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platformTaxonomy.js";
+import { holdCatalogStock, isCatalogBlocked } from "../utils/catalogBlocks.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import { blockerMessage, buildGiniPlanFromParts, giniPayloadHash, isUnresolvedHistoricalGiniSku, mappingFromTree } from "../utils/giniSyncEvaluate.js";
 import { isGiniHistoricalHoldSku } from "../utils/giniHistoricalHold.js";
@@ -181,8 +182,11 @@ function ownerFor(context, sku, productId) {
 }
 
 function assessOne(doc, context, remote) {
-  const selected = selectSellableFlow(doc);
-  const resolved = toResolvedProduct(doc);
+  const blocks = context.eligibility?.catalogBlocks || null;
+  const catalogStockHold = isCatalogBlocked(doc, blocks);
+  const source = holdCatalogStock(doc, blocks);
+  const selected = selectSellableFlow(source);
+  const resolved = toResolvedProduct(source);
   const priced = partnerPricePreview(doc, context.rules);
   const skuKey = giniSkuKey(doc.itemCode);
   const duplicateIds = skuKey ? context.owners.get(skuKey) || [] : [];
@@ -191,7 +195,7 @@ function assessOne(doc, context, remote) {
   const eligibility = evaluatePlatformEligibility(doc, context.eligibility);
   if (selected.flow === "variant") {
     const classified = classifyVariantProduct({
-      doc,
+      doc: source,
       giniPrice: priced?.priceReview ? null : priced?.price,
       mappingOk: !(mapping.blockers || []).length,
       categoryId: mapping.category?.id == null ? "" : String(mapping.category.id),
@@ -203,6 +207,7 @@ function assessOne(doc, context, remote) {
       remoteParent: null,
     });
     const blockers = [...classified.blockers, ...eligibilityBlockers(resolved, eligibility)];
+    if (catalogStockHold && remote?.state === "absent") blockers.push("catalog_stock_hold");
     const held = preservedHold(doc?.itemCode);
     if (held) blockers.push(held);
     return planUnifiedProduct({
@@ -218,7 +223,7 @@ function assessOne(doc, context, remote) {
     });
   }
   const plan = buildGiniPlanFromParts({
-    doc,
+    doc: source,
     resolved,
     priced,
     duplicateProductIds: duplicateIds,
@@ -229,6 +234,7 @@ function assessOne(doc, context, remote) {
   const blockers = (plan.blockers || []).filter((code) => code !== "existing_gini_product");
   if (selected.flow !== "simple") blockers.push(...selected.reasons);
   blockers.push(...eligibilityBlockers(resolved, eligibility));
+  if (catalogStockHold && remote?.state === "absent") blockers.push("catalog_stock_hold");
   const held = preservedHold(doc?.itemCode);
   if (held) blockers.push(held);
   return {

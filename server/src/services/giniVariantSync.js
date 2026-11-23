@@ -8,6 +8,7 @@ import { partnerPricePreview } from "../utils/partnerCatalog.js";
 import { productScopeIds } from "../utils/platformEligibility.js";
 import { isTaxonomyComplete } from "../utils/platformTaxonomyFields.js";
 import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platformTaxonomy.js";
+import { holdCatalogStock } from "../utils/catalogBlocks.js";
 import { classifyVariantProduct, giniVariantSyncWritesEnabled, proposalConflicts } from "../utils/giniVariantCatalog.js";
 import { buildReusableVariantFields, buildVariantParentPreview } from "../utils/giniVariantPayload.js";
 import { giniCatalogText, giniSkuKey, normalizeGiniItemCode } from "../utils/giniSyncOnePlan.js";
@@ -98,7 +99,7 @@ export async function loadVariantCatalog({ force = false } = {}) {
     const canonical = ownerBySku.get(key);
     const remote = remoteBySku.get(key);
     const classified = classifyVariantProduct({
-      doc,
+      doc: holdCatalogStock(doc, eligibility.catalogBlocks),
       giniPrice: priced.priceReview ? null : priced.price,
       mappingOk,
       categoryId: saved?.categoryId || "",

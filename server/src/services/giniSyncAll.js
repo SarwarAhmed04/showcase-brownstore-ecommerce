@@ -12,6 +12,7 @@ import { Product } from "../models/Product.js";
 import { partnerPricePreview } from "../utils/partnerCatalog.js";
 import { evaluatePlatformEligibility, productScopeIds } from "../utils/platformEligibility.js";
 import { taxonomyValuesForProduct, loadEligibilityContext } from "../utils/platformTaxonomy.js";
+import { holdCatalogStock, isCatalogBlocked } from "../utils/catalogBlocks.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import {
   blockerMessage,
@@ -405,6 +406,8 @@ async function signatureParts(categories) {
       mappings,
       inactive,
       vendorBrands: [...(context.blockedVendorBrands || [])].sort(),
+      catalogVendors: [...(context.catalogBlocks?.vendors || [])].sort(),
+      catalogVendorBrands: [...(context.catalogBlocks?.vendorBrands || [])].sort(),
       tree,
     },
   };
@@ -433,6 +436,8 @@ export async function catalogSignature(categories) {
     mappings: policy.mappings,
     inactive: policy.inactive,
     vendorBrands: policy.vendorBrands,
+    catalogVendors: policy.catalogVendors,
+    catalogVendorBrands: policy.catalogVendorBrands,
     tree: policy.tree,
   });
 }
@@ -746,7 +751,9 @@ function inactivePreviewCodes(isActive, eligibility) {
 
 /** Local plan for one product. A lookup is still required before READY_CREATE. */
 export function assessGiniPreviewProduct(doc, shared) {
-  const resolved = toResolvedProduct(doc);
+  const blocks = shared?.eligibility?.catalogBlocks || null;
+  const catalogStockHold = isCatalogBlocked(doc, blocks);
+  const resolved = toResolvedProduct(holdCatalogStock(doc, blocks));
   const policy = shared?.policySignature || "";
   if (!resolved) {
     const evaluation = withIdentity(doc, {
@@ -815,6 +822,7 @@ export function assessGiniPreviewProduct(doc, shared) {
     priced,
     owners,
     mapping,
+    catalogStockHold,
   };
   const inactiveByRule = inactiveCodes.length > 0;
   if (!isActive || inactiveByRule) {
@@ -848,6 +856,21 @@ async function evaluateCatalogProduct(doc, shared, options = {}) {
   const productId = String(doc._id);
   const localSend =
     shared.sendByProduct.get(productId) || (skuKey ? shared.sendBySku.get(skuKey) : null) || null;
+  if (assessed.catalogStockHold && !localSend?.giniProductId) {
+    return stampPreviewEvidence(
+      withIdentity(doc, {
+        classification: "INACTIVE",
+        blockers: ["catalog_stock_hold"],
+        reason: "Vendor or brand is inactive. Platform stock is zero, and this product is not created.",
+        errorCode: "catalog_stock_hold",
+        sku,
+        skuKey,
+        quantity: 0,
+      }),
+      assessed,
+      "skipped"
+    );
+  }
   if (localSend?.giniProductId) {
     const decision = localConfirmedCatalogDecision({ plan: localPlan, localSend });
     if (decision.action === "store") return stampPreviewEvidence(withIdentity(doc, decision.result), assessed, "skipped");
@@ -2286,7 +2309,6 @@ export async function rebuildGiniChangedPayload(productId) {
   if (!mongoose.isValidObjectId(String(productId || ""))) return null;
   const doc = await Product.findById(productId).lean();
   if (!doc) return null;
-  const resolved = toResolvedProduct(doc);
   const [rules, eligibility, live, skuOwners] = await Promise.all([
     Commission.find({ partner: "gini", isActive: { $ne: false } }).lean(),
     loadEligibilityContext("gini"),
@@ -2294,6 +2316,7 @@ export async function rebuildGiniChangedPayload(productId) {
     buildSkuOwnerIndex(),
   ]);
   if (!live?.categories) return null;
+  const resolved = toResolvedProduct(holdCatalogStock(doc, eligibility.catalogBlocks));
   const skuKey = giniSkuKey(doc.itemCode);
   const owners = skuKey ? skuOwners.get(skuKey) || [] : [];
   const mapping = mappingFromTree(taxonomyValuesForProduct(doc, eligibility), live.categories);
@@ -2366,7 +2389,7 @@ export async function runGiniChangedPreview() {
     const savedId = String(saved.giniProductId || "");
     const savedHash = String(saved.payloadHash || "");
     const doc = productsById.get(String(saved.productId || "")) || null;
-    const resolved = doc ? toResolvedProduct(doc) : null;
+    const resolved = doc ? toResolvedProduct(holdCatalogStock(doc, eligibility.catalogBlocks)) : null;
     let plan = null;
     let inactive = false;
     let inactiveReasons = [];

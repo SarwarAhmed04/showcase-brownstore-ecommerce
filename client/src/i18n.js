@@ -360,7 +360,7 @@ export const translations = {
     vendorControls: "فرۆشیارەکان",
     vendorControlsTitle: "کۆنترۆڵی فرۆشیار و براند",
     vendorControlsHint:
-      "فرۆشیار یان براندێکی ئەو فرۆشیارە ناکارا بکە. بەرهەمەکان لە BrownStore و هەموو پلاتفۆڕمەکان دەشاردرێنەوە.",
+      "فرۆشیار یان براندێکی ئەو فرۆشیارە ناکارا بکە. لە فرۆشگای BrownStore دەشاردرێنەوە و ستۆکەکەی وەک خۆی دەمێنێتەوە. لە پلاتفۆڕمەکان ستۆک دەبێتە سفر و لە ئەپدەیتی داهاتوودا وەک گۆڕانکاری دەردەکەوێت.",
     vendorControlsSummary:
       "{vendors} فرۆشیار · {inactiveVendors} ناکارا · {inactiveBrands} براندی ناکارا",
     vendorControlsSearchPlaceholder: "گەڕان بە فرۆشیار یان براند",
@@ -368,11 +368,11 @@ export const translations = {
     vendorControlsNoBrands: "هیچ براندێک بۆ ئەم فرۆشیارە نییە.",
     vendorControlsBlockedByVendor: "لەلایەن فرۆشیارەوە داخراوە",
     vendorControlsDeactivateVendor:
-      "ئەم فرۆشیارە ناکارا بکرێت؟ {count} بەرهەم لە BrownStore و هەموو پلاتفۆڕمەکان دەشاردرێنەوە.",
-    vendorControlsActivateVendor: "ئەم فرۆشیارە چالاک بکرێتەوە؟ {count} بەرهەم دەگەڕێنەوە (جگە لە براندە ناکاراکان).",
+      "ئەم فرۆشیارە ناکارا بکرێت؟ ستۆکی {count} بەرهەم لە BrownStore وەک خۆی دەمێنێتەوە. لە پلاتفۆڕمەکان دەبێتە سفر و وەک گۆڕانکاری دەردەکەوێت.",
+    vendorControlsActivateVendor: "ئەم فرۆشیارە چالاک بکرێتەوە؟ ستۆکی {count} بەرهەم لە ئەپدەیتی داهاتوو دەگەڕێتەوە بۆ کۆتا ستۆکی Ibsher (جگە لە براندە ناکاراکان).",
     vendorControlsDeactivateBrand:
-      "براندی {brand} ناکارا بکرێت؟ {count} بەرهەم لە BrownStore و هەموو پلاتفۆڕمەکان دەشاردرێنەوە.",
-    vendorControlsActivateBrand: "براندی {brand} چالاک بکرێتەوە؟ {count} بەرهەم دەگەڕێنەوە.",
+      "براندی {brand} ناکارا بکرێت؟ ستۆکی {count} بەرهەم لە BrownStore وەک خۆی دەمێنێتەوە. لە پلاتفۆڕمەکان دەبێتە سفر و وەک گۆڕانکاری دەردەکەوێت.",
+    vendorControlsActivateBrand: "براندی {brand} چالاک بکرێتەوە؟ ستۆکی {count} بەرهەم لە ئەپدەیتی داهاتوو دەگەڕێتەوە بۆ کۆتا ستۆکی Ibsher.",
     platformsHint: "پلاتفۆڕمەکان لە کۆدەوە دیاریکراون. نەخشەی پۆل، چالاک/ناچالاک، کۆمەیشن و Excel لێرە بەڕێوەببە.",
     addPlatform: "زیادکردنی پلاتفۆڕم",
     platformName: "ناوی پلاتفۆڕم",
@@ -1853,7 +1853,7 @@ export const translations = {
     vendorControls: "Vendors",
     vendorControlsTitle: "Vendor & brand control",
     vendorControlsHint:
-      "Deactivate a whole vendor, or only selected brands under that vendor. Products disappear from BrownStore and every platform.",
+      "Deactivate a whole vendor, or only selected brands under that vendor. Products stay hidden on the BrownStore shop and their stock stays as it is. Platform stock becomes zero and the next update lists it as a change.",
     vendorControlsSummary:
       "{vendors} vendors · {inactiveVendors} inactive · {inactiveBrands} inactive brands",
     vendorControlsSearchPlaceholder: "Search vendor or brand",
@@ -1861,12 +1861,12 @@ export const translations = {
     vendorControlsNoBrands: "No brands for this vendor.",
     vendorControlsBlockedByVendor: "Blocked by vendor",
     vendorControlsDeactivateVendor:
-      "Deactivate this vendor? {count} products will be hidden from BrownStore and all platforms.",
+      "Deactivate this vendor? BrownStore stock for {count} products stays as it is. Platform stock becomes zero and shows as a change on the next update.",
     vendorControlsActivateVendor:
-      "Re-activate this vendor? {count} products will return (except brands still deactivated).",
+      "Re-activate this vendor? The next update sends the latest Ibsher stock for {count} products (except brands still deactivated).",
     vendorControlsDeactivateBrand:
-      "Deactivate brand {brand}? {count} products will be hidden from BrownStore and all platforms.",
-    vendorControlsActivateBrand: "Re-activate brand {brand}? {count} products will return.",
+      "Deactivate brand {brand}? BrownStore stock for {count} products stays as it is. Platform stock becomes zero and shows as a change on the next update.",
+    vendorControlsActivateBrand: "Re-activate brand {brand}? The next update sends the latest Ibsher stock for {count} products.",
     platformsHint: "Platforms are fixed in code. Open one to map categories, set availability, manage commission, and download Excel.",
     addPlatform: "Add platform",
     platformName: "Platform name",
@@ -3351,7 +3351,7 @@ export const translations = {
     vendorControls: "البائعون",
     vendorControlsTitle: "التحكم بالبائع والعلامة",
     vendorControlsHint:
-      "عطّل بائعاً بالكامل أو علامات محددة تحته. تختفي المنتجات من BrownStore وكل المنصات.",
+      "عطّل بائعاً بالكامل أو علامات محددة تحته. تختفي المنتجات من متجر BrownStore ويبقى مخزونها كما هو. مخزون المنصات يصبح صفراً ويظهر كتغيير في التحديث التالي.",
     vendorControlsSummary:
       "{vendors} بائع · {inactiveVendors} معطّل · {inactiveBrands} علامة معطّلة",
     vendorControlsSearchPlaceholder: "ابحث عن بائع أو علامة",
@@ -3359,12 +3359,12 @@ export const translations = {
     vendorControlsNoBrands: "لا توجد علامات لهذا البائع.",
     vendorControlsBlockedByVendor: "معطّل بسبب البائع",
     vendorControlsDeactivateVendor:
-      "تعطيل هذا البائع؟ سيتم إخفاء {count} منتج من BrownStore وكل المنصات.",
+      "تعطيل هذا البائع؟ مخزون {count} منتج في BrownStore يبقى كما هو. مخزون المنصات يصبح صفراً ويظهر كتغيير في التحديث التالي.",
     vendorControlsActivateVendor:
-      "إعادة تفعيل هذا البائع؟ ستعود {count} منتجاً (ما عدا العلامات المعطّلة).",
+      "إعادة تفعيل هذا البائع؟ التحديث التالي يرسل آخر مخزون من Ibsher لـ {count} منتج (ما عدا العلامات المعطّلة).",
     vendorControlsDeactivateBrand:
-      "تعطيل العلامة {brand}؟ سيتم إخفاء {count} منتج من BrownStore وكل المنصات.",
-    vendorControlsActivateBrand: "إعادة تفعيل العلامة {brand}؟ ستعود {count} منتجاً.",
+      "تعطيل العلامة {brand}؟ مخزون {count} منتج في BrownStore يبقى كما هو. مخزون المنصات يصبح صفراً ويظهر كتغيير في التحديث التالي.",
+    vendorControlsActivateBrand: "إعادة تفعيل العلامة {brand}؟ التحديث التالي يرسل آخر مخزون من Ibsher لـ {count} منتج.",
     platformsHint: "المنصات ثابتة من الكود. افتح واحدة لربط التصنيفات وضبط التفعيل والعمولة وتنزيل Excel.",
     addPlatform: "إضافة منصة",
     platformName: "اسم المنصة",

@@ -10,6 +10,7 @@ import { Product } from "../models/Product.js";
 import { partnerPricePreview } from "../utils/partnerCatalog.js";
 import { evaluatePlatformEligibility, productScopeIds } from "../utils/platformEligibility.js";
 import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platformTaxonomy.js";
+import { holdCatalogStock } from "../utils/catalogBlocks.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import { buildGiniPlanFromParts, isUnresolvedHistoricalGiniSku, mappingFromTree } from "../utils/giniSyncEvaluate.js";
 import { giniSkuKey, normalizeGiniItemCode } from "../utils/giniSyncOnePlan.js";
@@ -269,12 +270,12 @@ async function loadPrepared(job) {
 
   const doc = mongoose.isValidObjectId(row.productId) ? await Product.findById(row.productId).lean() : null;
   if (!doc) fail("The BrownStore product for this SKU was not found.", "not_update_eligible", 409);
-  const resolved = toResolvedProduct(doc);
   const [rules, eligibility, owners] = await Promise.all([
     Commission.find({ partner: "gini", isActive: { $ne: false } }).lean(),
     loadEligibilityContext("gini"),
     ownersForSku(skuKey),
   ]);
+  const resolved = toResolvedProduct(holdCatalogStock(doc, eligibility.catalogBlocks));
   const decision = evaluatePlatformEligibility(doc, eligibility);
   const reasons = (decision.reasons || []).filter((reason) => reason.code !== "taxonomy_config_missing");
   if (!resolved || resolved.isActive === false || reasons.length) {

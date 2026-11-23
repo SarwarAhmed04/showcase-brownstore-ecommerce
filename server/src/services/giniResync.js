@@ -12,6 +12,7 @@ import { Product } from "../models/Product.js";
 import { partnerPricePreview } from "../utils/partnerCatalog.js";
 import { evaluatePlatformEligibility } from "../utils/platformEligibility.js";
 import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platformTaxonomy.js";
+import { holdCatalogStock } from "../utils/catalogBlocks.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import { isGiniHistoricalHoldSku } from "../utils/giniHistoricalHold.js";
 import { buildGiniPlanFromParts, giniPayloadHash, mappingFromTree } from "../utils/giniSyncEvaluate.js";
@@ -721,7 +722,7 @@ async function currentPlan(doc, owners) {
     fetchGiniCategoryTree(),
   ]);
   if (!live?.categories || live.connectionRequired) return { ok: false, code: "categories_unavailable" };
-  const resolved = toResolvedProduct(doc);
+  const resolved = toResolvedProduct(holdCatalogStock(doc, eligibility.catalogBlocks));
   const decision = evaluatePlatformEligibility(doc, eligibility);
   const reasons = (decision.reasons || []).filter((reason) => reason.code !== "taxonomy_config_missing");
   if (!resolved || resolved.isActive === false || reasons.length) return { ok: false, code: "not_resync_eligible" };

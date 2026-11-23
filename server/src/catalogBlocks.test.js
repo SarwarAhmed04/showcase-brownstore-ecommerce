@@ -6,6 +6,7 @@ import { CatalogBlock } from "./models/CatalogBlock.js";
 import { Product } from "./models/Product.js";
 import { Partner } from "./models/Partner.js";
 import {
+  holdCatalogStock,
   isCatalogBlocked,
   loadCatalogBlocks,
   mergeCatalogBlocksIntoFilter,
@@ -13,7 +14,7 @@ import {
   setVendorBrandBlock,
   vendorBrandKey,
 } from "./utils/catalogBlocks.js";
-import { loadPublicProductFilter, isPubliclyVisible, publicProductFilter } from "./utils/productView.js";
+import { loadPublicProductFilter, isPubliclyVisible, publicProductFilter, toResolvedProduct } from "./utils/productView.js";
 import { evaluatePlatformEligibility } from "./utils/platformEligibility.js";
 import { loadEligibilityContext } from "./utils/platformTaxonomy.js";
 
@@ -96,27 +97,34 @@ describe("catalog vendor/brand blocks", { concurrency: 1 }, () => {
     );
   });
 
-  it("applies global blocks to platform eligibility for every partner", async () => {
-    await Product.insertMany([
-      sampleProduct("A1", "vendor-a", "brand-a"),
-      sampleProduct("A3", "vendor-a", "brand-c"),
-    ]);
+  it("keeps inactive vendors eligible and reports platform stock as zero", async () => {
+    const saved = await Product.create({
+      ...sampleProduct("A1", "vendor-a", "brand-a"),
+      variants: [{ sizes: [{ size: "One", stockQuantity: 10 }] }],
+    });
     await setVendorBrandBlock("vendor-a", "brand-a", false);
     const context = await loadEligibilityContext("miswag");
-    const blocked = evaluatePlatformEligibility(sampleProduct("A1", "vendor-a", "brand-a"), context);
+    const blocked = evaluatePlatformEligibility(saved, context);
     const kept = evaluatePlatformEligibility(sampleProduct("A3", "vendor-a", "brand-c"), context);
-    assert.equal(blocked.eligible, false);
-    assert.equal(
-      blocked.reasons.some((reason) => reason.code === "vendor_brand_inactive"),
-      true
-    );
+    assert.equal(blocked.eligible, true);
     assert.equal(kept.eligible, true);
+
+    const held = toResolvedProduct(holdCatalogStock(saved.toObject(), context.catalogBlocks));
+    const stored = await Product.findById(saved._id).lean();
+    assert.equal(held.stock, 0);
+    assert.equal(held.variants[0].sizes[0].stockQuantity, 0);
+    assert.equal(stored.variants[0].sizes[0].stockQuantity, 10);
 
     await setVendorBlock("vendor-a", false);
     const afterVendor = await loadEligibilityContext("miswag");
-    const allGone = evaluatePlatformEligibility(sampleProduct("A3", "vendor-a", "brand-c"), afterVendor);
-    assert.equal(allGone.eligible, false);
-    assert.equal(allGone.reasons.some((reason) => reason.code === "vendor_inactive"), true);
+    const vendorHeld = evaluatePlatformEligibility(sampleProduct("A3", "vendor-a", "brand-c"), afterVendor);
+    assert.equal(vendorHeld.eligible, true);
+    assert.equal(toResolvedProduct(holdCatalogStock(stored, afterVendor.catalogBlocks)).stock, 0);
+
+    await setVendorBlock("vendor-a", true);
+    await setVendorBrandBlock("vendor-a", "brand-a", true);
+    const restored = await loadEligibilityContext("miswag");
+    assert.equal(toResolvedProduct(holdCatalogStock(stored, restored.catalogBlocks)).stock, 10);
   });
 
   it("refuses brand changes while the vendor is fully inactive", async () => {

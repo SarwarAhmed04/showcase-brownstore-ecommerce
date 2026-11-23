@@ -3,6 +3,7 @@ import { Product } from "../models/Product.js";
 import { PlatformProduct } from "../models/PlatformProduct.js";
 import { applyCommissionRate, winningCommission } from "./commission.js";
 import { partnerPricePreview } from "./partnerCatalog.js";
+import { holdCatalogStock } from "./catalogBlocks.js";
 import { toResolvedProduct } from "./productView.js";
 import { evaluatePlatformEligibility } from "./platformEligibility.js";
 import {
@@ -220,8 +221,8 @@ function variantSummary(variants) {
     .join("\n");
 }
 
-function productRow(product, rules, extra, taxonomy) {
-  const resolved = toResolvedProduct(product, extra);
+function productRow(product, rules, extra, taxonomy, blocks = null) {
+  const resolved = toResolvedProduct(holdCatalogStock(product, blocks), extra);
   if (!resolved) return null;
   const rule = winningCommission(product, rules);
   const preview = partnerPricePreview(product, rules);
@@ -302,7 +303,8 @@ export async function buildCommissionWorkbook(partner, rules) {
       product,
       rules,
       overrideMap.get(String(product._id)) || {},
-      taxonomyValuesForProduct(product, context)
+      taxonomyValuesForProduct(product, context),
+      context.catalogBlocks
     );
     if (!row) continue;
     total += 1;

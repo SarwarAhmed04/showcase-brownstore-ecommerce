@@ -7,6 +7,7 @@ import { summarizeDuplicateSkus } from "./duplicateSkus.js";
 import { eligibilityBucket, evaluatePlatformEligibility } from "../platformEligibility.js";
 import { loadEligibilityContext, taxonomyValuesForProduct } from "../platformTaxonomy.js";
 import { partnerPricePreview } from "../partnerCatalog.js";
+import { holdCatalogStock } from "../catalogBlocks.js";
 import { toResolvedProduct } from "../productView.js";
 
 export const GINI_SHEET_NAME = "Sheet1";
@@ -92,7 +93,7 @@ function giniManualIds(values) {
 }
 
 function giniProductRow(product, rules, overrides, context) {
-  const resolved = toResolvedProduct(product, overrides);
+  const resolved = toResolvedProduct(holdCatalogStock(product, context?.catalogBlocks), overrides);
   if (!resolved) return { missing: ["missing_name"] };
   const brand = locText(resolved.brand, "en") || locText(resolved.brand, "ku") || locText(resolved.brand, "ar");
   const nameAr = locText(resolved.name, "ar");

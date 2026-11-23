@@ -8,6 +8,7 @@ import { Product } from "../models/Product.js";
 import { partnerPricePreview } from "../utils/partnerCatalog.js";
 import { blockerMessage, buildGiniPlanFromParts, mappingFromTree } from "../utils/giniSyncEvaluate.js";
 import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platformTaxonomy.js";
+import { holdCatalogStock, isCatalogBlocked } from "../utils/catalogBlocks.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import {
   GINI_IMAGE_MAX_BYTES,
@@ -83,7 +84,8 @@ export async function buildGiniSyncPlan(productId) {
     error.code = "product_not_found";
     throw error;
   }
-  const resolved = toResolvedProduct(doc);
+  const eligibility = await loadEligibilityContext("gini");
+  const resolved = toResolvedProduct(holdCatalogStock(doc, eligibility.catalogBlocks));
   const rules = await Commission.find({ partner: "gini", isActive: { $ne: false } }).lean();
   const priced = partnerPricePreview(doc, rules);
   const sku = normalizeGiniItemCode(doc.itemCode);
@@ -98,7 +100,7 @@ export async function buildGiniSyncPlan(productId) {
     }
   }
   const protectedKeys = await loadProtectedVariantSkuKeys();
-  return buildGiniPlanFromParts({
+  const plan = buildGiniPlanFromParts({
     doc,
     resolved,
     priced,
@@ -107,6 +109,16 @@ export async function buildGiniSyncPlan(productId) {
     existing,
     protectedVariantSku: protectedKeys.has(giniSkuKey(sku)),
   });
+  if (isCatalogBlocked(doc, eligibility.catalogBlocks) && !existing?.exists) {
+    return {
+      ...plan,
+      action: "BLOCKED",
+      canSend: false,
+      blockers: [...new Set([...(plan.blockers || []), "catalog_stock_hold"])],
+      quantity: 0,
+    };
+  }
+  return plan;
 }
 
 function publicPreview(plan, previewToken = "") {

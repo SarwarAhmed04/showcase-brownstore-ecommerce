@@ -34,6 +34,7 @@ import {
   validateElryanPreviewParts,
 } from "../utils/elryanValidator.js";
 import { assessElryanSellableUnits } from "../utils/elryanVariations.js";
+import { holdCatalogStock } from "../utils/catalogBlocks.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import { sanitizeElryanText } from "../utils/elryanRedact.js";
 import { elryanListingFromSkuConflict, normalizeElryanSkuCandidate } from "../utils/elryanSku.js";
@@ -190,9 +191,9 @@ export async function assembleElryanSyncOne({ productId, origin = "", investigat
     throw error;
   }
 
-  const resolved = toResolvedProduct(doc);
-  const productKey = String(doc._id);
   const ctx = await loadEligibilityContext("elryan");
+  const resolved = toResolvedProduct(holdCatalogStock(doc, ctx.catalogBlocks));
+  const productKey = String(doc._id);
   const mappingValues = taxonomyValuesForProduct(doc, ctx) || {};
   const variation = assessElryanSellableUnits(resolved);
   const brandId = doc.brand?._id || doc.brand?.id || "";

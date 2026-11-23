@@ -35,6 +35,7 @@ import { loadEligibilityContext, taxonomyValuesForProduct } from "../utils/platf
 import { evaluatePlatformEligibility } from "../utils/platformEligibility.js";
 import { elryanParentCategoryBlocker, validateElryanPreviewParts } from "../utils/elryanValidator.js";
 import { assessElryanSellableUnits } from "../utils/elryanVariations.js";
+import { holdCatalogStock, isCatalogBlocked } from "../utils/catalogBlocks.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import {
   collectElryanWarrantyRows,
@@ -402,7 +403,9 @@ function lookupWarranty(context, doc) {
 
 export async function evaluateElryanProductForSync(doc, context, { origin = "", dimensionRow = null, excluded = false, productOverride = null } = {}) {
   const productId = String(doc._id);
-  const resolved = toResolvedProduct(doc);
+  const blocks = context.eligibility?.catalogBlocks || null;
+  const catalogStockHold = isCatalogBlocked(doc, blocks);
+  const resolved = toResolvedProduct(holdCatalogStock(doc, blocks));
   const sku = resolved?.sku || doc.itemCode || "";
   const eligibility = evaluatePlatformEligibility(doc, context.eligibility);
   if (!eligibility.eligible) {
@@ -505,6 +508,7 @@ export async function evaluateElryanProductForSync(doc, context, { origin = "", 
     dimensionReason: dimensions.reason,
     payload,
     quantity: qty,
+    catalogStockHold,
     batchItem: {
       sku: payload.sku,
       brand: brand?.elryanLabel || brand?.brownLabel || "",
@@ -548,6 +552,15 @@ async function classifyChanged(environment, results) {
     let changeType = "new";
     if (confirmed && prior.payloadHash === row.payloadHash) changeType = "unchanged";
     else if (confirmed) changeType = "changed";
+    if (row.catalogStockHold && changeType === "new") {
+      return {
+        ...row,
+        status: "INACTIVE",
+        changeType: "",
+        readiness: "INACTIVE",
+        reason: "Vendor or brand is inactive. Platform stock is zero, and this product is not created.",
+      };
+    }
     return {
       ...row,
       changeType,

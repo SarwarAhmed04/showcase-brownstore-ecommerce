@@ -5,6 +5,7 @@ import { MiswagSyncProductResult } from "../models/MiswagSyncProductResult.js";
 import { Product } from "../models/Product.js";
 import { evaluatePlatformEligibility } from "../utils/platformEligibility.js";
 import { loadEligibilityContext } from "../utils/platformTaxonomy.js";
+import { holdCatalogStock, isCatalogBlocked } from "../utils/catalogBlocks.js";
 import { toResolvedProduct } from "../utils/productView.js";
 import {
   MiswagError,
@@ -164,7 +165,10 @@ function publicJob(job, extras = {}) {
 
 async function evaluateOneProduct(doc, context) {
   const productId = String(doc._id);
-  const resolved = toResolvedProduct(doc);
+  const blocks = context.eligibility?.catalogBlocks || null;
+  const catalogStockHold = isCatalogBlocked(doc, blocks);
+  const source = holdCatalogStock(doc, blocks);
+  const resolved = toResolvedProduct(source);
   const externalId = miswagItemExternalId(resolved || doc);
   const sku = resolved?.sku || resolved?.itemCode || doc.itemCode || "";
 
@@ -235,7 +239,7 @@ async function evaluateOneProduct(doc, context) {
     };
   }
 
-  const built = buildMiswagTestPayload(doc, {
+  const built = buildMiswagTestPayload(source, {
     rules: context.rules,
     categoryId: category.category.id,
     brandId: brand.brand.id,
@@ -273,6 +277,7 @@ async function evaluateOneProduct(doc, context) {
     categoryId: category.category.id,
     isLarge: built.payload?.is_large === true,
     brandId: brand.brand.id,
+    catalogStockHold,
   };
 }
 
@@ -402,6 +407,16 @@ async function annotateChangeTypes(results) {
   return results.map((result) => {
     if (result?.status !== "READY") return result;
     const classified = classifyMiswagPayload(result.payload, states.get(result.externalId));
+    if (result.catalogStockHold && classified.changeType === "new") {
+      return {
+        ...result,
+        status: "INACTIVE",
+        changeType: "",
+        payloadHash: "",
+        reason: "Vendor or brand is inactive. Platform stock is zero, and this product is not created.",
+        code: "inactive",
+      };
+    }
     return {
       ...result,
       changeType: classified.changeType,

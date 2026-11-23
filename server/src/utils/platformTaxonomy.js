@@ -78,9 +78,8 @@ export async function loadEligibilityContext(partnerSlug) {
     const targetId = cleanText(rule.targetId);
     if (targetId && inactive[rule.scope]) inactive[rule.scope].add(targetId);
   }
-  for (const vendorId of catalogBlocks.vendors || []) {
-    if (vendorId) inactive.vendor.add(String(vendorId));
-  }
+  // Catalog blocks do not remove products from platform updates.
+  // Payloads report stock 0 while the vendor or vendor brand is inactive.
 
   const elryanHelpers = slug === "elryan" ? await loadElryanTaxonomyHelpers() : null;
   const elryanEnv = elryanHelpers ? await resolveElryanActiveEnvironment() : "staging";
@@ -104,7 +103,8 @@ export async function loadEligibilityContext(partnerSlug) {
     partnerSlug: slug,
     partnerActive: partner ? partner.isActive !== false : false,
     inactive,
-    blockedVendorBrands: catalogBlocks.vendorBrands || new Set(),
+    blockedVendorBrands: new Set(),
+    catalogBlocks,
     taxonomyRequired: taxonomyGatesEligibility(slug) && requiredTaxonomyKeys(slug).length > 0,
     configuredCollectionIds,
     taxonomyByCollection,

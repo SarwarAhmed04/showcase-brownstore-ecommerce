@@ -57,6 +57,22 @@ export function isCatalogBlocked(product, blocks) {
   return false;
 }
 
+/**
+ * Platform copy only. BrownStore stock on the original document stays as Ibsher left it.
+ * Inactive vendor or vendor-brand products report quantity 0 to every platform payload.
+ */
+export function holdCatalogStock(doc, blocks) {
+  if (!doc || !isCatalogBlocked(doc, blocks)) return doc;
+  const raw = typeof doc.toObject === "function" ? doc.toObject() : doc;
+  return {
+    ...raw,
+    variants: (raw.variants || []).map((variant) => ({
+      ...variant,
+      sizes: (variant.sizes || []).map((size) => ({ ...size, stockQuantity: 0 })),
+    })),
+  };
+}
+
 function idExpr(path) {
   return { $toString: { $ifNull: [`$${path}`, ""] } };
 }
