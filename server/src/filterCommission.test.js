@@ -687,7 +687,6 @@ describe("filter commission catalog", { concurrency: 1, timeout: 180000 }, () =>
       { slug: "miswag", name: "Miswag", isActive: true },
       { slug: "gini", name: "Gini", isActive: true },
       { slug: "elryan", name: "Elryan", isActive: true },
-      { slug: "ibazzar", name: "Ibazzar", isActive: true },
     ]);
     const giniValues = {
       categoryName: "الجمال والعناية",
@@ -1197,7 +1196,7 @@ describe("filter commission catalog", { concurrency: 1, timeout: 180000 }, () =>
     assert.deepEqual(commissionMatchFilter([{ scope: "all", targetId: "*", isActive: true }]), {});
   });
 
-  it("prices Miswag, Gini, Elryan, and Ibazzar from the shared filter rule", async () => {
+  it("prices Miswag, Gini, and Elryan from the shared filter rule", async () => {
     await setRules("gini", { filter: 10, brand: 15, all: 5 });
     await setRules("miswag", { filter: 99, brand: 15, all: 3 });
     const giniBook = await giniExportForPartner(await Partner.findOne({ slug: "gini" }));
@@ -1255,10 +1254,7 @@ describe("filter commission catalog", { concurrency: 1, timeout: 180000 }, () =>
     assert.equal(stored.discountPrice, 0);
 
     async function excelPrice(slug, sku) {
-      const rules = await setRules(
-        slug,
-        slug === "ibazzar" ? { filter: 8, brand: 15, all: 4 } : { filter: 10, brand: 15, all: 5 }
-      );
+      const rules = await setRules(slug, { filter: 10, brand: 15, all: 5 });
       const { workbook } = await buildCommissionWorkbook(await Partner.findOne({ slug }), rules);
       const rows = sheetRows(workbook, "Excel");
       const row = rows.find((item) => String(item.SKU) === sku);
@@ -1278,16 +1274,6 @@ describe("filter commission catalog", { concurrency: 1, timeout: 180000 }, () =>
     const elryanSmall = await excelPrice("elryan", "FC-FRIDGE-7001");
     assert.equal(elryanSmall.price, 7750);
     assert.equal(elryanSmall.rate, 10);
-
-    const ibazzarFridge = await excelPrice("ibazzar", "FC-FRIDGE");
-    assert.equal(ibazzarFridge.price, 108000);
-    assert.equal(ibazzarFridge.rate, 8);
-    const ibazzarOther = await excelPrice("ibazzar", "FC-OTHER-FRIDGE");
-    assert.equal(ibazzarOther.price, 104000);
-    assert.equal(ibazzarOther.rate, 4);
-    const ibazzarWash = await excelPrice("ibazzar", "FC-WASH");
-    assert.equal(ibazzarWash.price, 115000);
-    assert.equal(ibazzarWash.rate, 15);
   });
 
   it("saves optional filter depths as separate rules and updates each path in place", async () => {

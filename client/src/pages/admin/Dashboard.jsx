@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
-import { useAuth } from "../../context/AuthContext";
 import { useLang } from "../../context/LangContext";
 import { tName } from "../../i18n";
 import { imgUrl } from "../../lib/img";
@@ -18,13 +17,6 @@ function formatWhen(value, lang) {
     dateStyle: "medium",
     timeStyle: "short",
   });
-}
-
-function greetingKey() {
-  const hour = new Date().getHours();
-  if (hour < 12) return "goodMorning";
-  if (hour < 18) return "goodAfternoon";
-  return "goodEvening";
 }
 
 function MixRow({ label, value, total, tone }) {
@@ -126,7 +118,6 @@ function RecentProductsRail({ products, lang, t }) {
 
 export default function AdminDashboard() {
   const { t, lang } = useLang();
-  const { user } = useAuth();
   const [stats, setStats] = useState(null);
   const [error, setError] = useState("");
 
@@ -144,7 +135,6 @@ export default function AdminDashboard() {
 
   if (!stats && !error) return <Spinner label={t.loading} />;
 
-  const hello = t[greetingKey()];
   const synced = formatWhen(stats?.lastSyncedAt, lang);
 
   return (
@@ -154,10 +144,6 @@ export default function AdminDashboard() {
           <h2 className="font-display text-4xl tracking-tight text-brown md:text-[2.6rem]">
             {t.overview}
           </h2>
-          <p className="mt-2 max-w-xl text-sm leading-6 text-brown/50">
-            {hello}
-            {user?.email ? ` · ${user.email}` : ""} — {t.dashboardLead}
-          </p>
         </div>
         <Link
           to="/admin/products"

@@ -452,7 +452,6 @@ function PartnerCards({ t }) {
     <div>
       <div className="mb-6">
         <h2 className="font-display text-3xl">{t.platforms}</h2>
-        <p className="mt-1 max-w-2xl text-sm text-brown/50">{t.platformsHint}</p>
       </div>
       {error ? <p className="mb-4 text-sm text-red-700">{error}</p> : null}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

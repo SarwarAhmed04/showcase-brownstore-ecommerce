@@ -271,14 +271,6 @@ describe("platform products page", { concurrency: 1, timeout: 180000 }, () => {
         isActive: true,
       },
       {
-        partner: "ibazzar",
-        scope: "all",
-        targetId: "*",
-        targetName: { en: "All", ku: "All", ar: "All" },
-        percentage: 5,
-        isActive: true,
-      },
-      {
         partner: "gini",
         scope: "brand",
         targetId: "brand-none",
@@ -404,7 +396,6 @@ describe("platform products page", { concurrency: 1, timeout: 180000 }, () => {
     const miswag = row(await getProducts("miswag", { q: "BLENDER", facets: "0" }), "BLENDER");
     const gini = row(await getProducts("gini", { q: "BLENDER", facets: "0" }), "BLENDER");
     const elryan = row(await getProducts("elryan", { q: "BLENDER", facets: "0" }), "BLENDER");
-    const ibazzar = row(await getProducts("ibazzar", { q: "BLENDER", facets: "0" }), "BLENDER");
 
     assert.equal(miswag.storePrice, 100000);
     assert.equal(miswag.commission.scope, "filter");
@@ -427,11 +418,6 @@ describe("platform products page", { concurrency: 1, timeout: 180000 }, () => {
     assert.equal(elryan.commission.percentage, 10);
     assert.equal(elryan.rawPrice, 110000);
     assert.equal(elryan.platformPrice, 110000);
-
-    assert.equal(ibazzar.commission.scope, "all");
-    assert.equal(ibazzar.commission.percentage, 5);
-    assert.equal(ibazzar.rawPrice, 105000);
-    assert.equal(ibazzar.platformPrice, 105000);
 
     const miswagNone = row(await getProducts("miswag", { q: "NO-RULE", facets: "0" }), "NO-RULE");
     const giniNone = row(await getProducts("gini", { q: "NO-RULE", facets: "0" }), "NO-RULE");

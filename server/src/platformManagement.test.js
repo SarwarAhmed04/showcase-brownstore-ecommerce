@@ -152,7 +152,7 @@ describe("platform management", { concurrency: 1 }, () => {
     assert.equal(listed.status, 200);
     assert.deepEqual(
       listed.json.platforms.map((item) => item.slug),
-      ["miswag", "gini", "elryan", "ibazzar"]
+      ["miswag", "gini", "elryan"]
     );
     assert.equal(listed.json.unknownPlatforms[0].slug, "old-shop");
     assert.equal(listed.json.unknownPlatforms[0].fixed, false);
@@ -303,22 +303,23 @@ describe("platform management", { concurrency: 1 }, () => {
     }
     await Product.insertMany(extra);
     const ids = (await Product.find({ itemCode: /^BULK-/ }).select("_id").lean()).map((item) => String(item._id));
-    const denied = await call("POST", "/api/admin/platforms/ibazzar/availability", {
+    await Partner.create({ slug: "bulk-lab", name: "Bulk Lab", isActive: true });
+    const denied = await call("POST", "/api/admin/platforms/bulk-lab/availability", {
       body: { scope: "product", targetIds: ids, isActive: false },
     });
     assert.equal(denied.status, 400);
-    assert.equal(await PlatformVisibilityRule.countDocuments({ partner: "ibazzar" }), 0);
-    const accepted = await call("POST", "/api/admin/platforms/ibazzar/availability", {
+    assert.equal(await PlatformVisibilityRule.countDocuments({ partner: "bulk-lab" }), 0);
+    const accepted = await call("POST", "/api/admin/platforms/bulk-lab/availability", {
       body: { scope: "product", targetIds: ids, isActive: false, confirm: true },
     });
     assert.equal(accepted.status, 200);
     assert.equal(accepted.json.updated, 25);
     assert.equal(await Product.countDocuments({ itemCode: /^BULK-/ }), 25);
-    const restore = await call("POST", "/api/admin/platforms/ibazzar/availability", {
+    const restore = await call("POST", "/api/admin/platforms/bulk-lab/availability", {
       body: { scope: "product", targetIds: ids, isActive: true, confirm: true },
     });
     assert.equal(restore.status, 200);
-    assert.equal(await PlatformVisibilityRule.countDocuments({ partner: "ibazzar", scope: "product" }), 0);
+    assert.equal(await PlatformVisibilityRule.countDocuments({ partner: "bulk-lab", scope: "product" }), 0);
     assert.equal(products.length > 0, true);
   });
 

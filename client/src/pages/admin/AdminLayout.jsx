@@ -7,7 +7,6 @@ import {
   LogOut,
   Menu,
   Package,
-  Percent,
   Search,
   SquareArrowOutUpRight,
   Store,
@@ -34,6 +33,25 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+
+function PlatformNavIcon({ className }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-block bg-current ${className || ""}`}
+      style={{
+        maskImage: "url(/platform-nav-icon.png)",
+        WebkitMaskImage: "url(/platform-nav-icon.png)",
+        maskRepeat: "no-repeat",
+        WebkitMaskRepeat: "no-repeat",
+        maskPosition: "center",
+        WebkitMaskPosition: "center",
+        maskSize: "contain",
+        WebkitMaskSize: "contain",
+      }}
+    />
+  );
+}
 
 function productsSearch(params, q) {
   const next = new URLSearchParams(params);
@@ -134,7 +152,7 @@ function AdminShell() {
     { to: "/admin/products", label: t.products, icon: Package },
     { to: "/admin/categories", label: t.categoriesPage, icon: Tags },
     { to: "/admin/vendors", label: t.vendorControls, icon: Store },
-    { to: "/admin/platforms", label: t.platforms, icon: Percent },
+    { to: "/admin/platforms", label: t.platforms, icon: PlatformNavIcon },
     { to: "/admin/activity", label: t.activity, icon: Activity },
     { to: "/admin/banners", label: t.banners, icon: Image },
     { to: "/admin/accounts", label: t.accounts, icon: Users },

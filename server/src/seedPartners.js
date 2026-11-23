@@ -1,5 +1,27 @@
+import { Activity } from "./models/Activity.js";
 import { Commission } from "./models/Commission.js";
 import { Partner, PARTNER_DEFS } from "./models/Partner.js";
+import { PlatformProduct } from "./models/PlatformProduct.js";
+import { PlatformTaxonomyConfig } from "./models/PlatformTaxonomyConfig.js";
+import { PlatformTaxonomyNotice } from "./models/PlatformTaxonomyNotice.js";
+import { PlatformVisibilityRule } from "./models/PlatformVisibilityRule.js";
+import { removeLocalPartnerImage } from "./utils/categoryView.js";
+
+const REMOVED_PARTNER_SLUG = "ibazzar";
+
+async function removeRetiredPartner() {
+  const existing = await Partner.findOne({ slug: REMOVED_PARTNER_SLUG }).select("image").lean();
+  if (existing?.image) removeLocalPartnerImage(existing.image);
+  await Promise.all([
+    Partner.deleteMany({ slug: REMOVED_PARTNER_SLUG }),
+    Commission.deleteMany({ partner: REMOVED_PARTNER_SLUG }),
+    PlatformProduct.deleteMany({ partner: REMOVED_PARTNER_SLUG }),
+    PlatformTaxonomyConfig.deleteMany({ partner: REMOVED_PARTNER_SLUG }),
+    PlatformTaxonomyNotice.deleteMany({ partner: REMOVED_PARTNER_SLUG }),
+    PlatformVisibilityRule.deleteMany({ partner: REMOVED_PARTNER_SLUG }),
+    Activity.deleteMany({ "meta.partner": REMOVED_PARTNER_SLUG }),
+  ]);
+}
 
 async function dropLegacyCommissionIndex() {
   try {
@@ -16,6 +38,7 @@ async function dropLegacyCommissionIndex() {
 }
 
 export async function seedPartners() {
+  await removeRetiredPartner();
   await dropLegacyCommissionIndex();
   await Commission.deleteMany({
     $or: [{ partner: { $exists: false } }, { partner: null }, { partner: "" }],
